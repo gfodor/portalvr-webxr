@@ -64,6 +64,23 @@ xrDevice.installRuntime();
 
 Ensure this initialization occurs before any rendering or WebXR logic within your application. Some frameworks and libraries may check for WebXR support immediately upon loading; installing the IWER runtime beforehand ensures that these checks correctly recognize the emulated WebXR support provided by IWER.
 
+### Locking IWER as the Active WebXR Runtime
+
+`XRDevice.installRuntime()` now guards the WebXR surface so that IWER remains the active implementation even if another polyfill (like the stock `webxr-polyfill`) loads before or after it. The guard does the following:
+
+- Clears previously installed WebXR globals (`XRSystem`, `XRSession`, etc.) and any earlier `navigator.xr` descriptor before rebuilding the API surface.
+- Re-exposes all IWER WebXR constructors on the current `globalObject` and rewires `navigator.xr` to a non-configurable getter that always returns IWER's `XRSystem`.
+- Pins `window.WebXRPolyfill` so that subsequent assignments or `new WebXRPolyfill()` calls trigger a re-install of IWER instead of restoring another shim.
+- Schedules a microtask-based re-install to catch late async polyfill loads that attempt to mutate the WebXR surface.
+
+The guard is enabled by default. If you are deliberately composing IWER with another runtime (for example, when comparing behaviours), you can opt out:
+
+```javascript
+xrDevice.installRuntime({ enforce: false });
+```
+
+Extensions that inject IWER into the page can call the same method once they have bridged into the page context; no additional extension-specific APIs are required.
+
 > [!IMPORTANT]
 > At this point, your WebXR application will be equipped to recognize and utilize WebXR support through the emulated XRDevice, allowing users to enter XR experiences in emulation mode.
 

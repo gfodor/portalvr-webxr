@@ -133,8 +133,9 @@ export interface SyntheticEnvironmentModule {
 }
 
 interface RuntimeOptions {
-  globalObject: any;
-  polyfillLayers: boolean;
+  globalObject?: any;
+  polyfillLayers?: boolean;
+  enforce?: boolean;
 }
 
 const Z_INDEX_SEM_CANVAS = 1;
@@ -437,62 +438,207 @@ export class XRDevice {
     globalThis;
   }
 
-  installRuntime(options?: RuntimeOptions) {
-    const globalObject = options?.globalObject ?? globalThis;
-    const polyfillLayers = options?.polyfillLayers;
-    Object.defineProperty(
-      WebGL2RenderingContext.prototype,
-      'makeXRCompatible',
-      {
-        value: function () {
-          return new Promise((resolve, _reject) => {
-            resolve(true);
-          });
-        },
-        configurable: true,
-      },
-    );
-    this[P_DEVICE].xrSystem = new XRSystem(this);
-    Object.defineProperty(globalThis.navigator, 'xr', {
-      value: this[P_DEVICE].xrSystem,
-      configurable: true,
-    });
-    Object.defineProperty(navigator, 'userAgent', {
-      value: this[P_DEVICE].userAgent,
-      writable: false,
-      configurable: false,
-      enumerable: true,
-    });
-    globalObject['XRSystem'] = XRSystem;
-    globalObject['XRSession'] = XRSession;
-    globalObject['XRRenderState'] = XRRenderState;
-    globalObject['XRFrame'] = XRFrame;
-    globalObject['XRSpace'] = XRSpace;
-    globalObject['XRReferenceSpace'] = XRReferenceSpace;
-    globalObject['XRJointSpace'] = XRJointSpace;
-    globalObject['XRView'] = XRView;
-    globalObject['XRViewport'] = XRViewport;
-    globalObject['XRRigidTransform'] = XRRigidTransform;
-    globalObject['XRPose'] = XRPose;
-    globalObject['XRViewerPose'] = XRViewerPose;
-    globalObject['XRJointPose'] = XRJointPose;
-    globalObject['XRInputSource'] = XRInputSource;
-    globalObject['XRInputSourceArray'] = XRInputSourceArray;
-    globalObject['XRHand'] = XRHand;
-    globalObject['XRLayer'] = XRLayer;
-    globalObject['XRWebGLLayer'] = XRWebGLLayer;
-    globalObject['XRSessionEvent'] = XRSessionEvent;
-    globalObject['XRInputSourceEvent'] = XRInputSourceEvent;
-    globalObject['XRInputSourcesChangeEvent'] = XRInputSourcesChangeEvent;
-    globalObject['XRReferenceSpaceEvent'] = XRReferenceSpaceEvent;
+	installRuntime(options?: RuntimeOptions) {
+		const globalObject = options?.globalObject ?? globalThis;
+		const polyfillLayers = options?.polyfillLayers;
+		const enforce = options?.enforce ?? true;
+		const navigatorObject = (
+			(globalObject as { navigator?: Navigator }).navigator ??
+			((globalThis as { navigator?: Navigator })?.navigator ?? undefined)
+		);
+		const xrGlobalKeys = [
+			'XRSystem',
+			'XRSession',
+			'XRRenderState',
+			'XRFrame',
+			'XRSpace',
+			'XRReferenceSpace',
+			'XRJointSpace',
+			'XRView',
+			'XRViewport',
+			'XRRigidTransform',
+			'XRPose',
+			'XRViewerPose',
+			'XRJointPose',
+			'XRInputSource',
+			'XRInputSourceArray',
+			'XRHand',
+			'XRLayer',
+			'XRWebGLLayer',
+			'XRSessionEvent',
+			'XRInputSourceEvent',
+			'XRInputSourcesChangeEvent',
+			'XRReferenceSpaceEvent',
+			'XRMediaBinding',
+			'XRWebGLBinding',
+		];
+		let navigatorXRLocked = false;
+		let currentXRSystem: XRSystem;
 
-    if (polyfillLayers) {
-      new WebXRLayerPolyfill();
-    } else {
-      globalObject['XRMediaBinding'] = undefined;
-      globalObject['XRWebGLBinding'] = undefined;
-    }
-  }
+		const removeNavigatorXR = () => {
+			if (!navigatorObject) {
+				return;
+			}
+			try {
+				if (!Reflect.deleteProperty(navigatorObject, 'xr')) {
+					(navigatorObject as any).xr = undefined;
+				}
+			} catch (_error) {
+				try {
+					Object.defineProperty(navigatorObject, 'xr', {
+						configurable: true,
+						value: undefined,
+					});
+					Reflect.deleteProperty(navigatorObject, 'xr');
+				} catch (_secondError) {
+					(navigatorObject as any).xr = undefined;
+				}
+			}
+		};
+
+		const purgeXRGlobals = () => {
+			xrGlobalKeys.forEach((key) => {
+				if (key in globalObject) {
+					try {
+						Reflect.deleteProperty(globalObject, key);
+					} catch (_error) {
+						(globalObject as any)[key] = undefined;
+					}
+				}
+			});
+		};
+
+		const applyRuntimeSurface = () => {
+			Object.defineProperty(
+				WebGL2RenderingContext.prototype,
+				'makeXRCompatible',
+				{
+					value: function () {
+						return Promise.resolve(true);
+					},
+					configurable: true,
+				},
+			);
+			const xrSystem = new XRSystem(this);
+			this[P_DEVICE].xrSystem = xrSystem;
+			if (navigatorObject) {
+				Object.defineProperty(navigatorObject, 'userAgent', {
+					value: this[P_DEVICE].userAgent,
+					writable: false,
+					configurable: false,
+					enumerable: true,
+				});
+			}
+			(globalObject as any)['XRSystem'] = XRSystem;
+			(globalObject as any)['XRSession'] = XRSession;
+			(globalObject as any)['XRRenderState'] = XRRenderState;
+			(globalObject as any)['XRFrame'] = XRFrame;
+			(globalObject as any)['XRSpace'] = XRSpace;
+			(globalObject as any)['XRReferenceSpace'] = XRReferenceSpace;
+			(globalObject as any)['XRJointSpace'] = XRJointSpace;
+			(globalObject as any)['XRView'] = XRView;
+			(globalObject as any)['XRViewport'] = XRViewport;
+			(globalObject as any)['XRRigidTransform'] = XRRigidTransform;
+			(globalObject as any)['XRPose'] = XRPose;
+			(globalObject as any)['XRViewerPose'] = XRViewerPose;
+			(globalObject as any)['XRJointPose'] = XRJointPose;
+			(globalObject as any)['XRInputSource'] = XRInputSource;
+			(globalObject as any)['XRInputSourceArray'] = XRInputSourceArray;
+			(globalObject as any)['XRHand'] = XRHand;
+			(globalObject as any)['XRLayer'] = XRLayer;
+			(globalObject as any)['XRWebGLLayer'] = XRWebGLLayer;
+			(globalObject as any)['XRSessionEvent'] = XRSessionEvent;
+			(globalObject as any)['XRInputSourceEvent'] = XRInputSourceEvent;
+			(globalObject as any)['XRInputSourcesChangeEvent'] =
+				XRInputSourcesChangeEvent;
+			(globalObject as any)['XRReferenceSpaceEvent'] =
+				XRReferenceSpaceEvent;
+			if (polyfillLayers) {
+				new WebXRLayerPolyfill();
+			} else {
+				(globalObject as any)['XRMediaBinding'] = undefined;
+				(globalObject as any)['XRWebGLBinding'] = undefined;
+			}
+			return xrSystem;
+		};
+
+		const setNavigatorXR = (xrSystem: XRSystem) => {
+			currentXRSystem = xrSystem;
+			if (!navigatorObject) {
+				return;
+			}
+			if (!navigatorXRLocked) {
+				Object.defineProperty(navigatorObject, 'xr', {
+					configurable: false,
+					enumerable: false,
+					get: () => currentXRSystem,
+				});
+				navigatorXRLocked = true;
+			}
+		};
+
+		const install = () => {
+			if (!navigatorXRLocked) {
+				removeNavigatorXR();
+			}
+			purgeXRGlobals();
+			const xrSystem = applyRuntimeSurface();
+			setNavigatorXR(xrSystem);
+			return xrSystem;
+		};
+
+		if (!enforce || !navigatorObject) {
+			removeNavigatorXR();
+			purgeXRGlobals();
+			const xrSystem = applyRuntimeSurface();
+			currentXRSystem = xrSystem;
+			if (navigatorObject) {
+				Object.defineProperty(navigatorObject, 'xr', {
+					configurable: true,
+					enumerable: false,
+					get: () => currentXRSystem,
+				});
+			}
+			return;
+		}
+
+		const reinstall = () => install();
+		reinstall();
+
+		const originalPolyfillCtor =
+			typeof (globalObject as any).WebXRPolyfill === 'function'
+				? (globalObject as any).WebXRPolyfill
+				: null;
+		const guardCtor = function IWERWebXRPolyfillGuard(
+			this: unknown,
+			...args: any[]
+		) {
+			reinstall();
+			if (originalPolyfillCtor) {
+				return Reflect.construct(
+					originalPolyfillCtor,
+					args,
+					(new.target ?? guardCtor) as unknown as Function,
+				);
+			}
+			return undefined;
+		} as any;
+
+		Object.defineProperty(globalObject, 'WebXRPolyfill', {
+			configurable: false,
+			enumerable: false,
+			get: () => guardCtor,
+			set: () => {
+				reinstall();
+			},
+		});
+
+		if (typeof queueMicrotask === 'function') {
+			queueMicrotask(reinstall);
+		} else {
+			Promise.resolve().then(reinstall);
+		}
+	}
 
   installDevUI(devUIConstructor: DevUIConstructor) {
     this[P_DEVICE].devui = new devUIConstructor(this);
