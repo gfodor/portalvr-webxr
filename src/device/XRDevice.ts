@@ -58,6 +58,8 @@ import { NativePlane } from '../planes/XRPlane.js';
 import { NativeMesh } from '../meshes/XRMesh.js';
 // @ts-ignore
 import WebXRLayerPolyfill from 'webxr-layers-polyfill';
+import { createWebRTCControllerHooks } from '../hooks/webrtcControllerHooks.js';
+import type { WebRTCControllerHookOptions } from '../hooks/webrtcControllerHooks.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -148,6 +150,81 @@ const Z_INDEX_SEM_CANVAS = 1;
 const Z_INDEX_APP_CANVAS = 2;
 const Z_INDEX_DEVUI_CANVAS = 3;
 const Z_INDEX_DEVUI_CONTAINER = 4;
+
+function resolveDefaultWebRTCHookOptions(): WebRTCControllerHookOptions | null {
+  if (typeof globalThis === 'undefined') return null;
+  const globalAny = globalThis as Record<string, any>;
+  if (globalAny.__IWER_DISABLE_WEBRTC_HOOKS__) return null;
+  if (typeof globalAny.window === 'undefined') return null;
+  if (typeof globalAny.RTCPeerConnection !== 'function') return null;
+
+  let install = true;
+
+  if (globalAny.__IWER_ENABLE_WEBRTC_HOOKS__ === false) install = false;
+  if (globalAny.__IWER_ENABLE_WEBRTC_HOOKS__ === true) install = true;
+
+  let roomId: string | undefined =
+    typeof globalAny.__IWER_WEBRTC_ROOM__ === 'string'
+      ? globalAny.__IWER_WEBRTC_ROOM__
+      : undefined;
+  let workerUrl: string | undefined =
+    typeof globalAny.__IWER_WEBRTC_WORKER__ === 'string'
+      ? globalAny.__IWER_WEBRTC_WORKER__
+      : undefined;
+  let autoStart: boolean | undefined =
+    typeof globalAny.__IWER_WEBRTC_AUTOSTART__ === 'boolean'
+      ? globalAny.__IWER_WEBRTC_AUTOSTART__
+      : undefined;
+  const customLog =
+    typeof globalAny.__IWER_WEBRTC_LOG__ === 'function'
+      ? (globalAny.__IWER_WEBRTC_LOG__ as (m: string) => void)
+      : undefined;
+
+  const search =
+    typeof globalAny.location?.search === 'string'
+      ? (globalAny.location.search as string)
+      : '';
+
+  if (search) {
+    try {
+      const params = new URLSearchParams(search);
+      if (params.has('iwerWebRTC')) {
+        const val = params.get('iwerWebRTC');
+        if (val === '0' || val?.toLowerCase() === 'false') {
+          install = false;
+        } else if (val && val.toLowerCase() !== '0') {
+          install = true;
+        }
+      }
+      if (params.has('iwerWebRTCRoom')) {
+        const value = params.get('iwerWebRTCRoom');
+        roomId = value || undefined;
+      }
+      if (params.has('iwerWebRTCWorker')) {
+        const value = params.get('iwerWebRTCWorker');
+        workerUrl = value || undefined;
+      }
+      if (params.has('iwerWebRTCAutoStart')) {
+        const value = params.get('iwerWebRTCAutoStart');
+        if (value) {
+          const normalized = value.toLowerCase();
+          autoStart = !(normalized === '0' || normalized === 'false');
+        }
+      }
+    } catch {
+      // Ignore malformed search parameters; fall back to defaults.
+    }
+  }
+
+  if (!install) return null;
+
+  const opts: WebRTCControllerHookOptions = {};
+  if (workerUrl) opts.workerUrl = workerUrl;
+  if (roomId) opts.roomId = roomId;
+  if (typeof autoStart === 'boolean') opts.autoStart = autoStart;
+  if (customLog) opts.log = customLog;
+  return opts;
+}
 
 /**
  * XRDevice is not a standard API class outlined in the WebXR Device API Specifications
@@ -648,6 +725,7 @@ export class XRDevice {
 		} else {
 			Promise.resolve().then(reinstall);
 		}
+		this.ensureDefaultHooksInstalled();
 	}
 
   installDevUI(devUIConstructor: DevUIConstructor) {
@@ -907,5 +985,16 @@ export class XRDevice {
       console.debug('[IWER hook] onControllerButtons stub invoked');
       hook(input, frame);
     }
+  }
+
+  private ensureDefaultHooksInstalled() {
+    if (this[P_DEVICE].hooks) {
+      return;
+    }
+    const opts = resolveDefaultWebRTCHookOptions();
+    if (!opts) {
+      return;
+    }
+    this.installHooks(createWebRTCControllerHooks(opts));
   }
 }

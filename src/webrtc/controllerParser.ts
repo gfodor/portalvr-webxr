@@ -1,0 +1,145 @@
+/**
+ * Parses the 55-byte controller state packet format from BleClient.java
+ * Typed and BigInt-free (we read the 64-bit timestamp as two 32-bit words).
+ */
+
+const PACKET_STATE = 0x10;
+const PROTO_VERSION = 0x01;
+
+// Button bit masks
+const BTN_ACTION_1 = 1; // bit 0
+const BTN_ACTION_2 = 1 << 1; // bit 1
+const BTN_STICK = 1 << 2; // bit 2
+const BTN_TRIGGER = 1 << 3; // bit 3
+const BTN_SQUEEZE = 1 << 4; // bit 4
+const BTN_MENU = 1 << 5; // bit 5
+
+// Flag bit masks
+const FLAG_AIM = 1; // bit 0
+const FLAG_STRETCH = 1 << 1; // bit 1
+
+export interface ControllerState {
+  version: number;
+  position: { x: number; y: number; z: number };
+  quaternion: { x: number; y: number; z: number; w: number };
+  buttons: {
+    action1: boolean;
+    action2: boolean;
+    stick: boolean;
+    trigger: boolean;
+    squeeze: boolean;
+    menu: boolean;
+  };
+  joystick: { x: number; y: number };
+  timestampNs: number;
+  wandMode: number;
+  wandModeName: string;
+  flags: { aim: boolean; stretch: boolean };
+  receivedAt: number;
+}
+
+const WAND_MODE_NAMES = [
+  'Right Persistent',
+  'Left Persistent',
+  'Right Ephemeral',
+  'Left Ephemeral',
+  'Dual Mirrored',
+  'Dual Opposed',
+];
+
+export function parseControllerState(buffer: ArrayBuffer | null | undefined): ControllerState | null {
+  if (!buffer || !(buffer instanceof ArrayBuffer)) {
+    return null;
+  }
+
+  if (buffer.byteLength !== 55) {
+    console.warn(`Expected 55 bytes, got ${buffer.byteLength}`);
+    return null;
+  }
+
+  const view = new DataView(buffer);
+  let offset = 0;
+
+  // Byte 0: Packet type
+  const packetType = view.getUint8(offset++);
+  if (packetType !== PACKET_STATE) {
+    console.warn(`Expected packet type ${PACKET_STATE}, got ${packetType}`);
+    return null;
+  }
+
+  // Byte 1: Protocol version
+  const version = view.getUint8(offset++);
+  if (version !== PROTO_VERSION) {
+    console.warn(`Expected protocol version ${PROTO_VERSION}, got ${version}`);
+  }
+
+  // Bytes 2-13: Position (3 floats, little-endian)
+  const posX = view.getFloat32(offset, true);
+  offset += 4;
+  const posY = view.getFloat32(offset, true);
+  offset += 4;
+  const posZ = view.getFloat32(offset, true);
+  offset += 4;
+
+  // Bytes 14-29: Quaternion (4 floats, little-endian)
+  const quatX = view.getFloat32(offset, true);
+  offset += 4;
+  const quatY = view.getFloat32(offset, true);
+  offset += 4;
+  const quatZ = view.getFloat32(offset, true);
+  offset += 4;
+  const quatW = view.getFloat32(offset, true);
+  offset += 4;
+
+  // Bytes 30-33: Button mask (int32, little-endian)
+  const buttonsMask = view.getInt32(offset, true);
+  offset += 4;
+
+  // Bytes 34-37: Joystick X (float, little-endian)
+  const joyX = view.getFloat32(offset, true);
+  offset += 4;
+
+  // Bytes 38-41: Joystick Y (float, little-endian)
+  const joyY = view.getFloat32(offset, true);
+  offset += 4;
+
+  // Bytes 42-49: Timestamp (int64, little-endian) — read as two 32-bit words to avoid BigInt types
+  const low = view.getUint32(offset, true);
+  offset += 4;
+  const high = view.getUint32(offset, true);
+  offset += 4;
+  const timestampNs = high * 2 ** 32 + low;
+
+  // Byte 50: Wand mode
+  const wandMode = view.getUint8(offset++);
+  // Bytes 51-54: Flags (int32, little-endian)
+  const flagsRaw = view.getInt32(offset, true);
+  offset += 4;
+
+  const buttons = {
+    action1: !!(buttonsMask & BTN_ACTION_1),
+    action2: !!(buttonsMask & BTN_ACTION_2),
+    stick: !!(buttonsMask & BTN_STICK),
+    trigger: !!(buttonsMask & BTN_TRIGGER),
+    squeeze: !!(buttonsMask & BTN_SQUEEZE),
+    menu: !!(buttonsMask & BTN_MENU),
+  };
+
+  const flags = {
+    aim: !!(flagsRaw & FLAG_AIM),
+    stretch: !!(flagsRaw & FLAG_STRETCH),
+  };
+
+  return {
+    version,
+    position: { x: posX, y: posY, z: posZ },
+    quaternion: { x: quatX, y: quatY, z: quatZ, w: quatW },
+    buttons,
+    joystick: { x: joyX, y: joyY },
+    timestampNs,
+    wandMode,
+    wandModeName: WAND_MODE_NAMES[wandMode] || 'Unknown',
+    flags,
+    receivedAt: Date.now(),
+  };
+}

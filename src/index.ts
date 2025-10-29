@@ -18,6 +18,8 @@ export { XRTrackedInput } from './device/XRTrackedInput.js';
 export { XRController } from './device/XRController.js';
 export { loggingHooks } from './hooks/loggingHooks.js';
 
+export { createWebRTCControllerHooks } from './hooks/webrtcControllerHooks.js';
+
 // Initialization
 export { XRSystem } from './initialization/XRSystem.js';
 

@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 
-import { ActionRecorder, XRDevice, loggingHooks, metaQuest3 } from 'iwer';
+import { ActionRecorder, XRDevice, metaQuest3 } from 'iwer';
 
 import { DevUI } from '@iwer/devui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -40,7 +40,6 @@ const prepare = async () => {
     xrdevice.ipd = 0;
     xrdevice.installRuntime();
     xrdevice.installDevUI(DevUI);
-    xrdevice.installHooks(loggingHooks);
   }
   Array.from(document.getElementsByClassName('native')).forEach((el) => {
     el.style.display = nativeVRSupport && !forceIwer ? 'block' : 'none';
