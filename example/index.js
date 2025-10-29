@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 
-import { ActionRecorder, XRDevice, metaQuest3 } from 'iwer';
+import { ActionRecorder, XRDevice, loggingHooks, metaQuest3 } from 'iwer';
 
 import { DevUI } from '@iwer/devui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -27,20 +27,26 @@ let recorder;
 let recording = false;
 
 const prepare = async () => {
+  const params = new URLSearchParams(window.location.search);
+  const forceIwer = params.get('forceIWER') === '1';
   const nativeVRSupport = navigator.xr
     ? await navigator.xr.isSessionSupported('immersive-vr')
     : false;
-  if (!nativeVRSupport) {
+  if (!nativeVRSupport || forceIwer) {
+    if (forceIwer) {
+      console.log('[example] Forcing IWER runtime via ?forceIWER=1');
+    }
     xrdevice = new XRDevice(metaQuest3);
     xrdevice.ipd = 0;
-    xrdevice.installRuntime({ polyfillLayers: true });
+    xrdevice.installRuntime();
     xrdevice.installDevUI(DevUI);
+    xrdevice.installHooks(loggingHooks);
   }
   Array.from(document.getElementsByClassName('native')).forEach((el) => {
-    el.style.display = nativeVRSupport ? 'block' : 'none';
+    el.style.display = nativeVRSupport && !forceIwer ? 'block' : 'none';
   });
   Array.from(document.getElementsByClassName('emulated')).forEach((el) => {
-    el.style.display = nativeVRSupport ? 'none' : 'block';
+    el.style.display = nativeVRSupport && !forceIwer ? 'none' : 'block';
   });
 };
 
@@ -99,7 +105,18 @@ function init() {
     requiredFeatures: ['hand-tracking'],
   };
 
-  document.body.appendChild(VRButton.createButton(renderer, sessionInit));
+  const vrButton = VRButton.createButton(renderer, sessionInit);
+  document.body.appendChild(vrButton);
+
+  setTimeout(() => {
+    if (renderer.xr.isPresenting) {
+      return;
+    }
+    if (typeof vrButton.click === 'function') {
+      console.log('[example] Auto-clicking Enter VR button');
+      vrButton.click();
+    }
+  }, 2000);
 
   // controllers
 

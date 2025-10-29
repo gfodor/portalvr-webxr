@@ -13,6 +13,10 @@ export {
 	metaQuestPro,
 	oculusQuest1,
 } from './device/configs/headset/meta.js';
+export type { XRDeviceHooks } from './device/XRDevice.js';
+export { XRTrackedInput } from './device/XRTrackedInput.js';
+export { XRController } from './device/XRController.js';
+export { loggingHooks } from './hooks/loggingHooks.js';
 
 // Initialization
 export { XRSystem } from './initialization/XRSystem.js';

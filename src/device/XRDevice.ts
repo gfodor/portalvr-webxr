@@ -97,6 +97,12 @@ export interface XRDeviceOptions {
   canvasContainer: HTMLDivElement;
 }
 
+export interface XRDeviceHooks {
+  onHeadPose?: (device: XRDevice, frame: XRFrame) => void;
+  onControllerPose?: (input: XRTrackedInput, frame: XRFrame) => void;
+  onControllerButtons?: (input: XRTrackedInput, frame: XRFrame) => void;
+}
+
 const DEFAULTS = {
   ipd: 0.063,
   fovy: Math.PI / 2,
@@ -192,6 +198,7 @@ export class XRDevice {
     };
     canvasContainer: HTMLDivElement;
 
+    hooks?: XRDeviceHooks;
     getViewport: (layer: XRWebGLLayer, view: XRView) => XRViewport;
     updateViews: () => void;
     onBaseLayerSet: (baseLayer: XRWebGLLayer | null) => void;
@@ -397,6 +404,7 @@ export class XRDevice {
           this[P_DEVICE].actionPlayer.playFrame();
         } else {
           const session = frame.session;
+          this.invokeHeadPoseHook(frame);
           this[P_DEVICE].updateViews();
 
           if (this[P_DEVICE].pendingVisibilityState) {
@@ -409,6 +417,8 @@ export class XRDevice {
           }
           if (this[P_DEVICE].visibilityState === 'visible') {
             this.activeInputs.forEach((activeInput) => {
+              this.invokeControllerPoseHook(activeInput, frame);
+              this.invokeControllerButtonsHook(activeInput, frame);
               activeInput.onFrameStart(frame);
             });
           }
@@ -648,6 +658,10 @@ export class XRDevice {
     this[P_DEVICE].sem = new semConstructor(this);
   }
 
+  installHooks(hooks: XRDeviceHooks) {
+    this[P_DEVICE].hooks = hooks;
+  }
+
   get supportedSessionModes() {
     return this[P_DEVICE].supportedSessionModes;
   }
@@ -863,5 +877,35 @@ export class XRDevice {
 
   get sem() {
     return this[P_DEVICE].sem;
+  }
+
+  private invokeHeadPoseHook(frame: XRFrame) {
+    const hook = this[P_DEVICE].hooks?.onHeadPose;
+    if (hook) {
+      console.debug('[IWER hook] onHeadPose stub invoked');
+      hook(this, frame);
+    }
+  }
+
+  private invokeControllerPoseHook(
+    input: XRTrackedInput,
+    frame: XRFrame,
+  ) {
+    const hook = this[P_DEVICE].hooks?.onControllerPose;
+    if (hook) {
+      console.debug('[IWER hook] onControllerPose stub invoked');
+      hook(input, frame);
+    }
+  }
+
+  private invokeControllerButtonsHook(
+    input: XRTrackedInput,
+    frame: XRFrame,
+  ) {
+    const hook = this[P_DEVICE].hooks?.onControllerButtons;
+    if (hook) {
+      console.debug('[IWER hook] onControllerButtons stub invoked');
+      hook(input, frame);
+    }
   }
 }
