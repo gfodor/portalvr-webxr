@@ -40,5 +40,3 @@ Addressing straightforward point-and-click interactions laid a solid foundation 
 ![seed-selection](/iwer-seed-selection.gif)
 
 More intricate interactions that involve relative motion between two hands, like selecting a seedbag with one hand from a seedbox attached to the other, required a creative approach. On PC, since both hands are typically attached to the camera rig, achieving this relative motion means temporarily decoupling one hand. In planting mode, holding the right mouse button decouples the left hand (seedbox), allowing the player to select a seedbag with the other hand. Releasing the right mouse button then snaps the left hand back under the camera rig.
-
-For scenarios requiring complex gestures or patterns to trigger specific actions in XR, consider using the Action Recorder to pre-record these sequences. These can then be played back on PC by mapping them to keyboard or mouse events. For more details on how to use the Action Recorder, check out [this guide](/action).

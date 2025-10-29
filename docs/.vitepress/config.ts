@@ -74,15 +74,6 @@ export default defineConfig({
 				],
 			},
 			{
-				text: 'IWER in Action',
-				link: '/action#action-recording-playback',
-				items: [
-					{ text: 'Live Demo', link: '/action#live-webxr-demo' },
-					{ text: 'Action Recording', link: '/action#how-does-recording-work' },
-					{ text: 'Action Playback', link: '/action#how-does-playback-work' },
-				],
-			},
-			{
 				text: 'API Reference',
 				items: [
 					{ text: 'XRDevice Class', link: '/api/xr-device' },

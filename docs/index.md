@@ -22,8 +22,6 @@ features:
     details: IWER is a lightweight, high-performance layer capable of input remapping directly atop your WebXR projects. It enables seamless recycling of your XR input stack, enhancing cross-platform compatibility without the overhead.
     linkText: Read Story
     link: /xplat
-  - title: 🎥&nbsp; Action Capture and Playback
-    details: With IWER, automated testing in WebXR becomes a breeze. Capture user interactions within XR environments and replay them across various devices effortlessly, thanks to our action capture and playback feature.
-    linkText: Live Demo
-    link: /action
+  - title: 🔧&nbsp; Lightweight Debug Overlay
+    details: Keep an eye on emulated sessions with a minimal on-screen overlay and a dedicated Settings entry point ready for custom tooling.
 ---

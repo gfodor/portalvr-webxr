@@ -5,8 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-export const P_ACTION_PLAYER = Symbol('@iwer/action-player');
-export const P_ACTION_RECORDER = Symbol('@iwer/action-recorder');
 export const P_ANCHOR = Symbol('@iwer/xr-anchor');
 export const P_CONTROLLER = Symbol('@iwer/xr-controller');
 export const P_DEVICE = Symbol('@iwer/xr-device');

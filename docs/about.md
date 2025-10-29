@@ -11,4 +11,4 @@ IWER utilizes a universal `XRDevice` interface, configurable to emulate the vast
 
 - **Custom Development Tools**: Empowers developers to craft specific WebXR tools tailored to their project requirements, bypassing the need for browser extensions.
 - **Cross-Platform Compatibility**: Functions as an input remapping layer over existing WebXR projects, facilitating seamless cross-platform functionality and allowing the recycling of XR interaction codes.
-- **Scalable Testing Solutions**: Offers action capture and playback features that unlocks automated testing of WebXR projects for the first time in environments without the necessity for physical headsets, enhancing testing accessibility and scalability.
+- **Streamlined Debugging**: Includes a lightweight debug overlay and settings entry point that make it easy to surface custom diagnostics while running emulated WebXR sessions.

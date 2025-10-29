@@ -7,14 +7,13 @@
 
 import * as THREE from 'three';
 
-import { ActionRecorder, XRDevice, metaQuest3 } from 'iwer';
+import { XRDevice, metaQuest3 } from 'iwer';
 
 import { DevUI } from '@iwer/devui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
-import { capture } from './cap.min.js';
 
 let container;
 let camera, scene, renderer;
@@ -23,9 +22,6 @@ let controller1, controller2;
 let controllerGrip1, controllerGrip2;
 let controls;
 let xrdevice;
-let recorder;
-let recording = false;
-
 const prepare = async () => {
   const params = new URLSearchParams(window.location.search);
   const forceIwer = params.get('forceIWER') === '1';
@@ -170,28 +166,6 @@ function init() {
 
   window.addEventListener('resize', onWindowResize);
 
-  renderer.xr.addEventListener('sessionstart', () => {
-    const refSpace = renderer.xr.getReferenceSpace();
-    const session = renderer.xr.getSession();
-
-    if (xrdevice) {
-      window.player = xrdevice.createActionPlayer(refSpace, capture);
-    } else {
-      recorder = new ActionRecorder(session, refSpace);
-      session.onselect = (event) => {
-        if (
-          event.inputSource.handedness === 'right' &&
-          !event.inputSource.hand
-        ) {
-          recording = !recording;
-          if (!recording) {
-            recorder.log();
-            recorder = new ActionRecorder(session, refSpace);
-          }
-        }
-      };
-    }
-  });
 }
 
 function onWindowResize() {
@@ -207,7 +181,4 @@ function animate() {
 
 function render() {
   renderer.render(scene, camera);
-  if (recorder && recording) {
-    recorder.recordFrame(renderer.xr.getFrame());
-  }
 }

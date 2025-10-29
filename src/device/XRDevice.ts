@@ -36,8 +36,6 @@ import {
 } from '../spaces/XRReferenceSpace.js';
 import { mat4, vec3 } from 'gl-matrix';
 
-import { ActionPlayer } from '../action/ActionPlayer.js';
-import { InputSchema } from '../action/ActionRecorder.js';
 import { VERSION } from '../version.js';
 import { XRFrame } from '../frameloop/XRFrame.js';
 import { XRHand } from '../input/XRHand.js';
@@ -282,9 +280,6 @@ export class XRDevice {
     onSessionEnd: () => void;
     onFrameStart: (frame: XRFrame) => void;
 
-    // action playback
-    actionPlayer?: ActionPlayer;
-
     // add-on modules:
     devui?: DevUI;
     sem?: SyntheticEnvironmentModule;
@@ -477,44 +472,40 @@ export class XRDevice {
         }
       },
       onFrameStart: (frame: XRFrame) => {
-        if (this[P_DEVICE].actionPlayer?.playing) {
-          this[P_DEVICE].actionPlayer.playFrame();
-        } else {
-          const session = frame.session;
-          this.invokeHeadPoseHook(frame);
-          this[P_DEVICE].updateViews();
+        const session = frame.session;
+        this.invokeHeadPoseHook(frame);
+        this[P_DEVICE].updateViews();
 
-          if (this[P_DEVICE].pendingVisibilityState) {
-            this[P_DEVICE].visibilityState =
-              this[P_DEVICE].pendingVisibilityState;
-            this[P_DEVICE].pendingVisibilityState = null;
-            session.dispatchEvent(
-              new XRSessionEvent('visibilitychange', { session }),
-            );
-          }
-          if (this[P_DEVICE].visibilityState === 'visible') {
-            this.activeInputs.forEach((activeInput) => {
-              this.invokeControllerPoseHook(activeInput, frame);
-              this.invokeControllerButtonsHook(activeInput, frame);
-              activeInput.onFrameStart(frame);
-            });
-          }
+        if (this[P_DEVICE].pendingVisibilityState) {
+          this[P_DEVICE].visibilityState =
+            this[P_DEVICE].pendingVisibilityState;
+          this[P_DEVICE].pendingVisibilityState = null;
+          session.dispatchEvent(
+            new XRSessionEvent('visibilitychange', { session }),
+          );
+        }
+        if (this[P_DEVICE].visibilityState === 'visible') {
+          this.activeInputs.forEach((activeInput) => {
+            this.invokeControllerPoseHook(activeInput, frame);
+            this.invokeControllerButtonsHook(activeInput, frame);
+            activeInput.onFrameStart(frame);
+          });
+        }
 
-          if (this[P_DEVICE].pendingReferenceSpaceReset) {
-            session[P_SESSION].referenceSpaces.forEach((referenceSpace) => {
-              switch (referenceSpace[P_REF_SPACE].type) {
-                case XRReferenceSpaceType.Local:
-                case XRReferenceSpaceType.LocalFloor:
-                case XRReferenceSpaceType.BoundedFloor:
-                case XRReferenceSpaceType.Unbounded:
-                  referenceSpace.dispatchEvent(
-                    new XRReferenceSpaceEvent('reset', { referenceSpace }),
-                  );
-                  break;
-              }
-            });
-            this[P_DEVICE].pendingReferenceSpaceReset = false;
-          }
+        if (this[P_DEVICE].pendingReferenceSpaceReset) {
+          session[P_SESSION].referenceSpaces.forEach((referenceSpace) => {
+            switch (referenceSpace[P_REF_SPACE].type) {
+              case XRReferenceSpaceType.Local:
+              case XRReferenceSpaceType.LocalFloor:
+              case XRReferenceSpaceType.BoundedFloor:
+              case XRReferenceSpaceType.Unbounded:
+                referenceSpace.dispatchEvent(
+                  new XRReferenceSpaceEvent('reset', { referenceSpace }),
+                );
+                break;
+            }
+          });
+          this[P_DEVICE].pendingReferenceSpaceReset = false;
         }
 
         this[P_DEVICE].updateViews();
@@ -793,19 +784,11 @@ export class XRDevice {
   }
 
   get viewerSpace() {
-    if (this[P_DEVICE].actionPlayer?.playing) {
-      return this[P_DEVICE].actionPlayer.viewerSpace;
-    } else {
-      return this[P_DEVICE].viewerSpace;
-    }
+    return this[P_DEVICE].viewerSpace;
   }
 
   get viewSpaces() {
-    if (this[P_DEVICE].actionPlayer?.playing) {
-      return this[P_DEVICE].actionPlayer.viewSpaces;
-    } else {
-      return this[P_DEVICE].viewSpaces;
-    }
+    return this[P_DEVICE].viewSpaces;
   }
 
   get controllers() {
@@ -840,11 +823,7 @@ export class XRDevice {
   }
 
   get inputSources(): XRInputSource[] {
-    if (this[P_DEVICE].actionPlayer?.playing) {
-      return this[P_DEVICE].actionPlayer.inputSources;
-    } else {
-      return this.activeInputs.map((input) => input.inputSource);
-    }
+    return this.activeInputs.map((input) => input.inputSource);
   }
 
   get canvasContainer(): HTMLDivElement {
@@ -929,24 +908,6 @@ export class XRDevice {
     if (state !== this[P_DEVICE].visibilityState) {
       this[P_DEVICE].pendingVisibilityState = state;
     }
-  }
-
-  createActionPlayer(
-    refSpace: XRReferenceSpace,
-    recording: {
-      schema: {
-        0: number;
-        1: InputSchema;
-      }[];
-      frames: any[];
-    },
-  ) {
-    this[P_DEVICE].actionPlayer = new ActionPlayer(
-      refSpace,
-      recording,
-      this[P_DEVICE].ipd,
-    );
-    return this[P_DEVICE].actionPlayer;
   }
 
   get devui() {
