@@ -3,7 +3,7 @@ import type { PortalPoseModuleConfig, PortalPoseModuleInstance } from './portal-
 // @ts-ignore -- the JS factory function is provided at runtime from the copied asset.
 import PortalPoseModule from './portal-pose/portal_pose.js';
 
-const DEFAULT_CAMERA_PITCH_DEG = 45;
+const DEFAULT_CAMERA_PITCH_DEG = 0;
 
 let modulePromise: Promise<PortalPoseModuleInstance> | null = null;
 

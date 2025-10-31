@@ -216,7 +216,7 @@ class PortalPoseCameraNudger {
     const up = this.keyState[KEY_UP] ? 1 : 0;
     const down = this.keyState[KEY_DOWN] ? 1 : 0;
 
-    const axisZ = backward - forward; // +Z moves backwards (camera forward is -Z)
+    const axisZ = forward - backward; // positive when pushing forward (camera forward is -Z)
     const axisX = right - left;
     const axisY = up - down;
 
@@ -449,10 +449,11 @@ export async function installPortalPoseCameraHooks(
   }
   const internalOptions: PortalPoseCameraInternalOptions = {
     speed: options.speedMetersPerSecond ?? DEFAULT_SPEED_MPS,
-    cameraPitchRad: options.cameraPitchDegrees
-      ? degreesToRadians(options.cameraPitchDegrees)
-      : DEFAULT_CAMERA_PITCH_RAD,
-    fixedDisplayLocked: options.fixedDisplayLocked ?? false,
+    cameraPitchRad:
+      options.cameraPitchDegrees != null
+        ? degreesToRadians(options.cameraPitchDegrees)
+        : DEFAULT_CAMERA_PITCH_RAD,
+    fixedDisplayLocked: options.fixedDisplayLocked ?? true,
     debug: debugEnabled,
   };
 
