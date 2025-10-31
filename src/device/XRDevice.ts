@@ -920,10 +920,7 @@ export class XRDevice {
 
   private invokeHeadPoseHook(frame: XRFrame) {
     const hook = this[P_DEVICE].hooks?.onHeadPose;
-    if (hook) {
-      console.debug('[IWER hook] onHeadPose stub invoked');
-      hook(this, frame);
-    }
+    hook?.(this, frame);
   }
 
   private invokeControllerPoseHook(
@@ -931,10 +928,7 @@ export class XRDevice {
     frame: XRFrame,
   ) {
     const hook = this[P_DEVICE].hooks?.onControllerPose;
-    if (hook) {
-      console.debug('[IWER hook] onControllerPose stub invoked');
-      hook(input, frame);
-    }
+    hook?.(input, frame);
   }
 
   private invokeControllerButtonsHook(
@@ -942,10 +936,7 @@ export class XRDevice {
     frame: XRFrame,
   ) {
     const hook = this[P_DEVICE].hooks?.onControllerButtons;
-    if (hook) {
-      console.debug('[IWER hook] onControllerButtons stub invoked');
-      hook(input, frame);
-    }
+    hook?.(input, frame);
   }
 
   private ensureDefaultHooksInstalled() {

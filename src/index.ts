@@ -17,6 +17,11 @@ export type { XRDeviceHooks } from './device/XRDevice.js';
 export { XRTrackedInput } from './device/XRTrackedInput.js';
 export { XRController } from './device/XRController.js';
 export { loggingHooks } from './hooks/loggingHooks.js';
+export {
+  installPortalPoseCameraHooks,
+  uninstallPortalPoseCameraHooks,
+} from './hooks/portalPoseCameraHooks.js';
+export type { PortalPoseCameraHookOptions } from './hooks/portalPoseCameraHooks.js';
 
 export { createWebRTCControllerHooks } from './hooks/webrtcControllerHooks.js';
 
