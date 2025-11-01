@@ -64,6 +64,8 @@ import {
   WebRTCControllerStreamer,
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
+import type { ControllerState } from '../webrtc/controllerParser.js';
+import { PoseSmoother, type PoseArray } from '../head/PoseSmoother.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -78,6 +80,42 @@ export type WebXRFeature =
   | 'hit-test'
   | 'hand-tracking'
   | 'depth-sensing';
+
+type ActiveWandState = 'none' | 'left' | 'right' | 'both';
+
+function resolveActiveWandState(mode: number): ActiveWandState {
+  switch (mode) {
+    case 0: // BLE_WAND_RIGHT_PERSISTENT
+    case 2: // BLE_WAND_RIGHT_EPHEMERAL
+      return 'right';
+    case 1: // BLE_WAND_LEFT_PERSISTENT
+    case 3: // BLE_WAND_LEFT_EPHEMERAL
+      return 'left';
+    case 4: // BLE_WAND_DUAL_MIRRORED
+    case 5: // BLE_WAND_DUAL_OPPOSED
+      return 'both';
+    default:
+      return 'right';
+  }
+}
+
+function getNowMs(): number {
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function clampAxis(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  if (value > 1) return 1;
+  if (value < -1) return -1;
+  return value;
+}
+
+const THUMBSTICK_TOUCH_EPSILON = 1e-3;
 
 export interface XRDeviceConfig {
   name: string;
@@ -292,6 +330,10 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private controllerSmoother: PoseSmoother | null = null;
+  private lastControllerState: ControllerState | null = null;
+  private activeWandState: ActiveWandState = 'none';
+  private controllerLastPacketMs: number | null = null;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -312,11 +354,14 @@ export class XRDevice {
     if (controllerConfig) {
       Object.values(XRHandedness).forEach((handedness) => {
         if (controllerConfig.layout[handedness]) {
-          controllers[handedness] = new XRController(
+          const controller = new XRController(
             controllerConfig,
             handedness,
             globalSpace,
           );
+          controller.connected = false;
+          this.resetControllerState(controller);
+          controllers[handedness] = controller;
         }
       });
     }
@@ -494,6 +539,7 @@ export class XRDevice {
         }
         if (this[P_DEVICE].visibilityState === 'visible') {
           this.webrtcStreamer?.update(frame);
+          this.updateControllerPose(frame);
           this.activeInputs.forEach((activeInput) => {
             activeInput.onFrameStart(frame);
           });
@@ -922,6 +968,249 @@ export class XRDevice {
     return this[P_DEVICE].sem;
   }
 
+  private handleControllerState = (state: ControllerState) => {
+    this.controllerLastPacketMs = getNowMs();
+    if (!this.controllerSmoother) {
+      const hz = this[P_DEVICE].internalNominalFrameRate ?? 90;
+      this.controllerSmoother = new PoseSmoother(hz);
+    }
+    this.controllerSmoother.addSample(
+      state.position.x,
+      state.position.y,
+      state.position.z,
+      state.quaternion.x,
+      state.quaternion.y,
+      state.quaternion.z,
+      state.quaternion.w,
+      state.timestampNs,
+    );
+    this.lastControllerState = state;
+
+    const activeState = resolveActiveWandState(state.wandMode);
+    this.setActiveWandState(activeState);
+    this.updateControllerButtons(state, activeState);
+  };
+
+  private handleControllerConnectionChange = (connected: boolean) => {
+    if (!connected) {
+      this.controllerSmoother = null;
+      this.lastControllerState = null;
+      this.controllerLastPacketMs = null;
+      this.setActiveWandState('none', true);
+    }
+  };
+
+  private setActiveWandState(next: ActiveWandState, force = false) {
+    if (!force && this.activeWandState === next) {
+      return;
+    }
+    this.activeWandState = next;
+
+    const controllers = this[P_DEVICE].controllers;
+    const left = controllers[XRHandedness.Left];
+    const right = controllers[XRHandedness.Right];
+
+    const connectLeft = next === 'left' || next === 'both';
+    const connectRight = next === 'right' || next === 'both';
+
+    if (left) {
+      const wasConnected = left.connected;
+      left.connected = connectLeft;
+      if (!connectLeft || force || !wasConnected) {
+        this.resetControllerState(left);
+      }
+    }
+
+    if (right) {
+      const wasConnected = right.connected;
+      right.connected = connectRight;
+      if (!connectRight || force || !wasConnected) {
+        this.resetControllerState(right);
+      }
+    }
+
+    if (connectLeft || connectRight) {
+      this[P_DEVICE].primaryInputMode = 'controller';
+    }
+  }
+
+  private resetControllerState(controller?: XRController) {
+    if (!controller) {
+      return;
+    }
+
+    if (this.controllerHasButton(controller, 'trigger')) {
+      controller.updateButtonValue('trigger', 0);
+    }
+    if (this.controllerHasButton(controller, 'squeeze')) {
+      controller.updateButtonValue('squeeze', 0);
+    }
+    if (this.controllerHasButton(controller, 'thumbstick')) {
+      controller.updateButtonValue('thumbstick', 0);
+      controller.updateButtonTouch('thumbstick', false);
+    }
+    if (this.controllerHasAxis(controller, 'thumbstick')) {
+      controller.updateAxes('thumbstick', 0, 0);
+    }
+
+    const handedness = controller.inputSource.handedness;
+    if (handedness === XRHandedness.Left) {
+      if (this.controllerHasButton(controller, 'x-button')) {
+        controller.updateButtonValue('x-button', 0);
+      }
+      if (this.controllerHasButton(controller, 'y-button')) {
+        controller.updateButtonValue('y-button', 0);
+      }
+    } else if (handedness === XRHandedness.Right) {
+      if (this.controllerHasButton(controller, 'a-button')) {
+        controller.updateButtonValue('a-button', 0);
+      }
+      if (this.controllerHasButton(controller, 'b-button')) {
+        controller.updateButtonValue('b-button', 0);
+      }
+    }
+
+    if (this.controllerHasButton(controller, 'thumbrest')) {
+      controller.updateButtonValue('thumbrest', 0);
+      controller.updateButtonTouch('thumbrest', false);
+    }
+  }
+
+  private controllerHasButton(controller: XRController, id: string): boolean {
+    return controller.gamepadConfig.buttons.some((button) => button?.id === id);
+  }
+
+  private controllerHasAxis(controller: XRController, id: string): boolean {
+    return controller.gamepadConfig.axes.some((axis) => axis?.id === id);
+  }
+
+  private updateControllerButtons(state: ControllerState, activeState: ActiveWandState) {
+    const controllers = this[P_DEVICE].controllers;
+    const left = controllers[XRHandedness.Left];
+    const right = controllers[XRHandedness.Right];
+
+    const thumbstickTouched =
+      Math.abs(state.joystick.x) > THUMBSTICK_TOUCH_EPSILON ||
+      Math.abs(state.joystick.y) > THUMBSTICK_TOUCH_EPSILON ||
+      state.buttons.stick;
+
+    if (activeState === 'left' || activeState === 'both') {
+      this.applyButtonsToController(left, state, XRHandedness.Left, thumbstickTouched);
+    } else if (left) {
+      this.resetControllerState(left);
+    }
+
+    if (activeState === 'right' || activeState === 'both') {
+      this.applyButtonsToController(right, state, XRHandedness.Right, thumbstickTouched);
+    } else if (right) {
+      this.resetControllerState(right);
+    }
+  }
+
+  private applyButtonsToController(
+    controller: XRController | undefined,
+    state: ControllerState,
+    handedness: XRHandedness,
+    thumbstickTouched: boolean,
+  ) {
+    if (!controller) {
+      return;
+    }
+
+    if (this.controllerHasButton(controller, 'trigger')) {
+      controller.updateButtonValue('trigger', state.buttons.trigger ? 1 : 0);
+    }
+    if (this.controllerHasButton(controller, 'squeeze')) {
+      controller.updateButtonValue('squeeze', state.buttons.squeeze ? 1 : 0);
+    }
+    if (this.controllerHasButton(controller, 'thumbstick')) {
+      controller.updateButtonValue('thumbstick', state.buttons.stick ? 1 : 0);
+      controller.updateButtonTouch('thumbstick', thumbstickTouched);
+    }
+    if (this.controllerHasAxis(controller, 'thumbstick')) {
+      controller.updateAxes(
+        'thumbstick',
+        clampAxis(state.joystick.x),
+        clampAxis(-state.joystick.y),
+      );
+    }
+
+    if (handedness === XRHandedness.Left) {
+      if (this.controllerHasButton(controller, 'x-button')) {
+        controller.updateButtonValue('x-button', state.buttons.action1 ? 1 : 0);
+      }
+      if (this.controllerHasButton(controller, 'y-button')) {
+        controller.updateButtonValue('y-button', state.buttons.action2 ? 1 : 0);
+      }
+    } else if (handedness === XRHandedness.Right) {
+      if (this.controllerHasButton(controller, 'a-button')) {
+        controller.updateButtonValue('a-button', state.buttons.action1 ? 1 : 0);
+      }
+      if (this.controllerHasButton(controller, 'b-button')) {
+        controller.updateButtonValue('b-button', state.buttons.action2 ? 1 : 0);
+      }
+    }
+
+    if (this.controllerHasButton(controller, 'thumbrest')) {
+      controller.updateButtonValue('thumbrest', state.buttons.menu ? 1 : 0);
+      controller.updateButtonTouch('thumbrest', state.buttons.menu);
+    }
+  }
+
+  private updateControllerPose(frame: XRFrame) {
+    if (!this.lastControllerState) {
+      return;
+    }
+
+    if (
+      this.controllerLastPacketMs != null &&
+      getNowMs() - this.controllerLastPacketMs > 1500
+    ) {
+      this.handleControllerConnectionChange(false);
+      return;
+    }
+
+    const controllers = this[P_DEVICE].controllers;
+    if (!controllers) {
+      return;
+    }
+
+    const timestampNs =
+      frame.predictedDisplayTime > 0
+        ? frame.predictedDisplayTime * 1e6
+        : getNowMs() * 1e6;
+
+    const predicted =
+      this.controllerSmoother?.predict(timestampNs) ??
+      ([
+        this.lastControllerState.position.x,
+        this.lastControllerState.position.y,
+        this.lastControllerState.position.z,
+        this.lastControllerState.quaternion.x,
+        this.lastControllerState.quaternion.y,
+        this.lastControllerState.quaternion.z,
+        this.lastControllerState.quaternion.w,
+      ] as PoseArray);
+
+    if (this.activeWandState === 'left' || this.activeWandState === 'both') {
+      this.applyPoseToController(controllers[XRHandedness.Left], predicted);
+    }
+    if (this.activeWandState === 'right' || this.activeWandState === 'both') {
+      this.applyPoseToController(controllers[XRHandedness.Right], predicted);
+    }
+  }
+
+  private applyPoseToController(
+    controller: XRController | undefined,
+    pose: PoseArray,
+  ) {
+    if (!controller) {
+      return;
+    }
+    controller.position.set(pose[0], pose[1], pose[2]);
+    controller.quaternion.set(pose[3], pose[4], pose[5], pose[6]);
+  }
+
   enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
     const nextOptions = {
       ...(options ?? this.portalPoseCameraOptions ?? {}),
@@ -941,13 +1230,27 @@ export class XRDevice {
       ...(options ?? this.webrtcStreamOptions ?? {}),
     } as WebRTCControllerStreamOptions;
     this.webrtcStreamOptions = nextOptions;
+    this.handleControllerConnectionChange(false);
     this.webrtcStreamer?.dispose();
-    this.webrtcStreamer = new WebRTCControllerStreamer(nextOptions);
+    const userOnState = nextOptions.onControllerState;
+    const userOnConnection = nextOptions.onConnectionChange;
+    this.webrtcStreamer = new WebRTCControllerStreamer({
+      ...nextOptions,
+      onControllerState: (state) => {
+        this.handleControllerState(state);
+        userOnState?.(state);
+      },
+      onConnectionChange: (connected) => {
+        this.handleControllerConnectionChange(connected);
+        userOnConnection?.(connected);
+      },
+    });
   }
 
   disableWebRTCControllerStreaming() {
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
+    this.handleControllerConnectionChange(false);
   }
 
   private ensureDefaultWebRTCStreamer() {

@@ -18,6 +18,10 @@ export interface WebRTCControllerStreamOptions {
   log?: (m: string) => void;
   /** Auto-start the connection as soon as the streamer is created. Default: true. */
   autoStart?: boolean;
+  /** Called whenever a controller packet is decoded. */
+  onControllerState?: (state: ControllerState) => void;
+  /** Called when the data channel connection changes state. */
+  onConnectionChange?: (connected: boolean) => void;
 }
 
 const DEFAULT_SIGNALING_BASE = 'wss://cloudflare-signalling.portalvr.workers.dev';
@@ -27,6 +31,8 @@ export class WebRTCControllerStreamer {
   private readonly roomId: string;
   private readonly log: (m: string) => void;
   private readonly autoStart: boolean;
+  private readonly onControllerState?: (state: ControllerState) => void;
+  private readonly onConnectionChange?: (connected: boolean) => void;
 
   private sigcf: SIGCF | null = null;
   private lastState: ControllerState | null = null;
@@ -39,6 +45,8 @@ export class WebRTCControllerStreamer {
     this.roomId = options.roomId || 'test';
     this.log = typeof options.log === 'function' ? options.log : (m: string) => console.log(`[webrtc] ${m}`);
     this.autoStart = options.autoStart !== false;
+    this.onControllerState = options.onControllerState;
+    this.onConnectionChange = options.onConnectionChange;
 
     if (this.autoStart) {
       this.ensureStarted();
@@ -85,6 +93,9 @@ export class WebRTCControllerStreamer {
     this.sigcf = null;
     this.startPromise = null;
     this.lastState = null;
+    if (this.connected) {
+      this.onConnectionChange?.(false);
+    }
     this.connected = false;
   }
 
@@ -101,12 +112,14 @@ export class WebRTCControllerStreamer {
       this.sigcf.on('connected', () => {
         this.connected = true;
         this.log(`connected to room "${this.roomId}"`);
+        this.onConnectionChange?.(true);
       }),
     );
     this.cleanupHandlers.push(
       this.sigcf.on('disconnected', () => {
         this.connected = false;
         this.log('disconnected');
+        this.onConnectionChange?.(false);
       }),
     );
     this.cleanupHandlers.push(
@@ -115,6 +128,7 @@ export class WebRTCControllerStreamer {
           const parsed = parseControllerState(data);
           if (parsed) {
             this.lastState = parsed;
+            this.onControllerState?.(parsed);
           }
         }
       }),
