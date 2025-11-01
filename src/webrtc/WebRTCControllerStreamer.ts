@@ -2,12 +2,15 @@
  * WebRTC controller streaming logic used by the emulator runtime.
  * - Copies the signaling + dual-room strategy into TS (see src/webrtc/*).
  * - Auto-connects to room 'test' by default and streams controller pose packets.
- * - Logs controller pose on every XR frame for connectivity verification.
  */
 
 import type { XRFrame } from '../frameloop/XRFrame.js';
 import { SIGCF } from './sigcf.js';
-import { parseControllerState, type ControllerState } from './controllerParser.js';
+import {
+  parseControllerState,
+  type ControllerState,
+  isOrientationResetPacket,
+} from './controllerParser.js';
 
 export interface WebRTCControllerStreamOptions {
   /** Signaling base URL (no trailing slash). */
@@ -22,6 +25,8 @@ export interface WebRTCControllerStreamOptions {
   onControllerState?: (state: ControllerState) => void;
   /** Called when the data channel connection changes state. */
   onConnectionChange?: (connected: boolean) => void;
+  /** Called when an orientation-reset packet is received. */
+  onOrientationReset?: () => void;
 }
 
 const DEFAULT_SIGNALING_BASE = 'wss://cloudflare-signalling.portalvr.workers.dev';
@@ -33,9 +38,9 @@ export class WebRTCControllerStreamer {
   private readonly autoStart: boolean;
   private readonly onControllerState?: (state: ControllerState) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
+  private readonly onOrientationReset?: () => void;
 
   private sigcf: SIGCF | null = null;
-  private lastState: ControllerState | null = null;
   private connected = false;
   private cleanupHandlers: Array<() => void> = [];
   private startPromise: Promise<void> | null = null;
@@ -47,6 +52,7 @@ export class WebRTCControllerStreamer {
     this.autoStart = options.autoStart !== false;
     this.onControllerState = options.onControllerState;
     this.onConnectionChange = options.onConnectionChange;
+    this.onOrientationReset = options.onOrientationReset;
 
     if (this.autoStart) {
       this.ensureStarted();
@@ -54,28 +60,9 @@ export class WebRTCControllerStreamer {
   }
 
   /** Process the current XR frame and emit telemetry. */
-  update(frame: XRFrame) {
+  update(_frame: XRFrame) {
     if (!this.sigcf) {
       this.ensureStarted();
-    }
-
-    if (this.lastState) {
-      const s = this.lastState;
-      // eslint-disable-next-line no-console
-      console.log(
-        `[WebRTC] frame=${frame.predictedDisplayTime.toFixed(2)}ms ` +
-          `connected=${this.connected ? 'yes' : 'no'} ` +
-          `pos=(${s.position.x.toFixed(3)}, ${s.position.y.toFixed(3)}, ${s.position.z.toFixed(3)}) ` +
-          `quat=(${s.quaternion.x.toFixed(3)}, ${s.quaternion.y.toFixed(3)}, ${s.quaternion.z.toFixed(3)}, ${s.quaternion.w.toFixed(3)}) ` +
-          `buttons=${JSON.stringify(s.buttons)} mode=${s.wandModeName}`,
-      );
-    } else {
-      // eslint-disable-next-line no-console
-      console.log(
-        `[WebRTC] frame=${frame.predictedDisplayTime.toFixed(2)}ms waiting for controller data… connected=${
-          this.connected ? 'yes' : 'no'
-        }`,
-      );
     }
   }
 
@@ -92,7 +79,6 @@ export class WebRTCControllerStreamer {
     this.sigcf?.destroy();
     this.sigcf = null;
     this.startPromise = null;
-    this.lastState = null;
     if (this.connected) {
       this.onConnectionChange?.(false);
     }
@@ -125,9 +111,13 @@ export class WebRTCControllerStreamer {
     this.cleanupHandlers.push(
       this.sigcf.on('msg', (_peer: string, data: any) => {
         if (data instanceof ArrayBuffer) {
+          if (isOrientationResetPacket(data)) {
+            this.log('received orientation reset packet');
+            this.onOrientationReset?.();
+            return;
+          }
           const parsed = parseControllerState(data);
           if (parsed) {
-            this.lastState = parsed;
             this.onControllerState?.(parsed);
           }
         }

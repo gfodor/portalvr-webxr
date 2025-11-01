@@ -100,6 +100,19 @@ export class CameraOffsetController {
     this.uiOffsetWorld.z = 0;
   }
 
+  public resetAll(): void {
+    this.uiOffsetWorld.x = 0;
+    this.uiOffsetWorld.y = 0;
+    this.uiOffsetWorld.z = 0;
+    this.smoothedOffset.x = 0;
+    this.smoothedOffset.y = 0;
+    this.smoothedOffset.z = 0;
+    this.pitchOffsetRad = 0;
+    this.smoothedPitchRad = 0;
+    this.yawOffsetRad = 0;
+    this.lastUpdateNs = 0;
+  }
+
   public magnitude(): number {
     return Math.hypot(this.uiOffsetWorld.x, this.uiOffsetWorld.y, this.uiOffsetWorld.z);
   }

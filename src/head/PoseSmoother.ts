@@ -166,6 +166,26 @@ export class PoseSmoother {
     this.euroZ.shift(dz);
   }
 
+  public reset(initialPose?: PoseArray, timestampNs?: number): void {
+    this.buffer.length = 0;
+    this.lastVelocity = 0;
+    const filters = [this.euroX, this.euroY, this.euroZ, this.rotX, this.rotY, this.rotZ];
+    filters.forEach((filter) => filter.reset());
+    if (initialPose) {
+      const tNs = timestampNs ?? nowNs();
+      this.addSample(
+        initialPose[0],
+        initialPose[1],
+        initialPose[2],
+        initialPose[3],
+        initialPose[4],
+        initialPose[5],
+        initialPose[6],
+        tNs,
+      );
+    }
+  }
+
   public predict(nowTimestampNs = nowNs()): PoseArray | null {
     if (!PoseSmoother.ENABLE_SMOOTHING) {
       const newest = this.buffer[this.buffer.length - 1];

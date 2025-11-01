@@ -184,6 +184,27 @@ class PortalPoseCameraNudger {
     this.composeFinalPose(device, predicted);
   }
 
+  public resetOrientation() {
+    this.offsetController.resetAll();
+    for (const code of Object.keys(this.keyState)) {
+      this.keyState[code] = false;
+    }
+    const sample: PoseArray = [
+      this.basePosition.x,
+      this.basePosition.y,
+      this.basePosition.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+    ] as PoseArray;
+    const nowNs = this.nowNs();
+    this.offsetController.stepSmoothing(nowNs);
+    this.poseSmoother.reset(sample, nowNs);
+    this.latestSmoothedPose = new Float32Array(sample);
+    this.latestFinalPose = new Float32Array(sample);
+  }
+
   public dispose() {
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
@@ -491,8 +512,8 @@ class PortalPoseCameraNudger {
     if (!this.debugEnabled) {
       return;
     }
-    // eslint-disable-next-line no-console
-    console.debug(`[PortalPoseCamera] ${tag}`, payload);
+    void tag;
+    void payload;
   }
 }
 
@@ -500,6 +521,7 @@ export class PortalPoseCameraController {
   private controller: PortalPoseCameraNudger | null = null;
   private initPromise: Promise<void> | null = null;
   private disposed = false;
+  private pendingOrientationReset = false;
   private readonly options: PortalPoseCameraOptions;
 
   constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
@@ -521,11 +543,26 @@ export class PortalPoseCameraController {
     this.controller.handleFrame(this.device, frame);
   }
 
+  handleOrientationReset() {
+    if (this.disposed) {
+      return;
+    }
+    if (this.controller) {
+      this.pendingOrientationReset = false;
+      this.controller.resetOrientation();
+      return;
+    }
+    this.pendingOrientationReset = true;
+    this.ensureInitialized();
+  }
+
   /** Dispose controller resources and detach listeners. */
   dispose() {
     this.disposed = true;
+    this.pendingOrientationReset = false;
     this.controller?.dispose();
     this.controller = null;
+    this.initPromise = null;
   }
 
   private ensureInitialized() {
@@ -561,6 +598,7 @@ export class PortalPoseCameraController {
     }
 
     if (this.disposed) {
+      this.initPromise = null;
       return;
     }
 
@@ -573,5 +611,10 @@ export class PortalPoseCameraController {
     };
 
     this.controller = new PortalPoseCameraNudger(module, this.device, internalOptions);
+    if (this.pendingOrientationReset && this.controller) {
+      this.controller.resetOrientation();
+      this.pendingOrientationReset = false;
+    }
+    this.initPromise = null;
   }
 }

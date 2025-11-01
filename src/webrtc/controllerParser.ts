@@ -3,7 +3,8 @@
  * Typed and BigInt-free (we read the 64-bit timestamp as two 32-bit words).
  */
 
-const PACKET_STATE = 0x10;
+export const PACKET_STATE = 0x10;
+export const PACKET_ORIENTATION_RESET = 0x7e;
 const PROTO_VERSION = 0x01;
 
 // Button bit masks
@@ -46,6 +47,18 @@ const WAND_MODE_NAMES = [
   'Dual Mirrored',
   'Dual Opposed',
 ];
+
+export function isOrientationResetPacket(buffer: ArrayBuffer | null | undefined): boolean {
+  if (!buffer || !(buffer instanceof ArrayBuffer)) {
+    return false;
+  }
+  if (buffer.byteLength < 1) {
+    return false;
+  }
+  const view = new DataView(buffer);
+  const packetType = view.getUint8(0);
+  return packetType === PACKET_ORIENTATION_RESET;
+}
 
 export function parseControllerState(buffer: ArrayBuffer | null | undefined): ControllerState | null {
   if (!buffer || !(buffer instanceof ArrayBuffer)) {

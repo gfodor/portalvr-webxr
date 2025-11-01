@@ -20,6 +20,12 @@ export class OneEuroFilter {
     }
   }
 
+  public reset(): void {
+    this.prevValue = Number.NaN;
+    this.prevDeriv = 0;
+    this.prevTime = Number.NaN;
+  }
+
   private alpha(cutoff: number, dt: number): number {
     const tau = 1.0 / (2.0 * Math.PI * cutoff);
     return 1.0 / (1.0 + tau / dt);

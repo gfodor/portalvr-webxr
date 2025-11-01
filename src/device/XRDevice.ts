@@ -65,7 +65,10 @@ import {
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
-import { PoseSmoother, type PoseArray } from '../head/PoseSmoother.js';
+import {
+  PortalControllerRuntime,
+  type PortalPose,
+} from '../wasm/PortalControllerRuntime.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -330,10 +333,12 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
-  private controllerSmoother: PoseSmoother | null = null;
+  private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
+  private portalControllerRuntime: PortalControllerRuntime | null = null;
+  private pendingOrientationReset = false;
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
-  private controllerLastPacketMs: number | null = null;
+  private lastControllerPacketMs: number | null = null;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -968,23 +973,16 @@ export class XRDevice {
     return this[P_DEVICE].sem;
   }
 
-  private handleControllerState = (state: ControllerState) => {
-    this.controllerLastPacketMs = getNowMs();
-    if (!this.controllerSmoother) {
-      const hz = this[P_DEVICE].internalNominalFrameRate ?? 90;
-      this.controllerSmoother = new PoseSmoother(hz);
-    }
-    this.controllerSmoother.addSample(
-      state.position.x,
-      state.position.y,
-      state.position.z,
-      state.quaternion.x,
-      state.quaternion.y,
-      state.quaternion.z,
-      state.quaternion.w,
-      state.timestampNs,
-    );
+  private handleControllerState = async (state: ControllerState) => {
     this.lastControllerState = state;
+    this.lastControllerPacketMs = getNowMs();
+    try {
+      const runtime = await this.ensurePortalControllerRuntime();
+      runtime.ingestPacket(state);
+      runtime.setWandMode(state.wandMode);
+    } catch (error) {
+      console.error('[XRDevice] Failed to process controller state', error);
+    }
 
     const activeState = resolveActiveWandState(state.wandMode);
     this.setActiveWandState(activeState);
@@ -993,16 +991,51 @@ export class XRDevice {
 
   private handleControllerConnectionChange = (connected: boolean) => {
     if (!connected) {
-      this.controllerSmoother = null;
+      this.portalControllerRuntime?.handleDisconnect();
       this.lastControllerState = null;
-      this.controllerLastPacketMs = null;
+      this.lastControllerPacketMs = null;
       this.setActiveWandState('none', true);
     }
   };
 
+  private handleOrientationReset = () => {
+    if (this.portalControllerRuntime) {
+      this.portalControllerRuntime.handleOrientationReset();
+    } else {
+      this.pendingOrientationReset = true;
+    }
+  };
+
+  private ensurePortalControllerRuntime(): Promise<PortalControllerRuntime> {
+    if (!this.portalControllerRuntimePromise) {
+      const options = this.portalPoseCameraOptions;
+      this.portalControllerRuntimePromise = PortalControllerRuntime.create(options)
+        .then((runtime) => {
+          this.portalControllerRuntime = runtime;
+          if (this.pendingOrientationReset) {
+            runtime.handleOrientationReset();
+            this.pendingOrientationReset = false;
+          }
+          if (this.lastControllerState) {
+            runtime.setWandMode(this.lastControllerState.wandMode);
+          }
+          return runtime;
+        })
+        .catch((error) => {
+          console.error('[XRDevice] Failed to initialise Portal controller runtime', error);
+          this.portalControllerRuntimePromise = null;
+          throw error;
+        });
+    }
+    return this.portalControllerRuntimePromise;
+  }
+
   private setActiveWandState(next: ActiveWandState, force = false) {
     if (!force && this.activeWandState === next) {
       return;
+    }
+    if (next === 'none') {
+      this.portalControllerRuntime?.setWandMode(0);
     }
     this.activeWandState = next;
 
@@ -1158,14 +1191,17 @@ export class XRDevice {
   }
 
   private updateControllerPose(frame: XRFrame) {
-    if (!this.lastControllerState) {
+    const runtime = this.portalControllerRuntime;
+    if (!runtime || !this.lastControllerState) {
       return;
     }
 
+    const nowMs = getNowMs();
     if (
-      this.controllerLastPacketMs != null &&
-      getNowMs() - this.controllerLastPacketMs > 1500
+      this.lastControllerPacketMs != null &&
+      nowMs - this.lastControllerPacketMs > 1500
     ) {
+      runtime.handleDisconnect();
       this.handleControllerConnectionChange(false);
       return;
     }
@@ -1178,37 +1214,49 @@ export class XRDevice {
     const timestampNs =
       frame.predictedDisplayTime > 0
         ? frame.predictedDisplayTime * 1e6
-        : getNowMs() * 1e6;
+        : nowMs * 1e6;
 
-    const predicted =
-      this.controllerSmoother?.predict(timestampNs) ??
-      ([
-        this.lastControllerState.position.x,
-        this.lastControllerState.position.y,
-        this.lastControllerState.position.z,
-        this.lastControllerState.quaternion.x,
-        this.lastControllerState.quaternion.y,
-        this.lastControllerState.quaternion.z,
-        this.lastControllerState.quaternion.w,
-      ] as PoseArray);
+    const headPose = {
+      position: {
+        x: this.position.x,
+        y: this.position.y,
+        z: this.position.z,
+      },
+      orientation: {
+        x: this.quaternion.x,
+        y: this.quaternion.y,
+        z: this.quaternion.z,
+        w: this.quaternion.w,
+      },
+    };
+
+    const update = runtime.updateFrame(timestampNs, headPose);
+    if (!update) {
+      return;
+    }
 
     if (this.activeWandState === 'left' || this.activeWandState === 'both') {
-      this.applyPoseToController(controllers[XRHandedness.Left], predicted);
+      this.applyControllerPose(controllers[XRHandedness.Left], update.finalPose);
     }
     if (this.activeWandState === 'right' || this.activeWandState === 'both') {
-      this.applyPoseToController(controllers[XRHandedness.Right], predicted);
+      this.applyControllerPose(controllers[XRHandedness.Right], update.finalPose);
     }
   }
 
-  private applyPoseToController(
+  private applyControllerPose(
     controller: XRController | undefined,
-    pose: PoseArray,
+    pose: PortalPose,
   ) {
     if (!controller) {
       return;
     }
-    controller.position.set(pose[0], pose[1], pose[2]);
-    controller.quaternion.set(pose[3], pose[4], pose[5], pose[6]);
+    controller.position.set(pose.position.x, pose.position.y, pose.position.z);
+    controller.quaternion.set(
+      pose.orientation.x,
+      pose.orientation.y,
+      pose.orientation.z,
+      pose.orientation.w,
+    );
   }
 
   enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
@@ -1234,15 +1282,20 @@ export class XRDevice {
     this.webrtcStreamer?.dispose();
     const userOnState = nextOptions.onControllerState;
     const userOnConnection = nextOptions.onConnectionChange;
+    const userOnOrientationReset = nextOptions.onOrientationReset;
     this.webrtcStreamer = new WebRTCControllerStreamer({
       ...nextOptions,
       onControllerState: (state) => {
-        this.handleControllerState(state);
+        void this.handleControllerState(state);
         userOnState?.(state);
       },
       onConnectionChange: (connected) => {
         this.handleControllerConnectionChange(connected);
         userOnConnection?.(connected);
+      },
+      onOrientationReset: () => {
+        this.handleOrientationReset();
+        userOnOrientationReset?.();
       },
     });
   }
