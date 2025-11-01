@@ -1,7 +1,7 @@
-import type { XRDevice, XRDeviceHooks } from '../device/XRDevice.js';
+import type { XRDevice } from '../device/XRDevice.js';
 import type { XRFrame } from '../frameloop/XRFrame.js';
-import { CameraOffsetController } from '../head/CameraOffsetController.js';
-import { PoseSmoother, type PoseArray } from '../head/PoseSmoother.js';
+import { CameraOffsetController } from './CameraOffsetController.js';
+import { PoseSmoother, type PoseArray } from './PoseSmoother.js';
 import type { PortalPoseModuleInstance } from '../wasm/portal-pose/portal_pose.js';
 import {
   DEFAULT_CAMERA_PITCH_RAD,
@@ -42,15 +42,13 @@ interface PortalPoseCameraInternalOptions {
   debug: boolean;
 }
 
-export interface PortalPoseCameraHookOptions extends PortalPoseLoadOptions {
+export interface PortalPoseCameraOptions extends PortalPoseLoadOptions {
   /** Movement speed applied while a key is held, in metres per second. Default: 1.25. */
   speedMetersPerSecond?: number;
   /** Overrides the virtual camera pitch before offsets (degrees). Default: 45. */
   cameraPitchDegrees?: number;
   /** Treat the camera as fixed display-locked to avoid vertical coupling. Default: false. */
   fixedDisplayLocked?: boolean;
-  /** Optional delegate hooks that run after the WASM nudge logic. */
-  delegateHooks?: Partial<XRDeviceHooks>;
   /** Enables verbose diagnostics for camera nudges. Default: true in development builds. */
   debugLogging?: boolean;
 }
@@ -498,60 +496,82 @@ class PortalPoseCameraNudger {
   }
 }
 
-const controllerRegistry = new WeakMap<XRDevice, PortalPoseCameraNudger>();
+export class PortalPoseCameraController {
+  private controller: PortalPoseCameraNudger | null = null;
+  private initPromise: Promise<void> | null = null;
+  private disposed = false;
+  private readonly options: PortalPoseCameraOptions;
 
-export async function installPortalPoseCameraHooks(
-  device: XRDevice,
-  options: PortalPoseCameraHookOptions = {},
-): Promise<void> {
-  if (controllerRegistry.has(device)) {
-    return;
+  constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
+    this.options = { ...options };
   }
 
-  const isDevEnv =
-    typeof process !== 'undefined' && typeof process.env !== 'undefined'
-      ? process.env.NODE_ENV !== 'production'
-      : true;
-  const debugEnabled = options.debugLogging ?? isDevEnv;
-  const module = await loadPortalPoseModule(options);
-  if (debugEnabled) {
-    // eslint-disable-next-line no-console
-    console.debug('[PortalPoseCamera] module exports', Object.keys(module));
+  /**
+   * Advance the portal pose camera simulation for the current frame.
+   * Lazy-loads the WASM module on first use.
+   */
+  update(frame: XRFrame) {
+    if (this.disposed) {
+      return;
+    }
+    if (!this.controller) {
+      this.ensureInitialized();
+      return;
+    }
+    this.controller.handleFrame(this.device, frame);
   }
-  const internalOptions: PortalPoseCameraInternalOptions = {
-    speed: options.speedMetersPerSecond ?? DEFAULT_SPEED_MPS,
-    cameraPitchRad:
-      options.cameraPitchDegrees != null
-        ? degreesToRadians(options.cameraPitchDegrees)
-        : DEFAULT_CAMERA_PITCH_RAD,
-    fixedDisplayLocked: options.fixedDisplayLocked ?? true,
-    debug: debugEnabled,
-  };
 
-  const controller = new PortalPoseCameraNudger(module, device, internalOptions);
-  controllerRegistry.set(device, controller);
-
-  const delegate = options.delegateHooks;
-
-  device.installHooks({
-    onHeadPose(dev, frame) {
-      controller.handleFrame(dev, frame);
-      delegate?.onHeadPose?.(dev, frame);
-    },
-    onControllerPose(input, frame) {
-      delegate?.onControllerPose?.(input, frame);
-    },
-    onControllerButtons(input, frame) {
-      delegate?.onControllerButtons?.(input, frame);
-    },
-  });
-}
-
-export function uninstallPortalPoseCameraHooks(device: XRDevice) {
-  const controller = controllerRegistry.get(device);
-  if (!controller) {
-    return;
+  /** Dispose controller resources and detach listeners. */
+  dispose() {
+    this.disposed = true;
+    this.controller?.dispose();
+    this.controller = null;
   }
-  controllerRegistry.delete(device);
-  controller.dispose();
+
+  private ensureInitialized() {
+    if (this.controller || this.initPromise || this.disposed) {
+      return;
+    }
+    this.initPromise = this.initialize().catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('[PortalPoseCamera] failed to initialize controller', error);
+      this.initPromise = null;
+    });
+  }
+
+  private async initialize() {
+    const {
+      speedMetersPerSecond,
+      cameraPitchDegrees,
+      fixedDisplayLocked,
+      debugLogging,
+      ...loadOptions
+    } = this.options;
+
+    const module = await loadPortalPoseModule(loadOptions);
+    const debugEnabled =
+      debugLogging ??
+      (typeof process !== 'undefined' && typeof process.env !== 'undefined'
+        ? process.env.NODE_ENV !== 'production'
+        : true);
+
+    if (debugEnabled) {
+      // eslint-disable-next-line no-console
+      console.debug('[PortalPoseCamera] module exports', Object.keys(module));
+    }
+
+    if (this.disposed) {
+      return;
+    }
+
+    const internalOptions: PortalPoseCameraInternalOptions = {
+      speed: speedMetersPerSecond ?? DEFAULT_SPEED_MPS,
+      cameraPitchRad:
+        cameraPitchDegrees != null ? degreesToRadians(cameraPitchDegrees) : DEFAULT_CAMERA_PITCH_RAD,
+      fixedDisplayLocked: fixedDisplayLocked ?? true,
+      debug: debugEnabled,
+    };
+
+    this.controller = new PortalPoseCameraNudger(module, this.device, internalOptions);
+  }
 }

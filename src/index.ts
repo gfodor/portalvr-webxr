@@ -13,17 +13,16 @@ export {
 	metaQuestPro,
 	oculusQuest1,
 } from './device/configs/headset/meta.js';
-export type { XRDeviceHooks } from './device/XRDevice.js';
 export { XRTrackedInput } from './device/XRTrackedInput.js';
 export { XRController } from './device/XRController.js';
-export { loggingHooks } from './hooks/loggingHooks.js';
 export {
-  installPortalPoseCameraHooks,
-  uninstallPortalPoseCameraHooks,
-} from './hooks/portalPoseCameraHooks.js';
-export type { PortalPoseCameraHookOptions } from './hooks/portalPoseCameraHooks.js';
-
-export { createWebRTCControllerHooks } from './hooks/webrtcControllerHooks.js';
+  PortalPoseCameraController,
+  type PortalPoseCameraOptions,
+} from './head/PortalPoseCameraController.js';
+export {
+  WebRTCControllerStreamer,
+  type WebRTCControllerStreamOptions,
+} from './webrtc/WebRTCControllerStreamer.js';
 
 // Initialization
 export { XRSystem } from './initialization/XRSystem.js';

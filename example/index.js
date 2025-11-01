@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 
-import { XRDevice, installPortalPoseCameraHooks, metaQuest3 } from 'iwer';
+import { XRDevice, metaQuest3 } from 'iwer';
 
 import { DevUI } from '@iwer/devui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -35,7 +35,7 @@ const prepare = async () => {
     xrdevice = new XRDevice(metaQuest3);
     xrdevice.ipd = 0;
     xrdevice.installRuntime();
-    await installPortalPoseCameraHooks(xrdevice);
+    xrdevice.enablePortalPoseCamera();
     xrdevice.installDevUI(DevUI);
   }
   Array.from(document.getElementsByClassName('native')).forEach((el) => {

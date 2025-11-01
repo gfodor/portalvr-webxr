@@ -56,8 +56,14 @@ import { NativePlane } from '../planes/XRPlane.js';
 import { NativeMesh } from '../meshes/XRMesh.js';
 // @ts-ignore
 import WebXRLayerPolyfill from 'webxr-layers-polyfill';
-import { createWebRTCControllerHooks } from '../hooks/webrtcControllerHooks.js';
-import type { WebRTCControllerHookOptions } from '../hooks/webrtcControllerHooks.js';
+import {
+  PortalPoseCameraController,
+  type PortalPoseCameraOptions,
+} from '../head/PortalPoseCameraController.js';
+import {
+  WebRTCControllerStreamer,
+  type WebRTCControllerStreamOptions,
+} from '../webrtc/WebRTCControllerStreamer.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -95,12 +101,6 @@ export interface XRDeviceOptions {
   headsetPosition: Vector3;
   headsetQuaternion: Quaternion;
   canvasContainer: HTMLDivElement;
-}
-
-export interface XRDeviceHooks {
-  onHeadPose?: (device: XRDevice, frame: XRFrame) => void;
-  onControllerPose?: (input: XRTrackedInput, frame: XRFrame) => void;
-  onControllerButtons?: (input: XRTrackedInput, frame: XRFrame) => void;
 }
 
 const DEFAULTS = {
@@ -149,17 +149,21 @@ const Z_INDEX_APP_CANVAS = 2;
 const Z_INDEX_DEVUI_CANVAS = 3;
 const Z_INDEX_DEVUI_CONTAINER = 4;
 
-function resolveDefaultWebRTCHookOptions(): WebRTCControllerHookOptions | null {
+function resolveDefaultWebRTCStreamOptions(): WebRTCControllerStreamOptions | null {
   if (typeof globalThis === 'undefined') return null;
   const globalAny = globalThis as Record<string, any>;
-  if (globalAny.__IWER_DISABLE_WEBRTC_HOOKS__) return null;
+  const disableFlag =
+    globalAny.__IWER_DISABLE_WEBRTC_STREAM__ ?? globalAny.__IWER_DISABLE_WEBRTC_HOOKS__;
+  if (disableFlag) return null;
   if (typeof globalAny.window === 'undefined') return null;
   if (typeof globalAny.RTCPeerConnection !== 'function') return null;
 
-  let install = true;
+  let enable = true;
 
-  if (globalAny.__IWER_ENABLE_WEBRTC_HOOKS__ === false) install = false;
-  if (globalAny.__IWER_ENABLE_WEBRTC_HOOKS__ === true) install = true;
+  const legacyEnable = globalAny.__IWER_ENABLE_WEBRTC_HOOKS__;
+  const explicitEnable = globalAny.__IWER_ENABLE_WEBRTC_STREAM__ ?? legacyEnable;
+  if (explicitEnable === false) enable = false;
+  if (explicitEnable === true) enable = true;
 
   let roomId: string | undefined =
     typeof globalAny.__IWER_WEBRTC_ROOM__ === 'string'
@@ -189,9 +193,9 @@ function resolveDefaultWebRTCHookOptions(): WebRTCControllerHookOptions | null {
       if (params.has('iwerWebRTC')) {
         const val = params.get('iwerWebRTC');
         if (val === '0' || val?.toLowerCase() === 'false') {
-          install = false;
+          enable = false;
         } else if (val && val.toLowerCase() !== '0') {
-          install = true;
+          enable = true;
         }
       }
       if (params.has('iwerWebRTCRoom')) {
@@ -214,9 +218,9 @@ function resolveDefaultWebRTCHookOptions(): WebRTCControllerHookOptions | null {
     }
   }
 
-  if (!install) return null;
+  if (!enable) return null;
 
-  const opts: WebRTCControllerHookOptions = {};
+  const opts: WebRTCControllerStreamOptions = {};
   if (workerUrl) opts.workerUrl = workerUrl;
   if (roomId) opts.roomId = roomId;
   if (typeof autoStart === 'boolean') opts.autoStart = autoStart;
@@ -273,7 +277,6 @@ export class XRDevice {
     };
     canvasContainer: HTMLDivElement;
 
-    hooks?: XRDeviceHooks;
     getViewport: (layer: XRWebGLLayer, view: XRView) => XRViewport;
     updateViews: () => void;
     onBaseLayerSet: (baseLayer: XRWebGLLayer | null) => void;
@@ -284,6 +287,11 @@ export class XRDevice {
     devui?: DevUI;
     sem?: SyntheticEnvironmentModule;
   };
+
+  private portalPoseCamera: PortalPoseCameraController | null = null;
+  private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
+  private webrtcStreamer: WebRTCControllerStreamer | null = null;
+  private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -473,7 +481,7 @@ export class XRDevice {
       },
       onFrameStart: (frame: XRFrame) => {
         const session = frame.session;
-        this.invokeHeadPoseHook(frame);
+        this.portalPoseCamera?.update(frame);
         this[P_DEVICE].updateViews();
 
         if (this[P_DEVICE].pendingVisibilityState) {
@@ -485,9 +493,8 @@ export class XRDevice {
           );
         }
         if (this[P_DEVICE].visibilityState === 'visible') {
+          this.webrtcStreamer?.update(frame);
           this.activeInputs.forEach((activeInput) => {
-            this.invokeControllerPoseHook(activeInput, frame);
-            this.invokeControllerButtonsHook(activeInput, frame);
             activeInput.onFrameStart(frame);
           });
         }
@@ -512,6 +519,7 @@ export class XRDevice {
       },
     };
 
+    this.enablePortalPoseCamera();
     this[P_DEVICE].updateViews();
     globalThis;
   }
@@ -716,7 +724,7 @@ export class XRDevice {
 		} else {
 			Promise.resolve().then(reinstall);
 		}
-		this.ensureDefaultHooksInstalled();
+		this.ensureDefaultWebRTCStreamer();
 	}
 
   installDevUI(devUIConstructor: DevUIConstructor) {
@@ -725,10 +733,6 @@ export class XRDevice {
 
   installSEM(semConstructor: SEMConstructor) {
     this[P_DEVICE].sem = new semConstructor(this);
-  }
-
-  installHooks(hooks: XRDeviceHooks) {
-    this[P_DEVICE].hooks = hooks;
   }
 
   get supportedSessionModes() {
@@ -918,35 +922,42 @@ export class XRDevice {
     return this[P_DEVICE].sem;
   }
 
-  private invokeHeadPoseHook(frame: XRFrame) {
-    const hook = this[P_DEVICE].hooks?.onHeadPose;
-    hook?.(this, frame);
+  enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
+    const nextOptions = {
+      ...(options ?? this.portalPoseCameraOptions ?? {}),
+    } as PortalPoseCameraOptions;
+    this.portalPoseCameraOptions = nextOptions;
+    this.portalPoseCamera?.dispose();
+    this.portalPoseCamera = new PortalPoseCameraController(this, nextOptions);
   }
 
-  private invokeControllerPoseHook(
-    input: XRTrackedInput,
-    frame: XRFrame,
-  ) {
-    const hook = this[P_DEVICE].hooks?.onControllerPose;
-    hook?.(input, frame);
+  disablePortalPoseCamera() {
+    this.portalPoseCamera?.dispose();
+    this.portalPoseCamera = null;
   }
 
-  private invokeControllerButtonsHook(
-    input: XRTrackedInput,
-    frame: XRFrame,
-  ) {
-    const hook = this[P_DEVICE].hooks?.onControllerButtons;
-    hook?.(input, frame);
+  enableWebRTCControllerStreaming(options?: WebRTCControllerStreamOptions) {
+    const nextOptions = {
+      ...(options ?? this.webrtcStreamOptions ?? {}),
+    } as WebRTCControllerStreamOptions;
+    this.webrtcStreamOptions = nextOptions;
+    this.webrtcStreamer?.dispose();
+    this.webrtcStreamer = new WebRTCControllerStreamer(nextOptions);
   }
 
-  private ensureDefaultHooksInstalled() {
-    if (this[P_DEVICE].hooks) {
+  disableWebRTCControllerStreaming() {
+    this.webrtcStreamer?.dispose();
+    this.webrtcStreamer = null;
+  }
+
+  private ensureDefaultWebRTCStreamer() {
+    if (this.webrtcStreamer) {
       return;
     }
-    const opts = resolveDefaultWebRTCHookOptions();
+    const opts = resolveDefaultWebRTCStreamOptions();
     if (!opts) {
       return;
     }
-    this.installHooks(createWebRTCControllerHooks(opts));
+    this.enableWebRTCControllerStreaming(opts);
   }
 }
