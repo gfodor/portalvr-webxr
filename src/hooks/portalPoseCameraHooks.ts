@@ -1,5 +1,7 @@
 import type { XRDevice, XRDeviceHooks } from '../device/XRDevice.js';
 import type { XRFrame } from '../frameloop/XRFrame.js';
+import { CameraOffsetController } from '../head/CameraOffsetController.js';
+import { PoseSmoother, type PoseArray } from '../head/PoseSmoother.js';
 import type { PortalPoseModuleInstance } from '../wasm/portal-pose/portal_pose.js';
 import {
   DEFAULT_CAMERA_PITCH_RAD,
@@ -7,16 +9,7 @@ import {
   loadPortalPoseModule,
   type PortalPoseLoadOptions,
 } from '../wasm/PortalPoseLoader.js';
-
-interface Vec3Like {
-  x: number;
-  y: number;
-  z: number;
-}
-
-interface QuatLike extends Vec3Like {
-  w: number;
-}
+import type { QuatLike, Vec3Like } from '../types/geometry.js';
 
 const FLOAT_SIZE_BYTES = 4;
 const QUAT_COMPONENTS = 4;
@@ -39,7 +32,6 @@ const KEY_PITCH_DOWN = 'KeyV';
 const DEFAULT_SPEED_MPS = 1.25;
 const YAW_SPEED_RAD_S = degreesToRadians(60);
 const PITCH_SPEED_RAD_S = degreesToRadians(30);
-const PITCH_LIMIT_RAD = degreesToRadians(45);
 const Y_OFFSET_MIN = -1.5;
 const Y_OFFSET_MAX = 1.5;
 
@@ -72,7 +64,6 @@ class PortalPoseCameraNudger {
   private readonly basePosition: Vec3Like;
   private readonly baseOrientation: QuatLike;
   private readonly debugEnabled: boolean;
-  private headPosition: Vec3Like;
   private readonly keyState: Record<string, boolean> = Object.create(null);
   private readonly smoothedPosPtr: number;
   private readonly smoothedQuatPtr: number;
@@ -80,9 +71,10 @@ class PortalPoseCameraNudger {
   private readonly deltaPtr: number;
   private readonly posePtr: number;
   private readonly yawResultPtr: number;
-  private yawOffsetRad = 0;
-  private pitchOffsetRad = 0;
-  private uiOffset: Vec3Like = { x: 0, y: 0, z: 0 };
+  private readonly offsetController = new CameraOffsetController();
+  private readonly poseSmoother: PoseSmoother;
+  private latestSmoothedPose: Float32Array;
+  private latestFinalPose: Float32Array;
   private lastPredictedMs: number | null = null;
   private lastNowMs: number | null = null;
 
@@ -128,7 +120,6 @@ class PortalPoseCameraNudger {
       z: device.quaternion.z,
       w: device.quaternion.w,
     };
-    this.headPosition = { ...this.basePosition };
 
     this.smoothedPosPtr = module._malloc(QUAT_SIZE_BYTES); // allocate >=12 bytes
     this.smoothedQuatPtr = module._malloc(QUAT_SIZE_BYTES);
@@ -136,6 +127,37 @@ class PortalPoseCameraNudger {
     this.deltaPtr = module._malloc(QUAT_SIZE_BYTES);
     this.posePtr = module._malloc(POSE_SIZE_BYTES + FLOAT_SIZE_BYTES); // pad to 32 bytes
     this.yawResultPtr = module._malloc(FLOAT_SIZE_BYTES);
+
+    this.poseSmoother = new PoseSmoother(90);
+
+    const initNs = this.nowNs();
+    this.offsetController.stepSmoothing(initNs);
+    const initOffset = this.offsetController.copySmoothedOffset();
+    const samplePos = {
+      x: this.basePosition.x + initOffset.x,
+      y: this.basePosition.y + initOffset.y,
+      z: this.basePosition.z + initOffset.z,
+    };
+    this.poseSmoother.addSample(
+      samplePos.x,
+      samplePos.y,
+      samplePos.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+      initNs,
+    );
+    this.latestSmoothedPose = new Float32Array([
+      samplePos.x,
+      samplePos.y,
+      samplePos.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+    ]);
+    this.latestFinalPose = new Float32Array(this.latestSmoothedPose);
 
     window.addEventListener('keydown', this.handleKeyDown);
     window.addEventListener('keyup', this.handleKeyUp);
@@ -154,10 +176,14 @@ class PortalPoseCameraNudger {
       }
       const dPitch = this.computePitchDelta(dt);
       if (dPitch !== 0) {
-        this.applyPitchDelta(dPitch);
+        this.offsetController.nudgePitchLocal(dPitch);
       }
     }
-    this.composeFinalPose(device);
+    const nowNs = this.nowNs();
+    this.offsetController.stepSmoothing(nowNs);
+    this.addPoseSample(nowNs);
+    const predicted = this.poseSmoother.predict(nowNs);
+    this.composeFinalPose(device, predicted);
   }
 
   public dispose() {
@@ -230,14 +256,28 @@ class PortalPoseCameraNudger {
   }
 
   private applyKeyboardDelta(dx: number, dy: number, dz: number) {
-    this.writeQuat(this.smoothedQuatPtr, this.baseOrientation);
+    const orientation = this.latestSmoothedPose ?? new Float32Array([
+      this.basePosition.x,
+      this.basePosition.y,
+      this.basePosition.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+    ]);
+    this.writeQuat(this.smoothedQuatPtr, {
+      x: orientation[3],
+      y: orientation[4],
+      z: orientation[5],
+      w: orientation[6],
+    });
     const ok = this.module._portal_wasm_head_offset_calculate_nudge_delta(
       dx,
       dy,
       dz,
       this.smoothedQuatPtr,
-      this.yawOffsetRad,
-      this.pitchOffsetRad,
+      this.offsetController.getYawRad(),
+      this.offsetController.getSmoothedPitchRad(),
       this.cameraPitchRad,
       this.cameraPitchSin,
       this.fixedDisplayLocked,
@@ -248,33 +288,43 @@ class PortalPoseCameraNudger {
       return;
     }
     const delta = this.readVec3(this.deltaPtr);
-    const nextYOffset = this.clampYOffset(this.uiOffset.y - delta.y);
-    this.uiOffset = {
-      x: this.uiOffset.x - delta.x,
-      y: nextYOffset,
-      z: this.uiOffset.z - delta.z,
-    };
-    this.updateHeadPositionFromOffset();
-    this.debug('nudge-delta', { input: { dx, dy, dz }, delta, uiOffset: this.uiOffset });
+    this.offsetController.accumulateWorldDelta(delta);
+    this.debug('nudge-delta', { input: { dx, dy, dz }, delta });
   }
 
   private applyYawDelta(dYawRad: number) {
-    this.writeVec3(this.smoothedPosPtr, this.headPosition);
-    this.writeQuat(this.smoothedQuatPtr, this.baseOrientation);
-    this.writeVec3(this.uiOffsetPtr, this.uiOffset);
-
-    this.module._portal_wasm_head_compose_final_pose(
-      this.smoothedPosPtr,
-      this.smoothedQuatPtr,
-      this.yawOffsetRad,
-      this.pitchOffsetRad,
-      this.uiOffsetPtr,
-      this.posePtr,
-    );
-
+    const smoothedPose = this.latestSmoothedPose;
+    const finalPose = this.latestFinalPose;
+    if (!smoothedPose || !finalPose) {
+      return;
+    }
+    this.writeVec3(this.smoothedPosPtr, {
+      x: smoothedPose[0],
+      y: smoothedPose[1],
+      z: smoothedPose[2],
+    });
+    this.writeQuat(this.smoothedQuatPtr, {
+      x: smoothedPose[3],
+      y: smoothedPose[4],
+      z: smoothedPose[5],
+      w: smoothedPose[6],
+    });
+    const currentOffset = this.offsetController.copySmoothedOffset();
+    this.writeVec3(this.uiOffsetPtr, currentOffset);
+    this.writeQuat(this.posePtr, {
+      x: finalPose[3],
+      y: finalPose[4],
+      z: finalPose[5],
+      w: finalPose[6],
+    });
+    this.writeVec3(this.posePtr + QUAT_SIZE_BYTES, {
+      x: finalPose[0],
+      y: finalPose[1],
+      z: finalPose[2],
+    });
     const currentFinalPosPtr = this.posePtr + QUAT_SIZE_BYTES;
     const ok = this.module._portal_wasm_head_calculate_yaw_nudge(
-      this.yawOffsetRad,
+      this.offsetController.getYawRad(),
       this.uiOffsetPtr,
       dYawRad,
       this.smoothedPosPtr,
@@ -292,34 +342,8 @@ class PortalPoseCameraNudger {
 
     const adjust = this.readVec3(this.deltaPtr);
     const newYaw = this.module.HEAPF32[this.yawResultPtr >>> 2];
-    const nextYOffset = this.clampYOffset(this.uiOffset.y - adjust.y);
-
-    this.yawOffsetRad = newYaw;
-    this.uiOffset = {
-      x: this.uiOffset.x - adjust.x,
-      y: nextYOffset,
-      z: this.uiOffset.z - adjust.z,
-    };
-    this.updateHeadPositionFromOffset();
-    this.debug('yaw-nudge', {
-      dYawRad,
-      newYaw,
-      adjust,
-      uiOffset: this.uiOffset,
-    });
-  }
-
-  private applyPitchDelta(dPitchRad: number) {
-    const unclamped = this.pitchOffsetRad + dPitchRad;
-    const clamped = Math.min(Math.max(unclamped, -PITCH_LIMIT_RAD), PITCH_LIMIT_RAD);
-    if (clamped === this.pitchOffsetRad) {
-      if (dPitchRad !== 0) {
-        this.debug('pitch-nudge-clamped', { dPitchRad, pitchOffsetRad: this.pitchOffsetRad });
-      }
-      return;
-    }
-    this.pitchOffsetRad = clamped;
-    this.debug('pitch-nudge', { dPitchRad, pitchOffsetRad: this.pitchOffsetRad });
+    this.offsetController.applyYawAdjust(newYaw, adjust);
+    this.debug('yaw-nudge', { dYawRad, newYaw, adjust });
   }
 
   private computeYawDelta(dt: number): number {
@@ -342,28 +366,28 @@ class PortalPoseCameraNudger {
     return axis * PITCH_SPEED_RAD_S * dt;
   }
 
-  private updateHeadPositionFromOffset() {
-    this.headPosition = {
-      x: this.basePosition.x - this.uiOffset.x,
-      y: this.basePosition.y - this.uiOffset.y,
-      z: this.basePosition.z - this.uiOffset.z,
-    };
-  }
+  private composeFinalPose(device: XRDevice, predicted: PoseArray | null) {
+    const pose = predicted ?? this.latestSmoothedPose;
+    if (!pose) {
+      return;
+    }
+    const yawRad = this.offsetController.getYawRad();
+    const pitchRad = this.offsetController.getSmoothedPitchRad();
+    const smOffset = this.offsetController.copySmoothedOffset();
 
-  private clampYOffset(value: number): number {
-    return Math.min(Math.max(value, Y_OFFSET_MIN), Y_OFFSET_MAX);
-  }
-
-  private composeFinalPose(device: XRDevice) {
-    this.writeVec3(this.smoothedPosPtr, this.headPosition);
-    this.writeQuat(this.smoothedQuatPtr, this.baseOrientation);
-    this.writeVec3(this.uiOffsetPtr, this.uiOffset);
-
+    this.writeVec3(this.smoothedPosPtr, { x: pose[0], y: pose[1], z: pose[2] });
+    this.writeQuat(this.smoothedQuatPtr, {
+      x: pose[3],
+      y: pose[4],
+      z: pose[5],
+      w: pose[6],
+    });
+    this.writeVec3(this.uiOffsetPtr, smOffset);
     this.module._portal_wasm_head_compose_final_pose(
       this.smoothedPosPtr,
       this.smoothedQuatPtr,
-      this.yawOffsetRad,
-      this.pitchOffsetRad,
+      yawRad,
+      pitchRad,
       this.uiOffsetPtr,
       this.posePtr,
     );
@@ -372,12 +396,52 @@ class PortalPoseCameraNudger {
     const finalPos = this.readVec3(this.posePtr + QUAT_SIZE_BYTES);
     device.quaternion.set(finalQuat.x, finalQuat.y, finalQuat.z, finalQuat.w);
     device.position.set(finalPos.x, finalPos.y, finalPos.z);
+
+    this.latestSmoothedPose = new Float32Array([
+      pose[0],
+      pose[1],
+      pose[2],
+      pose[3],
+      pose[4],
+      pose[5],
+      pose[6],
+    ]);
+    this.latestFinalPose = new Float32Array([
+      finalPos.x,
+      finalPos.y,
+      finalPos.z,
+      finalQuat.x,
+      finalQuat.y,
+      finalQuat.z,
+      finalQuat.w,
+    ]);
+
     this.debug('compose-final', {
       finalPos,
       finalQuat,
-      uiOffset: this.uiOffset,
-      headPosition: this.headPosition,
+      uiOffset: smOffset,
+      yawRad,
+      pitchRad,
     });
+  }
+
+  private addPoseSample(nowNs: number) {
+    const smOffset = this.offsetController.copySmoothedOffset();
+    const samplePos = {
+      x: this.basePosition.x + smOffset.x,
+      y: this.basePosition.y + smOffset.y,
+      z: this.basePosition.z + smOffset.z,
+    };
+    this.poseSmoother.addSample(
+      samplePos.x,
+      samplePos.y,
+      samplePos.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+      nowNs,
+    );
   }
 
   private writeVec3(ptr: number, value: Vec3Like) {
@@ -416,6 +480,13 @@ class PortalPoseCameraNudger {
       z: heap[baseIndex + 2],
       w: heap[baseIndex + 3],
     };
+  }
+
+  private nowNs(): number {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now() * 1e6;
+    }
+    return Date.now() * 1e6;
   }
 
   private debug(tag: string, payload: unknown) {
