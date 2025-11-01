@@ -242,8 +242,8 @@ class PortalPoseCameraNudger {
     const up = this.keyState[KEY_UP] ? 1 : 0;
     const down = this.keyState[KEY_DOWN] ? 1 : 0;
 
-    const axisZ = forward - backward; // positive when pushing forward (camera forward is -Z)
-    const axisX = right - left;
+    const axisZ = backward - forward;
+    const axisX = left - right;
     const axisY = up - down;
 
     if (axisX === 0 && axisY === 0 && axisZ === 0) {
@@ -289,7 +289,7 @@ class PortalPoseCameraNudger {
     }
     const delta = this.readVec3(this.deltaPtr);
     this.offsetController.accumulateWorldDelta(delta);
-    this.debug('nudge-delta', { input: { dx, dy, dz }, delta });
+    this.debug('nudge-delta', { input: { dx, dy, dz }, delta, targets: this.offsetController.copyOffset() });
   }
 
   private applyYawDelta(dYawRad: number) {
