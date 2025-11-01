@@ -4,6 +4,7 @@ export default {
   extensionsToTreatAsEsm: ['.ts'], // Remove .js since it's inferred from package.json
   setupFiles: ['<rootDir>/tests/polyfill.ts'],
   moduleNameMapper: {
+    '\\.\\./wasm/PortalPoseLoader\\.js$': '<rootDir>/tests/mocks/PortalPoseLoader.ts',
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transform: {
@@ -13,6 +14,7 @@ export default {
         useESM: true,
         tsconfig: {
           allowJs: true,
+          module: 'esnext',
         },
       },
     ],
