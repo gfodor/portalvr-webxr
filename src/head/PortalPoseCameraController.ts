@@ -184,6 +184,10 @@ class PortalPoseCameraNudger {
     this.composeFinalPose(device, predicted);
   }
 
+  public getYawRad(): number {
+    return this.offsetController.getYawRad();
+  }
+
   public resetOrientation() {
     this.offsetController.resetAll();
     for (const code of Object.keys(this.keyState)) {
@@ -203,6 +207,28 @@ class PortalPoseCameraNudger {
     this.poseSmoother.reset(sample, nowNs);
     this.latestSmoothedPose = new Float32Array(sample);
     this.latestFinalPose = new Float32Array(sample);
+  }
+
+  public applyDragIncrements(inc: { incX?: number; incY?: number; incZ?: number; incYaw?: number; incPitch?: number }) {
+    const EPS = 1e-6;
+    const dx = inc.incX ?? 0;
+    const dy = inc.incY ?? 0;
+    const dz = inc.incZ ?? 0;
+    const dYaw = inc.incYaw ?? 0;
+    const dPitch = inc.incPitch ?? 0;
+
+    if (Math.abs(dy) > EPS) {
+      this.applyKeyboardDelta(0, dy, 0);
+    }
+    if (Math.abs(dx) > EPS || Math.abs(dz) > EPS) {
+      this.applyKeyboardDelta(dx, 0, dz);
+    }
+    if (Math.abs(dYaw) > EPS) {
+      this.applyYawDelta(dYaw);
+    }
+    if (Math.abs(dPitch) > EPS) {
+      this.offsetController.nudgePitchLocal(dPitch);
+    }
   }
 
   public dispose() {
@@ -508,12 +534,9 @@ class PortalPoseCameraNudger {
     return Date.now() * 1e6;
   }
 
-  private debug(tag: string, payload: unknown) {
-    if (!this.debugEnabled) {
-      return;
-    }
-    void tag;
-    void payload;
+  private debug(_tag: string, _payload: unknown) {
+    if (!this.debugEnabled) return;
+    // keep debug wiring from original
   }
 }
 
@@ -523,6 +546,7 @@ export class PortalPoseCameraController {
   private disposed = false;
   private pendingOrientationReset = false;
   private readonly options: PortalPoseCameraOptions;
+  private pendingDragIncrements: { incX?: number; incY?: number; incZ?: number; incYaw?: number; incPitch?: number } | null = null;
 
   constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
     this.options = { ...options };
@@ -540,7 +564,26 @@ export class PortalPoseCameraController {
       this.ensureInitialized();
       return;
     }
+    if (this.pendingDragIncrements) {
+      this.controller.applyDragIncrements(this.pendingDragIncrements);
+      this.pendingDragIncrements = null;
+    }
     this.controller.handleFrame(this.device, frame);
+  }
+
+  applyCameraDragIncrements(inc: { incX?: number; incY?: number; incZ?: number; incYaw?: number; incPitch?: number }) {
+    if (this.disposed) return;
+    if (!this.controller) {
+      this.ensureInitialized();
+      // keep only the latest batch to avoid unbounded growth
+      this.pendingDragIncrements = inc;
+      return;
+    }
+    this.controller.applyDragIncrements(inc);
+  }
+
+  getYawRad(): number {
+    return this.controller ? this.controller.getYawRad() : 0;
   }
 
   handleOrientationReset() {
@@ -614,6 +657,11 @@ export class PortalPoseCameraController {
     if (this.pendingOrientationReset && this.controller) {
       this.controller.resetOrientation();
       this.pendingOrientationReset = false;
+    }
+    // Apply any drag increments that arrived before init
+    if (this.pendingDragIncrements) {
+      this.controller.applyDragIncrements(this.pendingDragIncrements);
+      this.pendingDragIncrements = null;
     }
     this.initPromise = null;
   }

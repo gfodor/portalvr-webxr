@@ -1230,10 +1230,28 @@ export class XRDevice {
       },
     };
 
+	try {
+		const uiYaw = this.portalPoseCamera?.getYawRad ? this.portalPoseCamera.getYawRad() : 0;
+		// May be undefined while initializing; default to 0.
+		runtime.setUiYawOffset(uiYaw || 0);
+	} catch {
+		// ignore
+	}
+
     const update = runtime.updateFrame(timestampNs, headPose);
     if (!update) {
       return;
     }
+
+	if (update.dragIncrements) {
+		this.portalPoseCamera?.applyCameraDragIncrements?.({
+		incX: update.dragIncrements.incX,
+		incY: update.dragIncrements.incY,
+		incZ: update.dragIncrements.incZ,
+		incYaw: update.dragIncrements.incYaw,
+		incPitch: update.dragIncrements.incPitch,
+		});
+	}
 
     if (this.activeWandState === 'left' || this.activeWandState === 'both') {
       this.applyControllerPose(controllers[XRHandedness.Left], update.finalPose);
