@@ -232,10 +232,6 @@ class PortalPoseCameraNudger {
     this.latestFinalPose = new Float32Array(sample);
   }
 
-  public getYawRad(): number {
-    return this.offsetController.getYawRad();
-  }
-
   public dispose() {
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
@@ -567,13 +563,6 @@ export class PortalPoseCameraController {
       return;
     }
     this.controller?.applyCameraDragIncrements(inc);
-  }
-
-  public getYawRad(): number {
-    if (!this.controller) {
-      return 0;
-    }
-    return this.controller.getYawRad();
   }
 
   /**

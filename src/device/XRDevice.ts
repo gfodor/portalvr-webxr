@@ -1022,7 +1022,6 @@ export class XRDevice {
       this.portalControllerRuntimePromise = PortalControllerRuntime.create(options)
         .then((runtime) => {
           this.portalControllerRuntime = runtime;
-          runtime.setCameraYawProvider(() => this.portalPoseCamera?.getYawRad() ?? 0);
           if (this.pendingOrientationReset) {
             runtime.handleOrientationReset();
             this.pendingOrientationReset = false;
