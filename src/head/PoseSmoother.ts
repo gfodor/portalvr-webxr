@@ -45,12 +45,12 @@ export class PoseSmoother {
 
   constructor(displayHz = 90, private readonly latencyFrames = 0) {
     const freq = Math.max(1, displayHz);
-    this.euroX = new OneEuroFilter(freq, 1.0, 250.0, 1.0);
-    this.euroY = new OneEuroFilter(freq, 1.0, 250.0, 1.0);
-    this.euroZ = new OneEuroFilter(freq, 1.0, 250.0, 1.0);
-    this.rotX = new OneEuroFilter(freq, 1.0, 10.0, 1.0);
-    this.rotY = new OneEuroFilter(freq, 1.0, 10.0, 1.0);
-    this.rotZ = new OneEuroFilter(freq, 1.0, 10.0, 1.0);
+    this.euroX = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
+    this.euroY = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
+    this.euroZ = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
+    this.rotX = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
+    this.rotY = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
+    this.rotZ = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
   }
 
   public setMode(newMode: PoseSmootherMode): void {
@@ -66,7 +66,7 @@ export class PoseSmoother {
           return 1.0;  // native default
         case PoseSmootherMode.LOW:
         default:
-          return 250.0;  // more responsiveness
+          return 50.0;  // more responsiveness
       }
     })();
     this.euroX.setBeta(beta);
