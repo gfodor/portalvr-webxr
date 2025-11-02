@@ -153,6 +153,7 @@ export class PortalControllerRuntime {
   private readonly I32: Int32Array;
   private readonly F64: Float64Array;
   private dragHandle: PortalCameraDragHandle | null = null;
+  private cameraYawProvider: (() => number) | null = null;
 
   private readonly poseSmoother: PoseSmoother;
   private lastSmoothedPose: PoseArray | null = null;
@@ -335,6 +336,22 @@ export class PortalControllerRuntime {
         this.ephemeralSwapActive = false;
         this.dualModeOpposed = false;
         break;
+    }
+  }
+
+  setCameraYawProvider(provider: (() => number) | null): void {
+    this.cameraYawProvider = provider ?? null;
+  }
+
+  private getCameraYawBaseline(): number {
+    if (!this.cameraYawProvider) {
+      return 0;
+    }
+    try {
+      const yaw = this.cameraYawProvider();
+      return Number.isFinite(yaw) ? yaw : 0;
+    } catch {
+      return 0;
     }
   }
 
@@ -559,6 +576,7 @@ export class PortalControllerRuntime {
       }
       this.activeDragMode = desired;
       if (this.activeDragMode !== 'none') {
+        const baseUiYawRad = this.getCameraYawBaseline();
         try {
           this.dragHandle.begin({
             controllerPose: {
@@ -566,7 +584,7 @@ export class PortalControllerRuntime {
               orientation: { ...unblendedPose.orientation },
             },
             cameraQuat: { ...headPose.orientation },
-            baseUiYawRad: 0.0,           // Web path: use 0 baseline; yaw continuity handled on apply
+            baseUiYawRad,
             mode: this.activeDragMode === 'aim' ? 1 : 0,
           });
         } catch {
