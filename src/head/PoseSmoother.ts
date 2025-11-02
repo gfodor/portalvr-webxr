@@ -61,12 +61,12 @@ export class PoseSmoother {
     const beta = (() => {
       switch (newMode) {
         case PoseSmootherMode.VERY_HIGH:
-          return 0.001;
+          return 0.001;  // most smoothing
         case PoseSmootherMode.HIGH:
-          return 1.0;
+          return 1.0;  // native default
         case PoseSmootherMode.LOW:
         default:
-          return 75.0;
+          return 250.0;  // more responsiveness
       }
     })();
     this.euroX.setBeta(beta);

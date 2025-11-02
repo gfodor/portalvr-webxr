@@ -1,7 +1,7 @@
 import type { PortalPoseModuleInstance } from './portal-pose/portal_pose.js';
 import { loadPortalPoseModule, type PortalPoseLoadOptions } from './PortalPoseLoader.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
-import { PoseSmoother, type PoseArray } from '../head/PoseSmoother.js';
+import { PoseSmoother, PoseSmootherMode, type PoseArray } from '../head/PoseSmoother.js';
 
 interface PortalPose {
   position: { x: number; y: number; z: number };
@@ -223,6 +223,7 @@ export class PortalControllerRuntime {
     this.vecPtr = Module._malloc(3 * FLOAT_SIZE);
 
     this.poseSmoother = new PoseSmoother(90);
+    this.poseSmoother.setMode(PoseSmootherMode.LOW)
 
     // NEW: create PortalCameraDragHandle and wire display-delta callback
     try {

@@ -44,6 +44,8 @@ export class WebRTCControllerStreamer {
   private connected = false;
   private cleanupHandlers: Array<() => void> = [];
   private startPromise: Promise<void> | null = null;
+  private lastSessionTimestampMs: number | null = null;
+  private lastSessionTimestampReceivedAt = 0;
 
   constructor(options: WebRTCControllerStreamOptions = {}) {
     this.workerUrl = (options.workerUrl || DEFAULT_SIGNALING_BASE).replace(/\/$/, '');
@@ -98,6 +100,8 @@ export class WebRTCControllerStreamer {
       this.sigcf.on('connected', () => {
         this.connected = true;
         this.log(`connected to room "${this.roomId}"`);
+        this.lastSessionTimestampMs = null;
+        this.lastSessionTimestampReceivedAt = 0;
         this.onConnectionChange?.(true);
       }),
     );
@@ -105,6 +109,8 @@ export class WebRTCControllerStreamer {
       this.sigcf.on('disconnected', () => {
         this.connected = false;
         this.log('disconnected');
+        this.lastSessionTimestampMs = null;
+        this.lastSessionTimestampReceivedAt = 0;
         this.onConnectionChange?.(false);
       }),
     );
@@ -117,8 +123,12 @@ export class WebRTCControllerStreamer {
             return;
           }
           const parsed = parseControllerState(data);
-          if (parsed) {
+          if (parsed && this.shouldAcceptState(parsed)) {
             this.onControllerState?.(parsed);
+          } else if (parsed) {
+            this.log(
+              `dropped controller packet ts=${parsed.sessionTimestampMs} (last=${this.lastSessionTimestampMs ?? 'none'})`,
+            );
           }
         }
       }),
@@ -132,5 +142,42 @@ export class WebRTCControllerStreamer {
       .finally(() => {
         this.startPromise = null;
       });
+  }
+
+  private shouldAcceptState(state: ControllerState): boolean {
+    const ts = state.sessionTimestampMs;
+    if (!Number.isFinite(ts)) {
+      return true;
+    }
+
+    if (this.lastSessionTimestampMs === null) {
+      this.lastSessionTimestampMs = ts;
+      this.lastSessionTimestampReceivedAt = state.receivedAt;
+      return true;
+    }
+
+    if (ts === this.lastSessionTimestampMs) {
+      return false;
+    }
+
+    if (ts > this.lastSessionTimestampMs) {
+      this.lastSessionTimestampMs = ts;
+      this.lastSessionTimestampReceivedAt = state.receivedAt;
+      return true;
+    }
+
+    const likelySessionReset =
+      ts === 0 ||
+      (ts < 1000 &&
+        this.lastSessionTimestampMs > 5000 &&
+        state.receivedAt - this.lastSessionTimestampReceivedAt > 1000);
+
+    if (likelySessionReset) {
+      this.lastSessionTimestampMs = ts;
+      this.lastSessionTimestampReceivedAt = state.receivedAt;
+      return true;
+    }
+
+    return false;
   }
 }

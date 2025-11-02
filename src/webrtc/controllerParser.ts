@@ -1,5 +1,5 @@
 /**
- * Parses the 55-byte controller state packet format from BleClient.java
+ * Parses the 59-byte controller state packet format from BleClient.java
  * Typed and BigInt-free (we read the 64-bit timestamp as two 32-bit words).
  */
 
@@ -22,6 +22,7 @@ const FLAG_STRETCH = 1 << 1; // bit 1
 
 export interface ControllerState {
   version: number;
+  sessionTimestampMs: number;
   position: { x: number; y: number; z: number };
   quaternion: { x: number; y: number; z: number; w: number };
   buttons: {
@@ -67,8 +68,8 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     return null;
   }
 
-  if (buffer.byteLength !== 55) {
-    console.warn(`Expected 55 bytes, got ${buffer.byteLength}`);
+  if (buffer.byteLength !== 59) {
+    console.warn(`Expected 59 bytes, got ${buffer.byteLength}`);
     return null;
   }
 
@@ -131,6 +132,10 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
   const flagsRaw = view.getInt32(offset, true);
   offset += 4;
 
+  // Bytes 55-58: Session timestamp (uint32, little-endian)
+  const sessionTimestampMs = view.getUint32(offset, true);
+  offset += 4;
+
   const buttons = {
     action1: !!(buttonsMask & BTN_ACTION_1),
     action2: !!(buttonsMask & BTN_ACTION_2),
@@ -148,6 +153,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
 
   return {
     version,
+    sessionTimestampMs,
     position: { x: posX, y: posY, z: posZ },
     quaternion: { x: quatX, y: quatY, z: quatZ, w: quatW },
     buttons,

@@ -340,9 +340,19 @@ export class RoomSession {
       maxRetransmits: 0,
     });
     (this.dc as any).binaryType = 'arraybuffer';
+    const { label, negotiated, id, ordered, maxPacketLifeTime, maxRetransmits } = this.dc;
+    this.log(
+      `datachannel configured (label=${label} negotiated=${negotiated} id=${id} ordered=${ordered} maxRetransmits=${
+        maxRetransmits ?? 'none'
+      } maxPacketLifeTime=${maxPacketLifeTime ?? 'none'})`,
+    );
 
     this.dc.onopen = () => {
-      this.log(`datachannel open (negotiated id=0)`);
+      this.log(
+        `datachannel open (negotiated id=${id} ordered=${ordered} reliable=${
+          maxPacketLifeTime == null && maxRetransmits == null
+        } maxRetransmits=${maxRetransmits ?? 'none'})`,
+      );
       this._startKeepAlive();
       this._markConnected('dc-open');
     };
