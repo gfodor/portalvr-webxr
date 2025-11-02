@@ -14,6 +14,7 @@ const BTN_STICK = 1 << 2; // bit 2
 const BTN_TRIGGER = 1 << 3; // bit 3
 const BTN_SQUEEZE = 1 << 4; // bit 4
 const BTN_MENU = 1 << 5; // bit 5
+const BTN_CAMERA_DRAG = 1 << 6; // bit 6 (virtual camera-drag button)
 
 // Flag bit masks
 const FLAG_AIM = 1; // bit 0
@@ -30,6 +31,7 @@ export interface ControllerState {
     trigger: boolean;
     squeeze: boolean;
     menu: boolean;
+    cameraDrag: boolean; // NEW: virtual button to engage camera drag
   };
   joystick: { x: number; y: number };
   timestampNs: number;
@@ -136,6 +138,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     trigger: !!(buttonsMask & BTN_TRIGGER),
     squeeze: !!(buttonsMask & BTN_SQUEEZE),
     menu: !!(buttonsMask & BTN_MENU),
+    cameraDrag: !!(buttonsMask & BTN_CAMERA_DRAG),
   };
 
   const flags = {

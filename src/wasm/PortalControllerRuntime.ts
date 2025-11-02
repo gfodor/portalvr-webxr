@@ -8,12 +8,51 @@ interface PortalPose {
   orientation: { x: number; y: number; z: number; w: number };
 }
 
+interface CameraDragIncrements {
+  incY: number;
+  incYaw: number;
+  incPitch: number;
+  incX: number;
+  incZ: number;
+  mode: 'button' | 'aim';
+}
+
+interface PortalCameraDragBeginParams {
+  controllerPose: PortalPose;
+  cameraQuat: PortalPose['orientation'];
+  baseUiYawRad: number;
+  mode: number;
+}
+
+interface PortalCameraDragComputeParams {
+  controllerPose: PortalPose;
+  nowSeconds: number;
+}
+
+interface PortalCameraDragComputeResult {
+  incY?: number;
+  incYaw?: number;
+  incPitch?: number;
+  incX?: number;
+  incZ?: number;
+}
+
+type PortalCameraDragDisplayDelta = PortalPose['position'] | null;
+
+interface PortalCameraDragHandle {
+  setDisplayDeltaCallback(cb: () => PortalCameraDragDisplayDelta): void;
+  begin(params: PortalCameraDragBeginParams): void;
+  compute(params: PortalCameraDragComputeParams): PortalCameraDragComputeResult | null | undefined;
+  end(): void;
+}
+
 interface PortalControllerUpdate {
   finalPose: PortalPose;
   unblendedPose: PortalPose;
   aimWeight: number;
   headWeight: number;
   stretchAmount: number;
+  cameraDrag?: CameraDragIncrements; // NEW: controller-driven camera-drag increments for this frame
 }
 
 interface HeadPoseInput {
@@ -22,6 +61,7 @@ interface HeadPoseInput {
 }
 
 type ActiveHand = 'left' | 'right';
+type DragMode = 'none' | 'button' | 'aim';
 
 const SIZEOF_PORTAL_POSEF = 28;
 const SIZEOF_PORTAL_POSE_INPUTS = 192;
@@ -75,6 +115,8 @@ const DEFAULT_HALF_FOV_RAD = Math.PI / 4;
 
 const DISPLAY_LOCK_TIMEOUT_MS = 1500;
 
+const AIM_ENTER_W = 0.999;
+
 const enum PortalHandEnum {
   Right = 0,
   Left = 1,
@@ -88,6 +130,8 @@ interface ButtonState {
   stickClick: boolean;
   menu: boolean;
 }
+
+const AIM_EXIT_W = 0.98;
 
 export class PortalControllerRuntime {
   public static async create(options?: PortalPoseLoadOptions): Promise<PortalControllerRuntime> {
@@ -108,9 +152,11 @@ export class PortalControllerRuntime {
   private readonly U8: Uint8Array;
   private readonly I32: Int32Array;
   private readonly F64: Float64Array;
+  private dragHandle: PortalCameraDragHandle | null = null;
 
   private readonly poseSmoother: PoseSmoother;
   private lastSmoothedPose: PoseArray | null = null;
+  private lastUnblendedPose: PortalPose | null = null;
   private lastPacketNs: number | null = null;
   private lastPacketMs: number | null = null;
 
@@ -118,6 +164,9 @@ export class PortalControllerRuntime {
   private wandMode: number = 0;
   private dualModeOpposed = false;
   private ephemeralSwapActive = false;
+  private activeDragMode: DragMode = 'none';
+  private buttonDragRequested = false;
+  private aimDragRequested = false;
 
   private flags = {
     aimModeEnabled: false,
@@ -175,6 +224,34 @@ export class PortalControllerRuntime {
 
     this.poseSmoother = new PoseSmoother(90);
 
+    // NEW: create PortalCameraDragHandle and wire display-delta callback
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const DragCtor = (this.Module as any).PortalCameraDragHandle;
+      if (typeof DragCtor === 'function') {
+        this.dragHandle = new DragCtor() as PortalCameraDragHandle;
+        this.dragHandle.setDisplayDeltaCallback(() => {
+          if (!this.lastUnblendedPose) {
+            return null;
+          }
+          this.writePose(this.ctrlPosePtr, this.lastUnblendedPose);
+          const ok = this.Module._portal_wasm_compute_display_delta(this.statePtr, this.ctrlPosePtr, this.vecPtr);
+          if (!ok) {
+            return null;
+          }
+          const base = this.vecPtr >>> 2;
+          return {
+            x: this.F32[base + 0],
+            y: this.F32[base + 1],
+            z: this.F32[base + 2],
+          };
+        });
+      }
+    } catch {
+      // If unavailable (older wasm), we just won't have display-delta (raw fallback stays active).
+      this.dragHandle = null;
+    }
+
     this.applyStaticConfig();
   }
 
@@ -218,6 +295,9 @@ export class PortalControllerRuntime {
     };
     this.flags.squeezePressed = state.buttons.squeeze;
 
+    // NEW: track virtual camera drag button request (held = requested)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.buttonDragRequested = !!(state.buttons as any).cameraDrag;
   }
 
   setWandMode(mode: number): void {
@@ -283,9 +363,15 @@ export class PortalControllerRuntime {
     const headWeight = this.F32[(this.resultPtr + OFF_RESULT_HEAD_WEIGHT) >> 2];
     const aimWeight = this.F32[(this.resultPtr + OFF_RESULT_AIM_WEIGHT) >> 2];
 
+    // NEW: keep last unblended for display-delta callback
+    this.lastUnblendedPose = unblendedPose;
+
     if (this.displayLockPending) {
       this.commitDisplayLock(headPose, unblendedPose);
     }
+
+    // NEW: update/compute camera drag increments
+    const cameraDrag = this.computeCameraDrag(nowNs, headPose, unblendedPose, aimWeight);
 
     return {
       finalPose,
@@ -293,6 +379,7 @@ export class PortalControllerRuntime {
       stretchAmount,
       headWeight,
       aimWeight,
+      cameraDrag,
     };
   }
 
@@ -317,6 +404,13 @@ export class PortalControllerRuntime {
     this.displayLockPending = false;
     this.displayLockHeadPose = null;
     this.displayLockCtrlPose = null;
+
+    // NEW: tear down active drag
+    try { this.dragHandle?.end(); } catch {}
+    this.activeDragMode = 'none';
+    this.buttonDragRequested = false;
+    this.aimDragRequested = false;
+    this.lastUnblendedPose = null;
   }
 
   hasRecentPacket(nowMs: number): boolean {
@@ -431,6 +525,81 @@ export class PortalControllerRuntime {
       );
     } else if (!this.displayLockPending) {
       this.Module._portal_wasm_set_display_lock_calibration(this.statePtr, 0, 0, 0);
+    }
+  }
+
+  private computeCameraDrag(nowNs: number, headPose: HeadPoseInput, unblendedPose: PortalPose, aimWeight: number): CameraDragIncrements | undefined {
+    if (!this.dragHandle) {
+      return undefined;
+    }
+
+    // Aim-drag request toggling mirrors Android: only when display-lock is active.
+    if (this.displayLockActive) {
+      if (!this.aimDragRequested && aimWeight >= AIM_ENTER_W) {
+        this.aimDragRequested = true;
+      } else if (this.aimDragRequested && aimWeight <= AIM_EXIT_W) {
+        this.aimDragRequested = false;
+      }
+    } else {
+      this.aimDragRequested = false;
+    }
+
+    let desired: DragMode = 'none';
+    if (this.aimDragRequested) {
+      desired = 'aim';
+    } else if (this.buttonDragRequested) {
+      desired = 'button';
+    }
+
+    if (desired !== this.activeDragMode) {
+      // Switch modes.
+      if (this.activeDragMode !== 'none') {
+        try { this.dragHandle.end(); } catch {}
+      }
+      this.activeDragMode = desired;
+      if (this.activeDragMode !== 'none') {
+        try {
+          this.dragHandle.begin({
+            controllerPose: {
+              position: { ...unblendedPose.position },
+              orientation: { ...unblendedPose.orientation },
+            },
+            cameraQuat: { ...headPose.orientation },
+            baseUiYawRad: 0.0,           // Web path: use 0 baseline; yaw continuity handled on apply
+            mode: this.activeDragMode === 'aim' ? 1 : 0,
+          });
+        } catch {
+          // If begin fails, disable drag this frame.
+          this.activeDragMode = 'none';
+        }
+      }
+    }
+
+    if (this.activeDragMode === 'none') {
+      return undefined;
+    }
+
+    try {
+      const res = this.dragHandle.compute({
+        controllerPose: {
+          position: { ...unblendedPose.position },
+          orientation: { ...unblendedPose.orientation },
+        },
+        nowSeconds: nowNs * 1e-9,
+      });
+      if (!res) {
+        return undefined;
+      }
+      return {
+        incY: res.incY ?? 0,
+        incYaw: res.incYaw ?? 0,
+        incPitch: res.incPitch ?? 0,
+        incX: res.incX ?? 0,
+        incZ: res.incZ ?? 0,
+        mode: this.activeDragMode === 'aim' ? 'aim' : 'button',
+      };
+    } catch {
+      return undefined;
     }
   }
 

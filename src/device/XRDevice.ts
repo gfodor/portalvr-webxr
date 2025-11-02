@@ -1241,7 +1241,11 @@ export class XRDevice {
     if (this.activeWandState === 'right' || this.activeWandState === 'both') {
       this.applyControllerPose(controllers[XRHandedness.Right], update.finalPose);
     }
+
+	if (update.cameraDrag) {
+		this.portalPoseCamera?.applyCameraDragIncrements(update.cameraDrag);
   }
+	}
 
   private applyControllerPose(
     controller: XRController | undefined,

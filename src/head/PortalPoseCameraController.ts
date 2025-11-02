@@ -184,6 +184,33 @@ class PortalPoseCameraNudger {
     this.composeFinalPose(device, predicted);
   }
 
+  // NEW: map per-frame camera-drag increments into existing yaw/pitch/offset nudges
+  public applyCameraDragIncrements(inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number }): void {
+    if (!inc) {
+      return;
+    }
+
+    // 1) Vertical translation along screen-up
+    if (Math.abs(inc.incY) > 1e-6) {
+      this.applyKeyboardDelta(0, inc.incY, 0);
+    }
+
+    // 2) Yaw (use RAW-baselined continuity path already implemented by applyYawDelta)
+    if (Math.abs(inc.incYaw) > 1e-6) {
+      this.applyYawDelta(inc.incYaw);
+    }
+
+    // 3) Pitch around camera-right
+    if (Math.abs(inc.incPitch) > 1e-6) {
+      this.offsetController.nudgePitchLocal(inc.incPitch);
+    }
+
+    // 4) Horizontal camera-local translation (X/Z)
+    if (Math.abs(inc.incX) > 1e-6 || Math.abs(inc.incZ) > 1e-6) {
+      this.applyKeyboardDelta(inc.incX, 0, inc.incZ);
+    }
+  }
+
   public resetOrientation() {
     this.offsetController.resetAll();
     for (const code of Object.keys(this.keyState)) {
@@ -526,6 +553,16 @@ export class PortalPoseCameraController {
 
   constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
     this.options = { ...options };
+  }
+
+  /**
+   * Apply controller-driven camera drag increments (forwarded from PortalControllerRuntime).
+   */
+  public applyCameraDragIncrements(inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number }): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.applyCameraDragIncrements(inc);
   }
 
   /**
