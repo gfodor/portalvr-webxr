@@ -1321,6 +1321,10 @@ export class XRDevice {
       },
     };
 
+	this.portalControllerRuntime?.setExternalUiYawRad(
+		this.portalPoseCamera?.getYawOffsetRad?.() ?? 0,
+	);
+
     const update = runtime.updateFrame(timestampNs, headPose);
     if (!update) {
       return;

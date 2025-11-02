@@ -167,6 +167,7 @@ export class PortalControllerRuntime {
   private activeDragMode: DragMode = 'none';
   private buttonDragRequested = false;
   private aimDragRequested = false;
+  private externalUiYawRad: number = 0;
 
   private flags = {
     aimModeEnabled: false,
@@ -529,6 +530,12 @@ export class PortalControllerRuntime {
     }
   }
 
+  public setExternalUiYawRad(yawRad: number): void {
+    if (Number.isFinite(yawRad)) {
+      this.externalUiYawRad = yawRad;
+    }
+  }
+
   private computeCameraDrag(nowNs: number, headPose: HeadPoseInput, unblendedPose: PortalPose, aimWeight: number): CameraDragIncrements | undefined {
     if (!this.dragHandle) {
       return undefined;
@@ -566,7 +573,7 @@ export class PortalControllerRuntime {
               orientation: { ...unblendedPose.orientation },
             },
             cameraQuat: { ...headPose.orientation },
-            baseUiYawRad: 0.0,           // Web path: use 0 baseline; yaw continuity handled on apply
+            baseUiYawRad: this.externalUiYawRad,
             mode: this.activeDragMode === 'aim' ? 1 : 0,
           });
         } catch {

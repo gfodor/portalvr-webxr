@@ -161,6 +161,10 @@ class PortalPoseCameraNudger {
     window.addEventListener('keyup', this.handleKeyUp);
   }
 
+  public getYawOffsetRad(): number {
+    return this.offsetController.getYawRad();
+  }
+
   handleFrame(device: XRDevice, frame: XRFrame) {
     const dt = this.computeDeltaSeconds(frame);
     if (dt > 0) {
@@ -553,6 +557,13 @@ export class PortalPoseCameraController {
 
   constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
     this.options = { ...options };
+  }
+
+  public getYawOffsetRad(): number {
+    if (this.disposed) {
+      return 0;
+    }
+    return this.controller?.getYawOffsetRad() ?? 0;
   }
 
   /**
