@@ -34,7 +34,7 @@ import {
   XRReferenceSpace,
   XRReferenceSpaceType,
 } from '../spaces/XRReferenceSpace.js';
-import { mat4, vec3 } from 'gl-matrix';
+import { mat4, quat, vec3 } from 'gl-matrix';
 
 import { VERSION } from '../version.js';
 import { XRFrame } from '../frameloop/XRFrame.js';
@@ -339,6 +339,12 @@ export class XRDevice {
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
   private lastControllerPacketMs: number | null = null;
+  private readonly lastControllerPoseByHand = {
+    left: null as PortalPose | null,
+    right: null as PortalPose | null,
+  };
+  private dualOpposedNeutral: { y: number; z: number } | null = null;
+  private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -994,6 +1000,10 @@ export class XRDevice {
       this.portalControllerRuntime?.handleDisconnect();
       this.lastControllerState = null;
       this.lastControllerPacketMs = null;
+      this.lastControllerPoseByHand.left = null;
+      this.lastControllerPoseByHand.right = null;
+      this.dualOpposedNeutral = null;
+      this.lastDualSubmode = null;
       this.setActiveWandState('none', true);
     }
   };
@@ -1034,37 +1044,118 @@ export class XRDevice {
     if (!force && this.activeWandState === next) {
       return;
     }
+
+    const prevState = this.activeWandState;
+
     if (next === 'none') {
       this.portalControllerRuntime?.setWandMode(0);
     }
+
+    if (next !== 'both') {
+      this.dualOpposedNeutral = null;
+      this.lastDualSubmode = null;
+    }
+
     this.activeWandState = next;
 
     const controllers = this[P_DEVICE].controllers;
     const left = controllers[XRHandedness.Left];
     const right = controllers[XRHandedness.Right];
 
-    const connectLeft = next === 'left' || next === 'both';
-    const connectRight = next === 'right' || next === 'both';
+    const shouldTrackLeft = next === 'left' || next === 'both';
+    const shouldTrackRight = next === 'right' || next === 'both';
+    const shouldFreezeLeft =
+      !shouldTrackLeft && next !== 'none' && this.lastControllerPoseByHand.left != null;
+    const shouldFreezeRight =
+      !shouldTrackRight && next !== 'none' && this.lastControllerPoseByHand.right != null;
 
-    if (left) {
-      const wasConnected = left.connected;
-      left.connected = connectLeft;
-      if (!connectLeft || force || !wasConnected) {
-        this.resetControllerState(left);
-      }
-    }
+    this.updateHandConnection(left, 'left', prevState, {
+      shouldTrack: shouldTrackLeft,
+      shouldFreeze: shouldFreezeLeft,
+      force,
+    });
 
-    if (right) {
-      const wasConnected = right.connected;
-      right.connected = connectRight;
-      if (!connectRight || force || !wasConnected) {
-        this.resetControllerState(right);
-      }
-    }
+    this.updateHandConnection(right, 'right', prevState, {
+      shouldTrack: shouldTrackRight,
+      shouldFreeze: shouldFreezeRight,
+      force,
+    });
 
-    if (connectLeft || connectRight) {
+    const anyConnected =
+      shouldTrackLeft ||
+      shouldTrackRight ||
+      shouldFreezeLeft ||
+      shouldFreezeRight;
+
+    if (anyConnected) {
       this[P_DEVICE].primaryInputMode = 'controller';
     }
+
+    if (next === 'none') {
+      this.lastControllerPoseByHand.left = null;
+      this.lastControllerPoseByHand.right = null;
+    }
+  }
+
+  private updateHandConnection(
+    controller: XRController | undefined,
+    hand: 'left' | 'right',
+    prevState: ActiveWandState,
+    options: { shouldTrack: boolean; shouldFreeze: boolean; force: boolean },
+  ) {
+    if (!controller) {
+      return;
+    }
+
+    const { shouldTrack, shouldFreeze, force } = options;
+    const newConnected = shouldTrack || shouldFreeze;
+    const wasConnected = controller.connected;
+    controller.connected = newConnected;
+
+    const wasTracking = this.handWasTracked(prevState, hand);
+    const wasFrozen = !wasTracking && this.lastControllerPoseByHand[hand] != null;
+
+    if (!newConnected) {
+      this.resetControllerState(controller);
+      this.lastControllerPoseByHand[hand] = null;
+      return;
+    }
+
+    if (!shouldTrack) {
+      this.resetControllerState(controller);
+      const stored = this.lastControllerPoseByHand[hand];
+      if (stored) {
+        controller.position.set(
+          stored.position.x,
+          stored.position.y,
+          stored.position.z,
+        );
+        controller.quaternion.set(
+          stored.orientation.x,
+          stored.orientation.y,
+          stored.orientation.z,
+          stored.orientation.w,
+        );
+      }
+      return;
+    }
+
+    if (force || !wasConnected || !wasTracking || wasFrozen) {
+      this.resetControllerState(controller);
+    }
+  }
+
+  private handWasTracked(state: ActiveWandState, hand: 'left' | 'right'): boolean {
+    if (state === 'both') {
+      return true;
+    }
+    if (state === 'left') {
+      return hand === 'left';
+    }
+    if (state === 'right') {
+      return hand === 'right';
+    }
+    return false;
   }
 
   private resetControllerState(controller?: XRController) {
@@ -1164,7 +1255,7 @@ export class XRDevice {
       controller.updateAxes(
         'thumbstick',
         clampAxis(state.joystick.x),
-        clampAxis(-state.joystick.y),
+        clampAxis(state.joystick.y),
       );
     }
 
@@ -1235,17 +1326,50 @@ export class XRDevice {
       return;
     }
 
-    if (this.activeWandState === 'left' || this.activeWandState === 'both') {
-      this.applyControllerPose(controllers[XRHandedness.Left], update.finalPose);
-    }
-    if (this.activeWandState === 'right' || this.activeWandState === 'both') {
-      this.applyControllerPose(controllers[XRHandedness.Right], update.finalPose);
+    let leftPose: PortalPose | null = null;
+    let rightPose: PortalPose | null = null;
+
+    switch (this.activeWandState) {
+      case 'both': {
+        const wandMode = this.lastControllerState?.wandMode ?? 0;
+        const submode: 'mirrored' | 'opposed' = wandMode === 5 ? 'opposed' : 'mirrored';
+        if (this.lastDualSubmode !== submode) {
+          this.lastDualSubmode = submode;
+          this.dualOpposedNeutral = null;
+        }
+        const dominantPose = this.clonePortalPose(update.finalPose);
+        rightPose = dominantPose;
+        const offhand = this.computeDualOffhandPose(dominantPose, headPose, submode);
+        leftPose = offhand ?? this.clonePortalPose(dominantPose);
+        break;
+      }
+      case 'left':
+        leftPose = this.clonePortalPose(update.finalPose);
+        this.lastDualSubmode = null;
+        this.dualOpposedNeutral = null;
+        break;
+      case 'right':
+        rightPose = this.clonePortalPose(update.finalPose);
+        this.lastDualSubmode = null;
+        this.dualOpposedNeutral = null;
+        break;
+      default:
+        this.lastDualSubmode = null;
+        this.dualOpposedNeutral = null;
+        break;
     }
 
-	if (update.cameraDrag) {
-		this.portalPoseCamera?.applyCameraDragIncrements(update.cameraDrag);
+    if (leftPose) {
+      this.applyControllerPose(controllers[XRHandedness.Left], leftPose);
+    }
+    if (rightPose) {
+      this.applyControllerPose(controllers[XRHandedness.Right], rightPose);
+    }
+
+    if (update.cameraDrag) {
+      this.portalPoseCamera?.applyCameraDragIncrements(update.cameraDrag);
+    }
   }
-	}
 
   private applyControllerPose(
     controller: XRController | undefined,
@@ -1261,6 +1385,120 @@ export class XRDevice {
       pose.orientation.z,
       pose.orientation.w,
     );
+
+    const handedness = controller.inputSource.handedness;
+    if (handedness === XRHandedness.Left) {
+      this.lastControllerPoseByHand.left = this.clonePortalPose(pose);
+    } else if (handedness === XRHandedness.Right) {
+      this.lastControllerPoseByHand.right = this.clonePortalPose(pose);
+    }
+  }
+
+  private computeDualOffhandPose(
+    activePose: PortalPose,
+    headPose: { position: { x: number; y: number; z: number }; orientation: { x: number; y: number; z: number; w: number } },
+    submode: 'mirrored' | 'opposed',
+  ): PortalPose | null {
+    const camQuat = quat.fromValues(
+      headPose.orientation.x,
+      headPose.orientation.y,
+      headPose.orientation.z,
+      headPose.orientation.w,
+    );
+    quat.normalize(camQuat, camQuat);
+
+    const forward = vec3.fromValues(0, 0, -1);
+    vec3.transformQuat(forward, forward, camQuat);
+    if (vec3.length(forward) < 1e-5) {
+      vec3.set(forward, 0, 0, -1);
+    } else {
+      vec3.normalize(forward, forward);
+    }
+
+    const worldUp = vec3.fromValues(0, 1, 0);
+    const right = vec3.create();
+    vec3.cross(right, worldUp, forward);
+    if (vec3.length(right) < 1e-5) {
+      vec3.set(right, 1, 0, 0);
+    } else {
+      vec3.normalize(right, right);
+    }
+
+    const up = vec3.create();
+    vec3.cross(up, forward, right);
+    if (vec3.length(up) < 1e-5) {
+      vec3.set(up, 0, 1, 0);
+    } else {
+      vec3.normalize(up, up);
+    }
+
+    const diff = vec3.fromValues(
+      activePose.position.x - headPose.position.x,
+      activePose.position.y - headPose.position.y,
+      activePose.position.z - headPose.position.z,
+    );
+
+    const xh = vec3.dot(diff, right);
+    const yh = vec3.dot(diff, up);
+    const zh = vec3.dot(diff, forward);
+
+    if (submode !== 'opposed') {
+      this.dualOpposedNeutral = null;
+    }
+
+    let neutral = this.dualOpposedNeutral;
+    if (submode === 'opposed' && !neutral) {
+      neutral = { y: yh, z: zh };
+      this.dualOpposedNeutral = neutral;
+    }
+
+    const mirroredY =
+      submode === 'opposed' && neutral ? 2 * neutral.y - yh : yh;
+    const mirroredZ =
+      submode === 'opposed' && neutral ? 2 * neutral.z - zh : zh;
+
+    const mirroredDiff = vec3.create();
+    vec3.scale(mirroredDiff, right, -xh);
+    vec3.scaleAndAdd(mirroredDiff, mirroredDiff, up, mirroredY);
+    vec3.scaleAndAdd(mirroredDiff, mirroredDiff, forward, mirroredZ);
+
+    if (
+      !Number.isFinite(mirroredDiff[0]) ||
+      !Number.isFinite(mirroredDiff[1]) ||
+      !Number.isFinite(mirroredDiff[2])
+    ) {
+      return this.clonePortalPose(activePose);
+    }
+
+    return {
+      position: {
+        x: headPose.position.x + mirroredDiff[0],
+        y: headPose.position.y + mirroredDiff[1],
+        z: headPose.position.z + mirroredDiff[2],
+      },
+      orientation: {
+        x: activePose.orientation.x,
+        y: activePose.orientation.y,
+        z: activePose.orientation.z,
+        w: activePose.orientation.w,
+      },
+    };
+  }
+
+  private clonePortalPose(pose: PortalPose): PortalPose {
+    return {
+      position: {
+        x: pose.position.x,
+        y: pose.position.y,
+        z: pose.position.z,
+      },
+      orientation: {
+        x: pose.orientation.x,
+        y: pose.orientation.y,
+        z: pose.orientation.z,
+        w: pose.orientation.w,
+      },
+    };
   }
 
   enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
