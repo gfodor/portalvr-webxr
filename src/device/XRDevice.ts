@@ -61,6 +61,10 @@ import {
   type PortalPoseCameraOptions,
 } from '../head/PortalPoseCameraController.js';
 import {
+  FaceTracker,
+  type FaceTrackerOutputs,
+} from '../head/FaceTracker.js';
+import {
   WebRTCControllerStreamer,
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
@@ -117,6 +121,31 @@ function clampAxis(value: number): number {
   if (value < -1) return -1;
   return value;
 }
+
+const MAX_FACE_TRACK_OFFSET_METERS = 0.35;
+const FACE_TRACK_SMOOTHING_TAU_MS = 120;
+const clampFaceOffset = (value: number): number =>
+  Math.max(Math.min(value, MAX_FACE_TRACK_OFFSET_METERS), -MAX_FACE_TRACK_OFFSET_METERS);
+
+const FACE_TRACKER_SMOOTH_DEFAULT = {
+  minCutoff: 5,
+  beta: 75,
+  dCutoff: 5,
+} as const;
+const FACE_TRACKER_DISTANCE_BASE = 0.99;
+const FACE_TRACKER_HFOV_DEG = 60;
+const FACE_TRACKER_WASM_PATH =
+  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
+const FACE_TRACKER_MODEL_PATH =
+  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+const FACE_TRACKING_RESOLUTIONS: Array<{ width: number; height: number }> = [
+  { width: 320, height: 240 },
+  { width: 640, height: 480 },
+  { width: 1280, height: 720 },
+  { width: 1920, height: 1080 },
+  { width: 160, height: 120 },
+];
 
 function makeIdentityPortalPose(): PortalPose {
   return {
@@ -354,6 +383,17 @@ export class XRDevice {
     left: { active: false, offset: makeIdentityPortalPose() },
     right: { active: false, offset: makeIdentityPortalPose() },
   };
+  private faceTracker: FaceTracker | null = null;
+  private faceTrackerUnsubscribe: (() => void) | null = null;
+  private faceTrackerVideoEl: HTMLVideoElement | null = null;
+  private faceTrackerStream: MediaStream | null = null;
+  private faceTrackingReference: { x: number; y: number; z: number } | null = null;
+  private faceTrackingStartPromise: Promise<void> | null = null;
+  private faceTrackingPermissionRejected = false;
+  private readonly faceTrackingTarget = vec3.create();
+  private readonly faceTrackingOffset = vec3.create();
+  private readonly faceTrackingTempPosition = vec3.create();
+  private faceTrackingLastFrameMs = 0;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
 
@@ -470,10 +510,12 @@ export class XRDevice {
       updateViews: () => {
         // update viewerSpace
         const viewerSpace = this[P_DEVICE].viewerSpace;
+        const basePosition = this[P_DEVICE].position.vec3;
+        vec3.add(this.faceTrackingTempPosition, basePosition, this.faceTrackingOffset);
         mat4.fromRotationTranslation(
           viewerSpace[P_SPACE].offsetMatrix,
           this[P_DEVICE].quaternion.quat,
-          this[P_DEVICE].position.vec3,
+          this.faceTrackingTempPosition,
         );
 
         // update viewSpaces
@@ -545,10 +587,12 @@ export class XRDevice {
           this[P_DEVICE].canvasData = undefined;
           window.dispatchEvent(new Event('resize'));
         }
+        this.stopFaceTracking();
       },
       onFrameStart: (frame: XRFrame) => {
         const session = frame.session;
         this.portalPoseCamera?.update(frame);
+        this.updateFaceTrackingForSession(session);
         this[P_DEVICE].updateViews();
 
         if (this[P_DEVICE].pendingVisibilityState) {
@@ -1078,10 +1122,8 @@ export class XRDevice {
 
     const shouldTrackLeft = next === 'left' || next === 'both';
     const shouldTrackRight = next === 'right' || next === 'both';
-    const shouldFreezeLeft =
-      !shouldTrackLeft && next !== 'none' && this.lastControllerPoseByHand.left != null;
-    const shouldFreezeRight =
-      !shouldTrackRight && next !== 'none' && this.lastControllerPoseByHand.right != null;
+    const shouldFreezeLeft = !shouldTrackLeft && next !== 'none';
+    const shouldFreezeRight = !shouldTrackRight && next !== 'none';
 
     this.updateHandConnection(left, 'left', prevState, {
       shouldTrack: shouldTrackLeft,
@@ -1122,6 +1164,11 @@ export class XRDevice {
     }
 
     const { shouldTrack, shouldFreeze, force } = options;
+
+    if (shouldFreeze && !this.lastControllerPoseByHand[hand]) {
+      this.lastControllerPoseByHand[hand] = this.snapshotControllerPose(controller);
+    }
+
     const newConnected = shouldTrack || shouldFreeze;
     const wasConnected = controller.connected;
     controller.connected = newConnected;
@@ -1649,6 +1696,259 @@ export class XRDevice {
       },
     };
   }
+
+  private snapshotControllerPose(controller: XRController): PortalPose {
+    return {
+      position: {
+        x: controller.position.x,
+        y: controller.position.y,
+        z: controller.position.z,
+      },
+      orientation: {
+        x: controller.quaternion.x,
+        y: controller.quaternion.y,
+        z: controller.quaternion.z,
+        w: controller.quaternion.w,
+      },
+    };
+  }
+
+  private updateFaceTrackingForSession(session: XRSession): void {
+    const mode = session[P_SESSION].mode;
+    if (mode === 'inline') {
+      this.stopFaceTracking();
+    } else if (mode === 'immersive-vr' || mode === 'immersive-ar') {
+      this.ensureFaceTracking();
+    }
+    this.updateFaceTrackingSmoothing(getNowMs());
+  }
+
+  private ensureFaceTracking(): void {
+    if (this.faceTracker || this.faceTrackingStartPromise || this.faceTrackingPermissionRejected) {
+      return;
+    }
+    if (typeof navigator === 'undefined' || typeof document === 'undefined') {
+      this.faceTrackingPermissionRejected = true;
+      return;
+    }
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      this.faceTrackingPermissionRejected = true;
+      return;
+    }
+
+    this.faceTrackingStartPromise = this.startFaceTracking()
+      .catch((error) => {
+        // eslint-disable-next-line no-console
+        console.warn('[XRDevice] face tracking unavailable', error);
+      })
+      .finally(() => {
+        this.faceTrackingStartPromise = null;
+      });
+  }
+
+  private async requestFaceTrackingStream(): Promise<MediaStream> {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      throw new Error('Media devices are unavailable');
+    }
+
+    let lastError: unknown = null;
+    for (const preset of FACE_TRACKING_RESOLUTIONS) {
+      try {
+        return await mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user',
+            width: { ideal: preset.width },
+            height: { ideal: preset.height },
+            frameRate: { ideal: 60, max: 120 },
+          },
+          audio: false,
+        });
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    try {
+      return await mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'user',
+          frameRate: { ideal: 60, max: 120 },
+        },
+        audio: false,
+      });
+    } catch (error) {
+      lastError = error;
+    }
+
+    throw lastError ?? new Error('Unable to acquire face-tracking camera stream');
+  }
+
+  private async startFaceTracking(): Promise<void> {
+    if (this.faceTracker || this.faceTrackingPermissionRejected) {
+      return;
+    }
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      this.faceTrackingPermissionRejected = true;
+      return;
+    }
+
+    let stream: MediaStream;
+    try {
+      stream = await this.requestFaceTrackingStream();
+    } catch (error) {
+      const name = (error as DOMException | undefined)?.name;
+      if (name === 'NotAllowedError' || name === 'NotFoundError' || name === 'NotReadableError') {
+        this.faceTrackingPermissionRejected = true;
+      }
+      throw error;
+    }
+
+    if (typeof document === 'undefined') {
+      stream.getTracks().forEach((track) => track.stop());
+      this.faceTrackingPermissionRejected = true;
+      return;
+    }
+
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.style.position = 'fixed';
+    video.style.opacity = '0';
+    video.style.pointerEvents = 'none';
+    video.style.width = '1px';
+    video.style.height = '1px';
+    video.style.transform = 'translate(-10000px, -10000px)';
+    video.srcObject = stream;
+    const parent = document.body ?? document.documentElement;
+    parent?.appendChild(video);
+
+    try {
+      await video.play();
+    } catch {
+      // Some browsers require a user gesture for play; best effort only.
+    }
+
+    const tracker = new FaceTracker({
+      hfovDeg: FACE_TRACKER_HFOV_DEG,
+      wasmPath: FACE_TRACKER_WASM_PATH,
+      modelAssetPath: FACE_TRACKER_MODEL_PATH,
+      smooth: { ...FACE_TRACKER_SMOOTH_DEFAULT },
+      distanceSmoothingBase: FACE_TRACKER_DISTANCE_BASE,
+    });
+    tracker.setFiltering({ ...FACE_TRACKER_SMOOTH_DEFAULT });
+    this.faceTrackerUnsubscribe = tracker.onUpdate(this.handleFaceTrackerUpdate);
+
+    try {
+      await tracker.start(video);
+    } catch (error) {
+      this.faceTrackerUnsubscribe?.();
+      this.faceTrackerUnsubscribe = null;
+      tracker.stop();
+      if (video.parentElement) {
+        video.parentElement.removeChild(video);
+      }
+      video.srcObject = null;
+      stream.getTracks().forEach((track) => track.stop());
+      throw error;
+    }
+
+    this.faceTracker = tracker;
+    this.faceTrackerVideoEl = video;
+    this.faceTrackerStream = stream;
+    this.faceTrackingReference = null;
+    vec3.set(this.faceTrackingTarget, 0, 0, 0);
+    this.faceTrackingLastFrameMs = 0;
+  }
+
+  private stopFaceTracking(): void {
+    this.faceTracker?.stop();
+    this.faceTracker = null;
+    this.faceTrackerUnsubscribe?.();
+    this.faceTrackerUnsubscribe = null;
+    if (this.faceTrackerVideoEl) {
+      try {
+        this.faceTrackerVideoEl.pause();
+      } catch {
+        // ignore pause failures
+      }
+      if (this.faceTrackerVideoEl.parentElement) {
+        this.faceTrackerVideoEl.parentElement.removeChild(this.faceTrackerVideoEl);
+      }
+      this.faceTrackerVideoEl.srcObject = null;
+      this.faceTrackerVideoEl = null;
+    }
+    if (this.faceTrackerStream) {
+      this.faceTrackerStream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // ignore track stop failures
+        }
+      });
+      this.faceTrackerStream = null;
+    }
+    this.faceTrackingReference = null;
+    vec3.set(this.faceTrackingTarget, 0, 0, 0);
+    this.faceTrackingLastFrameMs = 0;
+  }
+
+  private updateFaceTrackingSmoothing(nowMs: number): void {
+    if (!Number.isFinite(nowMs)) {
+      return;
+    }
+    if (this.faceTrackingLastFrameMs === 0) {
+      this.faceTrackingLastFrameMs = nowMs;
+      vec3.copy(this.faceTrackingOffset, this.faceTrackingTarget);
+      return;
+    }
+    const dtMs = Math.max(nowMs - this.faceTrackingLastFrameMs, 0);
+    this.faceTrackingLastFrameMs = nowMs;
+    const alpha =
+      dtMs <= 0
+        ? 1
+        : Math.max(
+            0,
+            Math.min(1, 1 - Math.exp(-dtMs / Math.max(FACE_TRACK_SMOOTHING_TAU_MS, 1e-3))),
+          );
+    vec3.lerp(
+      this.faceTrackingOffset,
+      this.faceTrackingOffset,
+      this.faceTrackingTarget,
+      alpha,
+    );
+  }
+
+  private handleFaceTrackerUpdate = (output: FaceTrackerOutputs): void => {
+    if (!output.faceVisible || !output.eyeCenterCm) {
+      this.faceTrackingReference = null;
+      vec3.set(this.faceTrackingTarget, 0, 0, 0);
+      return;
+    }
+
+    if (!this.faceTrackingReference) {
+      this.faceTrackingReference = {
+        x: output.eyeCenterCm.x,
+        y: output.eyeCenterCm.y,
+        z: output.eyeCenterCm.z,
+      };
+    }
+
+    const dxMeters =
+      (output.eyeCenterCm.x - this.faceTrackingReference.x) / 100;
+    const dyMeters =
+      (output.eyeCenterCm.y - this.faceTrackingReference.y) / 100;
+
+    vec3.set(
+      this.faceTrackingTarget,
+      clampFaceOffset(dxMeters),
+      clampFaceOffset(dyMeters),
+      0,
+    );
+  };
 
   enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
     const nextOptions = {

@@ -9,6 +9,11 @@ module.exports = {
 	module: {
 		rules: [
 			{
+				test: /\.m?js$/,
+				include: /node_modules\/@mediapipe\/tasks-vision/,
+				type: 'javascript/auto',
+			},
+			{
 				test: /\.css$/i,
 				use: ['style-loader', 'css-loader'],
 			},

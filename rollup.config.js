@@ -4,6 +4,7 @@ import terser from '@rollup/plugin-terser';
 
 export default {
 	input: 'lib/index.js',
+	external: ['@mediapipe/tasks-vision'],
 	plugins: [resolve(), commonjs()],
 	output: [
 		// UMD build
@@ -11,12 +12,14 @@ export default {
 			file: 'build/iwer.js',
 			format: 'umd',
 			name: 'IWER',
+			inlineDynamicImports: true,
 		},
 		// Minified UMD build
 		{
 			file: 'build/iwer.min.js',
 			format: 'umd',
 			name: 'IWER',
+			inlineDynamicImports: true,
 			plugins: [terser()],
 		},
 		// ES module build
