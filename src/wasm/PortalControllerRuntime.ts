@@ -146,6 +146,7 @@ export class PortalControllerRuntime {
   private readonly resultPtr: number;
   private readonly headPosePtr: number;
   private readonly ctrlPosePtr: number;
+  private readonly outPosePtr: number;
   private readonly vecPtr: number;
 
   private readonly F32: Float32Array;
@@ -221,6 +222,7 @@ export class PortalControllerRuntime {
     this.resultPtr = Module._malloc(SIZEOF_PORTAL_POSE_RESULT);
     this.headPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.ctrlPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
+    this.outPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.vecPtr = Module._malloc(3 * FLOAT_SIZE);
 
     this.poseSmoother = new PoseSmoother(90);
@@ -263,6 +265,7 @@ export class PortalControllerRuntime {
     this.Module._free(this.resultPtr);
     this.Module._free(this.headPosePtr);
     this.Module._free(this.ctrlPosePtr);
+    this.Module._free(this.outPosePtr);
     this.Module._free(this.vecPtr);
   }
 
@@ -528,6 +531,37 @@ export class PortalControllerRuntime {
     } else if (!this.displayLockPending) {
       this.Module._portal_wasm_set_display_lock_calibration(this.statePtr, 0, 0, 0);
     }
+  }
+
+  public setCameraLock(hand: 'left' | 'right', valid: boolean, offset?: PortalPose | null): void {
+    const handEnum = hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+    if (valid && offset) {
+      this.writePose(this.ctrlPosePtr, offset);
+      this.Module._portal_wasm_set_camera_lock(this.statePtr, handEnum, 1, this.ctrlPosePtr);
+    } else {
+      this.Module._portal_wasm_set_camera_lock(this.statePtr, handEnum, 0, 0);
+    }
+  }
+
+  public updateCameraLockedPose(
+    hand: 'left' | 'right',
+    headPose: PortalPose,
+    currentPose: PortalPose,
+  ): PortalPose | null {
+    const handEnum = hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+    this.writePose(this.headPosePtr, headPose);
+    this.writePose(this.ctrlPosePtr, currentPose);
+    const ok = this.Module._portal_wasm_update_camera_locked_pose(
+      this.statePtr,
+      handEnum,
+      this.headPosePtr,
+      this.ctrlPosePtr,
+      this.outPosePtr,
+    );
+    if (!ok) {
+      return null;
+    }
+    return this.readPose(this.outPosePtr);
   }
 
   public setExternalUiYawRad(yawRad: number): void {

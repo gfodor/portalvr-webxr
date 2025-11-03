@@ -118,6 +118,13 @@ function clampAxis(value: number): number {
   return value;
 }
 
+function makeIdentityPortalPose(): PortalPose {
+  return {
+    position: { x: 0, y: 0, z: 0 },
+    orientation: { x: 0, y: 0, z: 0, w: 1 },
+  };
+}
+
 const THUMBSTICK_TOUCH_EPSILON = 1e-3;
 
 export interface XRDeviceConfig {
@@ -342,6 +349,10 @@ export class XRDevice {
   private readonly lastControllerPoseByHand = {
     left: null as PortalPose | null,
     right: null as PortalPose | null,
+  };
+  private readonly cameraLockState: Record<'left' | 'right', { active: boolean; offset: PortalPose }> = {
+    left: { active: false, offset: makeIdentityPortalPose() },
+    right: { active: false, offset: makeIdentityPortalPose() },
   };
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
@@ -1004,6 +1015,8 @@ export class XRDevice {
       this.lastControllerPoseByHand.right = null;
       this.dualOpposedNeutral = null;
       this.lastDualSubmode = null;
+      this.updateCameraLockState('left', false);
+      this.updateCameraLockState('right', false);
       this.setActiveWandState('none', true);
     }
   };
@@ -1029,6 +1042,7 @@ export class XRDevice {
           if (this.lastControllerState) {
             runtime.setWandMode(this.lastControllerState.wandMode);
           }
+          this.syncAllCameraLocksToRuntime();
           return runtime;
         })
         .catch((error) => {
@@ -1116,6 +1130,7 @@ export class XRDevice {
     const wasFrozen = !wasTracking && this.lastControllerPoseByHand[hand] != null;
 
     if (!newConnected) {
+      this.updateCameraLockState(hand, false);
       this.resetControllerState(controller);
       this.lastControllerPoseByHand[hand] = null;
       return;
@@ -1125,6 +1140,13 @@ export class XRDevice {
       this.resetControllerState(controller);
       const stored = this.lastControllerPoseByHand[hand];
       if (stored) {
+        const headPortalPose = this.createCurrentHeadPortalPose();
+        const offset = this.computeHeadRelativeOffset(headPortalPose, stored);
+        if (offset) {
+          this.updateCameraLockState(hand, true, offset);
+        } else {
+          this.updateCameraLockState(hand, false);
+        }
         controller.position.set(
           stored.position.x,
           stored.position.y,
@@ -1136,10 +1158,13 @@ export class XRDevice {
           stored.orientation.z,
           stored.orientation.w,
         );
+      } else {
+        this.updateCameraLockState(hand, false);
       }
       return;
     }
 
+    this.updateCameraLockState(hand, false);
     if (force || !wasConnected || !wasTracking || wasFrozen) {
       this.resetControllerState(controller);
     }
@@ -1363,6 +1388,30 @@ export class XRDevice {
         break;
     }
 
+    const headPortalPose: PortalPose = {
+      position: { ...headPose.position },
+      orientation: { ...headPose.orientation },
+    };
+
+    if (runtime) {
+      if (!leftPose && this.cameraLockState.left.active && this.lastControllerPoseByHand.left) {
+        const updated = runtime.updateCameraLockedPose('left', headPortalPose, this.lastControllerPoseByHand.left);
+        if (updated) {
+          const lockedPose = this.clonePortalPose(updated);
+          leftPose = lockedPose;
+          this.lastControllerPoseByHand.left = this.clonePortalPose(lockedPose);
+        }
+      }
+      if (!rightPose && this.cameraLockState.right.active && this.lastControllerPoseByHand.right) {
+        const updated = runtime.updateCameraLockedPose('right', headPortalPose, this.lastControllerPoseByHand.right);
+        if (updated) {
+          const lockedPose = this.clonePortalPose(updated);
+          rightPose = lockedPose;
+          this.lastControllerPoseByHand.right = this.clonePortalPose(lockedPose);
+        }
+      }
+    }
+
     if (leftPose) {
       this.applyControllerPose(controllers[XRHandedness.Left], leftPose);
     }
@@ -1485,6 +1534,102 @@ export class XRDevice {
         y: activePose.orientation.y,
         z: activePose.orientation.z,
         w: activePose.orientation.w,
+      },
+    };
+  }
+
+  private updateCameraLockState(hand: 'left' | 'right', active: boolean, offset?: PortalPose): void {
+    const state = this.cameraLockState[hand];
+    if (active && offset) {
+      state.active = true;
+      state.offset = this.clonePortalPose(offset);
+    } else {
+      state.active = false;
+      state.offset = makeIdentityPortalPose();
+    }
+    this.syncCameraLockToRuntime(hand);
+  }
+
+  private syncCameraLockToRuntime(hand: 'left' | 'right'): void {
+    const runtime = this.portalControllerRuntime;
+    if (!runtime) {
+      return;
+    }
+    const state = this.cameraLockState[hand];
+    if (state.active) {
+      runtime.setCameraLock(hand, true, state.offset);
+    } else {
+      runtime.setCameraLock(hand, false);
+    }
+  }
+
+  private syncAllCameraLocksToRuntime(): void {
+    this.syncCameraLockToRuntime('left');
+    this.syncCameraLockToRuntime('right');
+  }
+
+  private createCurrentHeadPortalPose(): PortalPose {
+    return {
+      position: {
+        x: this.position.x,
+        y: this.position.y,
+        z: this.position.z,
+      },
+      orientation: {
+        x: this.quaternion.x,
+        y: this.quaternion.y,
+        z: this.quaternion.z,
+        w: this.quaternion.w,
+      },
+    };
+  }
+
+  private computeHeadRelativeOffset(headPose: PortalPose, controllerPose: PortalPose): PortalPose | null {
+    const headQuat = quat.fromValues(
+      headPose.orientation.x,
+      headPose.orientation.y,
+      headPose.orientation.z,
+      headPose.orientation.w,
+    );
+    if (quat.length(headQuat) < 1e-5) {
+      return null;
+    }
+
+    const headInv = quat.create();
+    quat.invert(headInv, headQuat);
+
+    const ctrlQuat = quat.fromValues(
+      controllerPose.orientation.x,
+      controllerPose.orientation.y,
+      controllerPose.orientation.z,
+      controllerPose.orientation.w,
+    );
+
+    const offsetQuat = quat.create();
+    quat.multiply(offsetQuat, headInv, ctrlQuat);
+    quat.normalize(offsetQuat, offsetQuat);
+
+    const headPos = vec3.fromValues(
+      headPose.position.x,
+      headPose.position.y,
+      headPose.position.z,
+    );
+    const ctrlPos = vec3.fromValues(
+      controllerPose.position.x,
+      controllerPose.position.y,
+      controllerPose.position.z,
+    );
+    const delta = vec3.create();
+    vec3.sub(delta, ctrlPos, headPos);
+    vec3.transformQuat(delta, delta, headInv);
+
+    return {
+      position: { x: delta[0], y: delta[1], z: delta[2] },
+      orientation: {
+        x: offsetQuat[0],
+        y: offsetQuat[1],
+        z: offsetQuat[2],
+        w: offsetQuat[3],
       },
     };
   }

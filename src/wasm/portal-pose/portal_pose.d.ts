@@ -33,6 +33,12 @@ export interface PortalPoseModuleInstance {
     valid: number,
     deltaPtr: number,
   ): void;
+  _portal_wasm_set_camera_lock(
+    statePtr: number,
+    hand: number,
+    valid: number,
+    offsetPtr: number,
+  ): void;
   _portal_wasm_set_display_lock_calibration(
     statePtr: number,
     headPtr: number,
@@ -59,6 +65,13 @@ export interface PortalPoseModuleInstance {
     statePtr: number,
     controllerPosePtr: number,
     outDeltaPtr: number,
+  ): number;
+  _portal_wasm_update_camera_locked_pose(
+    statePtr: number,
+    hand: number,
+    headPosePtr: number,
+    currentPosePtr: number,
+    outPosePtr: number,
   ): number;
   _portal_wasm_head_offset_calculate_nudge_delta(
     dx: number,
