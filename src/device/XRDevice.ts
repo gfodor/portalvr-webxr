@@ -1399,7 +1399,7 @@ export class XRDevice {
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           leftPose = lockedPose;
-          this.lastControllerPoseByHand.left = this.clonePortalPose(lockedPose);
+          this.lastControllerPoseByHand.left = lockedPose;
         }
       }
       if (!rightPose && this.cameraLockState.right.active && this.lastControllerPoseByHand.right) {
@@ -1407,7 +1407,7 @@ export class XRDevice {
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           rightPose = lockedPose;
-          this.lastControllerPoseByHand.right = this.clonePortalPose(lockedPose);
+          this.lastControllerPoseByHand.right = lockedPose;
         }
       }
     }
