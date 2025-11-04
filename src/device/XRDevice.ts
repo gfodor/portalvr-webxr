@@ -395,7 +395,8 @@ export class XRDevice {
   private readonly faceTrackingLocalOffset = vec3.create();
   private readonly faceTrackingTempPosition = vec3.create();
   private faceTrackingLastFrameMs = 0;
-  private faceTrackingLastVisibleTimestamp: number | null = null;
+  private faceTrackingVisibilitySuspended = false;
+  private faceTrackingSuspendedForVisibility = false;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
 
@@ -632,6 +633,11 @@ export class XRDevice {
         this[P_DEVICE].updateViews();
       },
     };
+
+    if (typeof document !== 'undefined') {
+      this.faceTrackingVisibilitySuspended = document.visibilityState !== 'visible';
+      document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    }
 
     this.enablePortalPoseCamera();
     this[P_DEVICE].updateViews();
@@ -1073,6 +1079,33 @@ export class XRDevice {
       this.portalControllerRuntime.handleOrientationReset();
     } else {
       this.pendingOrientationReset = true;
+    }
+  };
+
+  private handleVisibilityChange = (): void => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const visibilityState = document.visibilityState;
+    if (visibilityState !== 'visible') {
+      this.faceTrackingVisibilitySuspended = true;
+      if (this.faceTracker || this.faceTrackingStartPromise) {
+        this.faceTrackingSuspendedForVisibility = true;
+      }
+      this.stopFaceTracking();
+      return;
+    }
+
+    const resumeNeeded = this.faceTrackingSuspendedForVisibility;
+    this.faceTrackingVisibilitySuspended = false;
+    if (!resumeNeeded) {
+      return;
+    }
+    this.faceTrackingSuspendedForVisibility = false;
+    this.faceTrackingRecenterPending = true;
+    const session = this.activeSession;
+    if (session && this.shouldRunFaceTrackingForSession(session)) {
+      this.ensureFaceTracking();
     }
   };
 
@@ -1716,17 +1749,32 @@ export class XRDevice {
     };
   }
 
-  private updateFaceTrackingForSession(session: XRSession): void {
+  private shouldRunFaceTrackingForSession(session: XRSession): boolean {
     const mode = session[P_SESSION].mode;
-    if (mode === 'inline') {
+    return mode === 'immersive-vr' || mode === 'immersive-ar';
+  }
+
+  private updateFaceTrackingForSession(session: XRSession): void {
+    if (!this.shouldRunFaceTrackingForSession(session)) {
       this.stopFaceTracking();
-    } else if (mode === 'immersive-vr' || mode === 'immersive-ar') {
-      this.ensureFaceTracking();
+      return;
     }
+    if (this.faceTrackingVisibilitySuspended) {
+      this.stopFaceTracking();
+      return;
+    }
+    this.ensureFaceTracking();
     this.updateFaceTrackingSmoothing(getNowMs());
   }
 
   private ensureFaceTracking(): void {
+    if (this.faceTrackingVisibilitySuspended) {
+      return;
+    }
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      this.faceTrackingVisibilitySuspended = true;
+      return;
+    }
     if (this.faceTracker || this.faceTrackingStartPromise || this.faceTrackingPermissionRejected) {
       return;
     }
@@ -1789,6 +1837,13 @@ export class XRDevice {
   }
 
   private async startFaceTracking(): Promise<void> {
+    if (this.faceTrackingVisibilitySuspended) {
+      return;
+    }
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      this.faceTrackingVisibilitySuspended = true;
+      return;
+    }
     if (this.faceTracker || this.faceTrackingPermissionRejected) {
       return;
     }
@@ -1859,6 +1914,27 @@ export class XRDevice {
       throw error;
     }
 
+    if (
+      this.faceTrackingVisibilitySuspended ||
+      (typeof document !== 'undefined' && document.visibilityState !== 'visible')
+    ) {
+      this.faceTrackerUnsubscribe?.();
+      this.faceTrackerUnsubscribe = null;
+      tracker.stop();
+      if (video.parentElement) {
+        video.parentElement.removeChild(video);
+      }
+      video.srcObject = null;
+      stream.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch {
+          // ignore track stop failures
+        }
+      });
+      return;
+    }
+
     this.faceTracker = tracker;
     this.faceTrackerVideoEl = video;
     this.faceTrackerStream = stream;
@@ -1866,7 +1942,6 @@ export class XRDevice {
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
     vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
-    this.faceTrackingLastVisibleTimestamp = null;
   }
 
   private stopFaceTracking(): void {
@@ -1900,7 +1975,6 @@ export class XRDevice {
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
     vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
-    this.faceTrackingLastVisibleTimestamp = null;
   }
 
   private updateFaceTrackingSmoothing(nowMs: number): void {
@@ -1936,11 +2010,8 @@ export class XRDevice {
       this.faceTrackingReference = null;
       vec3.set(this.faceTrackingTarget, 0, 0, 0);
       vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
-      this.faceTrackingLastVisibleTimestamp = null;
       return;
     }
-
-    this.faceTrackingLastVisibleTimestamp = frameTimestampMs;
 
     if (this.faceTrackingRecenterPending) {
       this.faceTrackingReference = {
