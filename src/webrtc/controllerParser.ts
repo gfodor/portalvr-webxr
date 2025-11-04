@@ -1,11 +1,14 @@
 /**
- * Parses the 59-byte controller state packet format from BleClient.java
+ * Parses the controller state packet format from BleClient.java (v2 = 61 bytes).
  * Typed and BigInt-free (we read the 64-bit timestamp as two 32-bit words).
  */
 
 export const PACKET_STATE = 0x10;
 export const PACKET_ORIENTATION_RESET = 0x7e;
-const PROTO_VERSION = 0x01;
+const PROTO_VERSION = 0x02;
+const LEGACY_PROTO_VERSIONS = new Set([0x01]);
+const TRACKING_STATE_MASK = 0x03;
+const TRACKING_REASON_MASK = 0x0f;
 
 // Button bit masks
 const BTN_ACTION_1 = 1; // bit 0
@@ -40,6 +43,8 @@ export interface ControllerState {
   wandModeName: string;
   flags: { aim: boolean; stretch: boolean };
   receivedAt: number;
+  trackingState: number;
+  trackingReason: number;
 }
 
 const WAND_MODE_NAMES = [
@@ -68,8 +73,8 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     return null;
   }
 
-  if (buffer.byteLength !== 59) {
-    console.warn(`Expected 59 bytes, got ${buffer.byteLength}`);
+  if (buffer.byteLength !== 61 && buffer.byteLength !== 59) {
+    console.warn(`Expected 61 or 59 bytes, got ${buffer.byteLength}`);
     return null;
   }
 
@@ -85,7 +90,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
 
   // Byte 1: Protocol version
   const version = view.getUint8(offset++);
-  if (version !== PROTO_VERSION) {
+  if (version !== PROTO_VERSION && !LEGACY_PROTO_VERSIONS.has(version)) {
     console.warn(`Expected protocol version ${PROTO_VERSION}, got ${version}`);
   }
 
@@ -136,6 +141,13 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
   const sessionTimestampMs = view.getUint32(offset, true);
   offset += 4;
 
+  let trackingState = 0;
+  let trackingReason = 0;
+  if (buffer.byteLength >= 61 && offset + 2 <= buffer.byteLength) {
+    trackingState = view.getUint8(offset++) & TRACKING_STATE_MASK;
+    trackingReason = view.getUint8(offset++) & TRACKING_REASON_MASK;
+  }
+
   const buttons = {
     action1: !!(buttonsMask & BTN_ACTION_1),
     action2: !!(buttonsMask & BTN_ACTION_2),
@@ -163,5 +175,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     wandModeName: WAND_MODE_NAMES[wandMode] || 'Unknown',
     flags,
     receivedAt: Date.now(),
+    trackingState,
+    trackingReason,
   };
 }
