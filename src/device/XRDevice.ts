@@ -123,7 +123,7 @@ function clampAxis(value: number): number {
 }
 
 const MAX_FACE_TRACK_OFFSET_METERS = 0.35;
-const FACE_TRACK_SMOOTHING_TAU_MS = 120;
+const FACE_TRACK_SMOOTHING_TAU_MS = 12;
 const clampFaceOffset = (value: number): number =>
   Math.max(Math.min(value, MAX_FACE_TRACK_OFFSET_METERS), -MAX_FACE_TRACK_OFFSET_METERS);
 
@@ -144,7 +144,6 @@ const FACE_TRACKING_RESOLUTIONS: Array<{ width: number; height: number }> = [
   { width: 640, height: 480 },
   { width: 1280, height: 720 },
   { width: 1920, height: 1080 },
-  { width: 160, height: 120 },
 ];
 
 function makeIdentityPortalPose(): PortalPose {
@@ -392,6 +391,7 @@ export class XRDevice {
   private faceTrackingPermissionRejected = false;
   private readonly faceTrackingTarget = vec3.create();
   private readonly faceTrackingOffset = vec3.create();
+  private readonly faceTrackingLocalOffset = vec3.create();
   private readonly faceTrackingTempPosition = vec3.create();
   private faceTrackingLastFrameMs = 0;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
@@ -1861,6 +1861,7 @@ export class XRDevice {
     this.faceTrackerStream = stream;
     this.faceTrackingReference = null;
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
+    vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
   }
 
@@ -1893,6 +1894,7 @@ export class XRDevice {
     }
     this.faceTrackingReference = null;
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
+    vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
   }
 
@@ -1926,6 +1928,7 @@ export class XRDevice {
     if (!output.faceVisible || !output.eyeCenterCm) {
       this.faceTrackingReference = null;
       vec3.set(this.faceTrackingTarget, 0, 0, 0);
+      vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
       return;
     }
 
@@ -1943,10 +1946,15 @@ export class XRDevice {
       (output.eyeCenterCm.y - this.faceTrackingReference.y) / 100;
 
     vec3.set(
-      this.faceTrackingTarget,
+      this.faceTrackingLocalOffset,
       clampFaceOffset(dxMeters),
       clampFaceOffset(dyMeters),
       0,
+    );
+    vec3.transformQuat(
+      this.faceTrackingTarget,
+      this.faceTrackingLocalOffset,
+      this[P_DEVICE].quaternion.quat,
     );
   };
 
