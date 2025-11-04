@@ -64,7 +64,6 @@ import {
   FaceTracker,
   type FaceTrackerOutputs,
 } from '../head/FaceTracker.js';
-import { PoseSmoother, PoseSmootherMode } from '../head/PoseSmoother.js';
 import {
   WebRTCControllerStreamer,
   type WebRTCControllerStreamOptions,
@@ -124,19 +123,16 @@ function clampAxis(value: number): number {
 }
 
 const MAX_FACE_TRACK_OFFSET_METERS = 0.35;
+const FACE_TRACK_SMOOTHING_TAU_MS = 120;
 const clampFaceOffset = (value: number): number =>
   Math.max(Math.min(value, MAX_FACE_TRACK_OFFSET_METERS), -MAX_FACE_TRACK_OFFSET_METERS);
 
-const FACE_TRACKER_ONE_EURO_PARAMS = {
-  minCutoff: 1,
-  beta: 1,
-  dCutoff: 1,
+const FACE_TRACKER_SMOOTH_DEFAULT = {
+  minCutoff: 5,
+  beta: 75,
+  dCutoff: 5,
 } as const;
-const FACE_TRACKER_BYPASS_PARAMS = {
-  minCutoff: 1e6,
-  beta: 0,
-  dCutoff: 1e6,
-} as const;
+const FACE_TRACKER_DISTANCE_BASE = 0.99;
 const FACE_TRACKER_HFOV_DEG = 60;
 const FACE_TRACKER_WASM_PATH =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
@@ -150,8 +146,6 @@ const FACE_TRACKING_RESOLUTIONS: Array<{ width: number; height: number }> = [
   { width: 1920, height: 1080 },
   { width: 160, height: 120 },
 ];
-const FACE_TRACKER_ENABLE_ONE_EURO = true;
-const FACE_TRACKER_DISTANCE_BASE = 0;
 
 function makeIdentityPortalPose(): PortalPose {
   return {
@@ -399,9 +393,7 @@ export class XRDevice {
   private readonly faceTrackingTarget = vec3.create();
   private readonly faceTrackingOffset = vec3.create();
   private readonly faceTrackingTempPosition = vec3.create();
-  private readonly faceTrackingPoseSmoother: PoseSmoother;
-  private faceTrackingPoseInitialized = false;
-  private readonly faceTrackingSmoothedOffset = vec3.create();
+  private faceTrackingLastFrameMs = 0;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
 
@@ -638,9 +630,6 @@ export class XRDevice {
         this[P_DEVICE].updateViews();
       },
     };
-
-    this.faceTrackingPoseSmoother = new PoseSmoother(90);
-    this.faceTrackingPoseSmoother.setMode(PoseSmootherMode.VERY_HIGH);
 
     this.enablePortalPoseCamera();
     this[P_DEVICE].updateViews();
@@ -1731,9 +1720,7 @@ export class XRDevice {
     } else if (mode === 'immersive-vr' || mode === 'immersive-ar') {
       this.ensureFaceTracking();
     }
-    const nowMs = getNowMs();
-    this.updateFaceTrackingSmoothing(nowMs);
-    this.sampleFaceTrackingSmoother(nowMs * 1e6);
+    this.updateFaceTrackingSmoothing(getNowMs());
   }
 
   private ensureFaceTracking(): void {
@@ -1845,17 +1832,14 @@ export class XRDevice {
       // Some browsers require a user gesture for play; best effort only.
     }
 
-    const smoothParams = FACE_TRACKER_ENABLE_ONE_EURO
-      ? { ...FACE_TRACKER_ONE_EURO_PARAMS }
-      : { ...FACE_TRACKER_BYPASS_PARAMS };
     const tracker = new FaceTracker({
       hfovDeg: FACE_TRACKER_HFOV_DEG,
       wasmPath: FACE_TRACKER_WASM_PATH,
       modelAssetPath: FACE_TRACKER_MODEL_PATH,
-      smooth: smoothParams,
+      smooth: { ...FACE_TRACKER_SMOOTH_DEFAULT },
       distanceSmoothingBase: FACE_TRACKER_DISTANCE_BASE,
     });
-    tracker.setFiltering({ ...smoothParams });
+    tracker.setFiltering({ ...FACE_TRACKER_SMOOTH_DEFAULT });
     this.faceTrackerUnsubscribe = tracker.onUpdate(this.handleFaceTrackerUpdate);
 
     try {
@@ -1877,9 +1861,7 @@ export class XRDevice {
     this.faceTrackerStream = stream;
     this.faceTrackingReference = null;
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
-    this.faceTrackingPoseSmoother.reset();
-    this.faceTrackingPoseInitialized = false;
-    vec3.set(this.faceTrackingSmoothedOffset, 0, 0, 0);
+    this.faceTrackingLastFrameMs = 0;
   }
 
   private stopFaceTracking(): void {
@@ -1911,23 +1893,39 @@ export class XRDevice {
     }
     this.faceTrackingReference = null;
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
-    vec3.set(this.faceTrackingSmoothedOffset, 0, 0, 0);
+    this.faceTrackingLastFrameMs = 0;
   }
 
   private updateFaceTrackingSmoothing(nowMs: number): void {
     if (!Number.isFinite(nowMs)) {
       return;
     }
-    vec3.copy(this.faceTrackingOffset, this.faceTrackingTarget);
+    if (this.faceTrackingLastFrameMs === 0) {
+      this.faceTrackingLastFrameMs = nowMs;
+      vec3.copy(this.faceTrackingOffset, this.faceTrackingTarget);
+      return;
+    }
+    const dtMs = Math.max(nowMs - this.faceTrackingLastFrameMs, 0);
+    this.faceTrackingLastFrameMs = nowMs;
+    const alpha =
+      dtMs <= 0
+        ? 1
+        : Math.max(
+            0,
+            Math.min(1, 1 - Math.exp(-dtMs / Math.max(FACE_TRACK_SMOOTHING_TAU_MS, 1e-3))),
+          );
+    vec3.lerp(
+      this.faceTrackingOffset,
+      this.faceTrackingOffset,
+      this.faceTrackingTarget,
+      alpha,
+    );
   }
 
   private handleFaceTrackerUpdate = (output: FaceTrackerOutputs): void => {
     if (!output.faceVisible || !output.eyeCenterCm) {
       this.faceTrackingReference = null;
       vec3.set(this.faceTrackingTarget, 0, 0, 0);
-      this.faceTrackingPoseSmoother.reset();
-      this.faceTrackingPoseInitialized = false;
-      vec3.set(this.faceTrackingSmoothedOffset, 0, 0, 0);
       return;
     }
 
@@ -1937,8 +1935,6 @@ export class XRDevice {
         y: output.eyeCenterCm.y,
         z: output.eyeCenterCm.z,
       };
-      this.faceTrackingPoseSmoother.reset();
-      this.faceTrackingPoseInitialized = false;
     }
 
     const dxMeters =
@@ -1946,61 +1942,13 @@ export class XRDevice {
     const dyMeters =
       (output.eyeCenterCm.y - this.faceTrackingReference.y) / 100;
 
-    const localOffset = vec3.fromValues(
+    vec3.set(
+      this.faceTrackingTarget,
       clampFaceOffset(dxMeters),
       clampFaceOffset(dyMeters),
       0,
     );
-    const rotatedOffset = vec3.create();
-    vec3.transformQuat(rotatedOffset, localOffset, this[P_DEVICE].quaternion.quat);
-
-    const nowNs = output.timestampMs != null ? output.timestampMs * 1e6 : getNowMs() * 1e6;
-    if (!this.faceTrackingPoseInitialized) {
-      this.faceTrackingPoseSmoother.reset(
-        [rotatedOffset[0], rotatedOffset[1], rotatedOffset[2], 0, 0, 0, 1],
-        nowNs,
-      );
-      this.faceTrackingPoseInitialized = true;
-      vec3.copy(this.faceTrackingSmoothedOffset, rotatedOffset);
-    } else {
-      this.faceTrackingPoseSmoother.addSample(
-        rotatedOffset[0],
-        rotatedOffset[1],
-        rotatedOffset[2],
-        0,
-        0,
-        0,
-        1,
-        nowNs,
-      );
-      vec3.copy(this.faceTrackingSmoothedOffset, rotatedOffset);
-    }
-    this.sampleFaceTrackingSmoother(nowNs);
   };
-
-  private sampleFaceTrackingSmoother(nowNs: number): void {
-    if (!this.faceTrackingPoseInitialized) {
-      vec3.copy(this.faceTrackingTarget, this.faceTrackingSmoothedOffset);
-      return;
-    }
-    const predicted = this.faceTrackingPoseSmoother.predict(nowNs);
-    if (predicted) {
-      this.faceTrackingSmoothedOffset[0] = predicted[0];
-      this.faceTrackingSmoothedOffset[1] = predicted[1];
-      this.faceTrackingSmoothedOffset[2] = predicted[2];
-    }
-
-    const magnitude = vec3.length(this.faceTrackingSmoothedOffset);
-    if (magnitude > MAX_FACE_TRACK_OFFSET_METERS) {
-      vec3.scale(
-        this.faceTrackingSmoothedOffset,
-        this.faceTrackingSmoothedOffset,
-        MAX_FACE_TRACK_OFFSET_METERS / magnitude,
-      );
-    }
-
-    vec3.copy(this.faceTrackingTarget, this.faceTrackingSmoothedOffset);
-  }
 
   enablePortalPoseCamera(options?: PortalPoseCameraOptions) {
     const nextOptions = {
