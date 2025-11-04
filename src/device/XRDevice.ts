@@ -73,6 +73,7 @@ import {
   PortalControllerRuntime,
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
+import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -399,6 +400,8 @@ export class XRDevice {
   private faceTrackingSuspendedForVisibility = false;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
+  private readonly baseCanvasFovRad: number;
+  private lastCanvasZoomScale = 1;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -567,6 +570,7 @@ export class XRDevice {
       },
       onSessionEnd: () => {
         if (this[P_DEVICE].canvasData) {
+          this.resetCanvasZoomTransform();
           const { canvas, parent, width, height, zIndex } =
             this[P_DEVICE].canvasData;
           canvas.width = width;
@@ -630,9 +634,15 @@ export class XRDevice {
           this[P_DEVICE].pendingReferenceSpaceReset = false;
         }
 
+        this.updateCanvasZoomTransform();
         this[P_DEVICE].updateViews();
       },
     };
+
+    this.baseCanvasFovRad =
+      Number.isFinite(this[P_DEVICE].fovy) && this[P_DEVICE].fovy > 0
+        ? this[P_DEVICE].fovy
+        : DEFAULTS.fovy;
 
     if (typeof document !== 'undefined') {
       this.faceTrackingVisibilitySuspended = document.visibilityState !== 'visible';
@@ -1438,6 +1448,14 @@ export class XRDevice {
       return;
     }
 
+    if (update.cameraFovDeg > 0) {
+      const clampedFovDeg = Math.min(Math.max(update.cameraFovDeg, 1), 179);
+      const newFovyRad = degreesToRadians(clampedFovDeg);
+      if (Number.isFinite(newFovyRad) && newFovyRad > 0) {
+        this.fovy = newFovyRad;
+      }
+    }
+
     let leftPose: PortalPose | null = null;
     let rightPose: PortalPose | null = null;
 
@@ -1747,6 +1765,76 @@ export class XRDevice {
         w: controller.quaternion.w,
       },
     };
+  }
+
+  private updateCanvasZoomTransform(): void {
+    const baseFov = this.baseCanvasFovRad;
+    const currentFov = this[P_DEVICE].fovy;
+    if (!Number.isFinite(baseFov) || baseFov <= 0) {
+      this.applyCanvasZoomScale(1);
+      return;
+    }
+    if (!Number.isFinite(currentFov) || currentFov <= 0) {
+      this.applyCanvasZoomScale(1);
+      return;
+    }
+    const numerator = Math.tan(baseFov / 2);
+    const denominator = Math.tan(currentFov / 2);
+    if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || Math.abs(denominator) < 1e-6) {
+      this.applyCanvasZoomScale(1);
+      return;
+    }
+    const scale = numerator / denominator;
+    if (!Number.isFinite(scale) || scale <= 0) {
+      this.applyCanvasZoomScale(1);
+      return;
+    }
+    this.applyCanvasZoomScale(scale);
+  }
+
+  private applyCanvasZoomScale(scale: number, force = false): void {
+    const canvasData = this[P_DEVICE].canvasData;
+    if (!canvasData) {
+      return;
+    }
+
+    const devui = this[P_DEVICE].devui;
+    const sem = this[P_DEVICE].sem;
+
+    const targets: HTMLElement[] = [canvasData.canvas];
+    if (devui) {
+      targets.push(devui.devUICanvas);
+      targets.push(devui.devUIContainer);
+    }
+    if (sem) {
+      targets.push(sem.environmentCanvas);
+    }
+
+    const normalizedScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
+    if (!force && Math.abs(normalizedScale - this.lastCanvasZoomScale) < 1e-4) {
+      return;
+    }
+
+    this.lastCanvasZoomScale = normalizedScale;
+
+    const useTransform = Math.abs(normalizedScale - 1) > 1e-4;
+    const transformValue = useTransform ? `scale(${normalizedScale})` : '';
+
+    for (const element of targets) {
+      if (!element) {
+        continue;
+      }
+      element.style.transformOrigin = '50% 50%';
+      if (useTransform) {
+        element.style.transform = transformValue;
+      } else {
+        element.style.removeProperty('transform');
+      }
+    }
+  }
+
+  private resetCanvasZoomTransform(): void {
+    this.applyCanvasZoomScale(1, true);
   }
 
   private shouldRunFaceTrackingForSession(session: XRSession): boolean {

@@ -49,7 +49,7 @@ export class WebRTCControllerStreamer {
 
   constructor(options: WebRTCControllerStreamOptions = {}) {
     this.workerUrl = (options.workerUrl || DEFAULT_SIGNALING_BASE).replace(/\/$/, '');
-    this.roomId = options.roomId || 'test';
+    this.roomId = options.roomId || 'test2';
     this.log = typeof options.log === 'function' ? options.log : (m: string) => console.log(`[webrtc] ${m}`);
     this.autoStart = options.autoStart !== false;
     this.onControllerState = options.onControllerState;

@@ -53,6 +53,7 @@ interface PortalControllerUpdate {
   headWeight: number;
   stretchAmount: number;
   cameraDrag?: CameraDragIncrements; // NEW: controller-driven camera-drag increments for this frame
+  cameraFovDeg: number;
 }
 
 interface HeadPoseInput {
@@ -367,6 +368,8 @@ export class PortalControllerRuntime {
     const stretchAmount = this.F32[(this.resultPtr + OFF_RESULT_STRETCH_AMOUNT) >> 2];
     const headWeight = this.F32[(this.resultPtr + OFF_RESULT_HEAD_WEIGHT) >> 2];
     const aimWeight = this.F32[(this.resultPtr + OFF_RESULT_AIM_WEIGHT) >> 2];
+    const cameraFovDegRaw = this.Module._portal_wasm_get_camera_fov_deg(this.statePtr);
+    const cameraFovDeg = Number.isFinite(cameraFovDegRaw) && cameraFovDegRaw > 0 ? cameraFovDegRaw : 0;
 
     // NEW: keep last unblended for display-delta callback
     this.lastUnblendedPose = unblendedPose;
@@ -384,6 +387,7 @@ export class PortalControllerRuntime {
       stretchAmount,
       headWeight,
       aimWeight,
+      cameraFovDeg,
       cameraDrag,
     };
   }

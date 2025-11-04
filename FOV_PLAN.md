@@ -2,21 +2,36 @@ Driver FOV Handling Plan
 ========================
 
 Current Observations
-- Rendering pipeline rebuilds projection matrices each frame from `XRDevice.fovy`, but the wasm runtime still writes a fixed ±45° half-angle into its head pose buffer.
-- The WebXR layer never changes viewports; the app canvas always fills the container, which already clips overflow and hosts other driver-controlled UI (devui/SEM canvases).
 - Apps that cache their first projection (e.g. A-Frame) ignore later matrix updates, so changing `fovy` alone may not be sufficient.
 
-Plan of Action
-1. Extend the wasm → JS contract so the runtime exposes its instantaneous FOV instead of clamping to `DEFAULT_HALF_FOV_RAD` inside `PortalControllerRuntime.writeInputs`.
-2. Plumb that value through `portalControllerRuntime.updateFrame(...)` to let the driver assign `xrDevice.fovy` before `XRSession` rebuilds the per-frame projection matrices.
-3. Prototype a CSS zoom fallback: store the baseline FOV, compute `scale = tan(base/2) / tan(target/2)`, and apply a centered `transform` on the app canvas (and sibling devui/SEM surfaces) in `XRDevice.onFrameStart`.
-4. Evaluate side effects (controller ray alignment, UI hotspots). If CSS zoom causes unacceptable aliasing:
-   - 4a. Try a viewport crop + DOM scale approach (`XRDevice.getViewport`) while optionally increasing the app’s framebuffer scale factor.
-   - 4b. If fidelity still suffers, design an off-screen framebuffer composite so the driver can resample the rendered image with custom UVs.
-5. Document configuration knobs (enable true projection updates, enable visual zoom, zoom factor blending) so integrators can tune per engine.
+# Camera FOV Data Flow
 
-Outstanding Questions / Risks
-- How does the wasm runtime encode its dynamic FOV today, and can we read it without breaking other consumers?
-- Should we keep app-level math unmodified (visual zoom only) or offer a mode that also feeds the reduced FOV back into interaction rays?
-- When we scale the canvas, how do we keep devui/SEM overlays and potential pointer cursors in sync?
-- Do we need a per-eye FOV (asymmetric) path, and if so, how do we represent that through the driver layer?
+This note traces how the Portal modules derive and publish the camera field of view (FoV) that the Android OpenXR driver ultimately writes into the runtime state. Each section highlights the exact entry points you can hook when you need to inspect or override the FoV during the per-frame update loop.
+
+## Portal Controller Core
+
+- The controller pose state owns the FoV fields (`camera_fov_deg`, plus mode-specific defaults) inside `struct portal_pose_state` (`src/portal/portal_controller_pose.c:311-315`).
+- `portal_pose_state_zero` leaves these values at `0.0f`; callers must seed them every frame (same file, `src/portal/portal_controller_pose.c:789-815`).
+- `portal_pose_state_set_fov_defaults` simply records the three mode defaults supplied by the host (head, stretch, aim) (`src/portal/portal_controller_pose.c:958-966`).
+- During `portal_pose_update`, once the stretch/aim weights are resolved, the state blends the configured defaults and writes the result to `state->camera_fov_deg` (`src/portal/portal_controller_pose.c:1495-1505`). This is the authoritative “desired FoV” for the current controller frame.
+- Consumers read the number via `portal_pose_state_get_camera_fov_deg`, which is just a thin accessor (`src/portal/portal_controller_pose.c:1001-1007`).
+
+## WebAssembly Bindings
+
+- The WASM shim surfaces the same APIs: you can set FoV defaults with `portal_wasm_set_fov_defaults(...)` and query the live value with `portal_wasm_get_camera_fov_deg(...)`, which forwards directly to the native accessor (`src/portal/portal_pose_wasm_api.c:87-117`).
+
+## Practical Ways to Inspect the FoV
+
+1. **Inside the controller loop:** capture `portal_pose_state_get_camera_fov_deg(state)` immediately after `portal_pose_update` runs; this is the raw blended FoV straight from the portal core.
+4. **From WebAssembly hosts:** call `portal_wasm_get_camera_fov_deg(state)` to mirror the native behaviour without touching Android-specific code (`src/portal/portal_pose_wasm_api.c:113-117`).
+
+Following this chain lets you reason about the FoV in any runtime: the controller core is the single source of truth.
+
+- When the reported desired FOV from the controller core deviates from the app’s baseline FOV (the 90 degree default), we have two options:
+  1. Update the app’s projection matrices directly (best quality, more invasive).
+  2. Apply a visual zoom effect on the final canvas (less ideal, easier to implement).
+
+Because we cannot count on the underlying engine to respect dynamic projection changes, we will pursue option 2.
+
+Store the baseline FOV, compute `scale = tan(base/2) / tan(target/2)`, and apply a centered `transform` on the app canvas (and sibling devui/SEM surfaces) in `XRDevice.onFrameStart`.
+
