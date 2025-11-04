@@ -388,6 +388,7 @@ export class XRDevice {
   private faceTrackerVideoEl: HTMLVideoElement | null = null;
   private faceTrackerStream: MediaStream | null = null;
   private faceTrackingReference: { x: number; y: number; z: number } | null = null;
+  private faceTrackingRecenterPending = false;
   private faceTrackingStartPromise: Promise<void> | null = null;
   private faceTrackingPermissionRejected = false;
   private readonly faceTrackingTarget = vec3.create();
@@ -1068,6 +1069,7 @@ export class XRDevice {
   };
 
   private handleOrientationReset = () => {
+    this.faceTrackingRecenterPending = true;
     if (this.portalControllerRuntime) {
       this.portalControllerRuntime.handleOrientationReset();
     } else {
@@ -1951,6 +1953,20 @@ export class XRDevice {
     }
 
     this.faceTrackingLastVisibleTimestamp = frameTimestampMs;
+
+    if (this.faceTrackingRecenterPending) {
+      this.faceTrackingReference = {
+        x: output.eyeCenterCm.x,
+        y: output.eyeCenterCm.y,
+        z: output.eyeCenterCm.z,
+      };
+      vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
+      vec3.set(this.faceTrackingTarget, 0, 0, 0);
+      vec3.set(this.faceTrackingOffset, 0, 0, 0);
+      this.faceTrackingLastFrameMs = frameTimestampMs;
+      this.faceTrackingRecenterPending = false;
+      return;
+    }
 
     if (!this.faceTrackingReference) {
       this.faceTrackingReference = {
