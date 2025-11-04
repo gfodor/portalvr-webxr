@@ -123,7 +123,8 @@ function clampAxis(value: number): number {
 }
 
 const MAX_FACE_TRACK_OFFSET_METERS = 0.35;
-const FACE_TRACK_SMOOTHING_TAU_MS = 12;
+const FACE_TRACK_SMOOTHING_TAU_MS = 16;
+const FACE_TRACK_LOSS_GRACE_MS = 400;
 const clampFaceOffset = (value: number): number =>
   Math.max(Math.min(value, MAX_FACE_TRACK_OFFSET_METERS), -MAX_FACE_TRACK_OFFSET_METERS);
 
@@ -394,6 +395,7 @@ export class XRDevice {
   private readonly faceTrackingLocalOffset = vec3.create();
   private readonly faceTrackingTempPosition = vec3.create();
   private faceTrackingLastFrameMs = 0;
+  private faceTrackingLastVisibleTimestamp: number | null = null;
   private dualOpposedNeutral: { y: number; z: number } | null = null;
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
 
@@ -1863,6 +1865,7 @@ export class XRDevice {
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
     vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
+    this.faceTrackingLastVisibleTimestamp = null;
   }
 
   private stopFaceTracking(): void {
@@ -1896,6 +1899,7 @@ export class XRDevice {
     vec3.set(this.faceTrackingTarget, 0, 0, 0);
     vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
     this.faceTrackingLastFrameMs = 0;
+    this.faceTrackingLastVisibleTimestamp = null;
   }
 
   private updateFaceTrackingSmoothing(nowMs: number): void {
@@ -1925,12 +1929,28 @@ export class XRDevice {
   }
 
   private handleFaceTrackerUpdate = (output: FaceTrackerOutputs): void => {
+    const frameTimestampMs = Number.isFinite(output.timestampMs) ? output.timestampMs : getNowMs();
+
     if (!output.faceVisible || !output.eyeCenterCm) {
+      const lastVisible = this.faceTrackingLastVisibleTimestamp;
+      if (this.faceTrackingReference && lastVisible != null) {
+        let deltaMs = frameTimestampMs - lastVisible;
+        if (!Number.isFinite(deltaMs) || deltaMs < 0) {
+          deltaMs = Number.POSITIVE_INFINITY;
+        }
+        if (deltaMs <= FACE_TRACK_LOSS_GRACE_MS) {
+          return;
+        }
+      }
+
       this.faceTrackingReference = null;
       vec3.set(this.faceTrackingTarget, 0, 0, 0);
       vec3.set(this.faceTrackingLocalOffset, 0, 0, 0);
+      this.faceTrackingLastVisibleTimestamp = null;
       return;
     }
+
+    this.faceTrackingLastVisibleTimestamp = frameTimestampMs;
 
     if (!this.faceTrackingReference) {
       this.faceTrackingReference = {
