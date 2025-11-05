@@ -77,6 +77,8 @@ type CallbackData = {
   cancelled: boolean;
 };
 
+const ANAGLYPH_FOCAL_OFFSET = 0.0025;
+
 export class XRSession extends EventTarget {
   [P_SESSION]: {
     device: XRDevice;
@@ -391,21 +393,7 @@ export class XRSession extends EventTarget {
         ) {
           baseLayer.copyStereoTargets();
 
-          const depthNear = this[P_SESSION].renderState.depthNear;
-          const fovy = deviceState.fovy;
-          const aspect = canvas.width / canvas.height;
-          let focalOffset = 0;
-          if (
-            deviceState.ipd > 0 &&
-            depthNear > 0 &&
-            Math.tan(fovy / 2) > 0 &&
-            aspect > 0
-          ) {
-            const halfWidth = depthNear * Math.tan(fovy / 2) * aspect;
-            if (halfWidth > 0) {
-              focalOffset = (deviceState.ipd / 2) / halfWidth;
-            }
-          }
+          const focalOffset = ANAGLYPH_FOCAL_OFFSET;
 
           const prevFramebuffer = context.getParameter(
             context.FRAMEBUFFER_BINDING,
