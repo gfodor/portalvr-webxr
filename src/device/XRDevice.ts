@@ -75,6 +75,7 @@ import {
 } from '../wasm/PortalControllerRuntime.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
 import { getPersistentPortalDeviceIdentity } from './PortalDeviceIdentity.js';
+import { PortalDeviceQrOverlay } from './PortalDeviceQrOverlay.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -106,6 +107,20 @@ function resolveActiveWandState(mode: number): ActiveWandState {
     default:
       return 'right';
   }
+}
+
+const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
+const PORTAL_DEVICE_ID_PREFIX = 'PORTAL-';
+
+function buildPortalDeviceId(suffix: string): string {
+  return `${PORTAL_DEVICE_ID_PREFIX}${suffix}`;
+}
+
+function buildSigcfPairingUrl(deviceId: string): string {
+  const url = new URL(SIGCF_PAIRING_BASE_URL);
+  url.searchParams.set('device_id', deviceId);
+  url.searchParams.set('service_type', 'sigcf');
+  return url.toString();
 }
 
 function getNowMs(): number {
@@ -329,6 +344,7 @@ export class XRDevice {
     portalDeviceSuffix: string;
     portalDeviceName: string;
     portalDeviceUiCode: string;
+    portalDeviceId: string;
 
     // device state
     position: Vector3;
@@ -379,6 +395,7 @@ export class XRDevice {
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
   private lastControllerPacketMs: number | null = null;
+  private portalQrOverlay: PortalDeviceQrOverlay | null = null;
   private readonly lastControllerPoseByHand = {
     left: null as PortalPose | null,
     right: null as PortalPose | null,
@@ -464,6 +481,20 @@ export class XRDevice {
     canvasContainer.style.overflow = 'hidden';
     canvasContainer.style.zIndex = '999';
 
+    const portalDeviceId = buildPortalDeviceId(portalIdentity.suffix);
+
+    if (typeof document !== 'undefined') {
+      const pairingUrl = buildSigcfPairingUrl(portalDeviceId);
+      this.portalQrOverlay = new PortalDeviceQrOverlay({
+        parent: canvasContainer,
+        pairingUrl,
+        deviceName: portalIdentity.fullName,
+        deviceUiCode: portalIdentity.uiCode,
+        deviceId: portalDeviceId,
+      });
+      this.portalQrOverlay.setVisible(false);
+    }
+
     this[P_DEVICE] = {
       name: deviceConfig.name,
       supportedSessionModes: deviceConfig.supportedSessionModes,
@@ -477,6 +508,7 @@ export class XRDevice {
       portalDeviceSuffix: portalIdentity.suffix,
       portalDeviceName: portalIdentity.fullName,
       portalDeviceUiCode: portalIdentity.uiCode,
+      portalDeviceId,
 
       position:
         deviceOptions.headsetPosition ?? DEFAULTS.headsetPosition.clone(),
@@ -905,6 +937,10 @@ export class XRDevice {
     return this[P_DEVICE].portalDeviceUiCode;
   }
 
+  get portalDeviceId(): string {
+    return this[P_DEVICE].portalDeviceId;
+  }
+
   get stereoEnabled() {
     return this[P_DEVICE].stereoEnabled;
   }
@@ -1089,6 +1125,7 @@ export class XRDevice {
   };
 
   private handleControllerConnectionChange = (connected: boolean) => {
+    this.portalQrOverlay?.setVisible(!connected);
     if (!connected) {
       this.portalControllerRuntime?.handleDisconnect();
       this.lastControllerState = null;
@@ -2179,6 +2216,9 @@ export class XRDevice {
     const nextOptions = {
       ...(options ?? this.webrtcStreamOptions ?? {}),
     } as WebRTCControllerStreamOptions;
+    if (!nextOptions.roomId) {
+      nextOptions.roomId = this.portalDeviceId;
+    }
     this.webrtcStreamOptions = nextOptions;
     this.handleControllerConnectionChange(false);
     this.webrtcStreamer?.dispose();

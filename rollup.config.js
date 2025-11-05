@@ -5,7 +5,13 @@ import terser from '@rollup/plugin-terser';
 export default {
 	input: 'lib/index.js',
 	external: ['@mediapipe/tasks-vision'],
-	plugins: [resolve(), commonjs()],
+	plugins: [
+		resolve({
+			browser: true,
+			preferBuiltins: false,
+		}),
+		commonjs(),
+	],
 	output: [
 		// UMD build
 		{
