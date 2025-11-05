@@ -10,6 +10,7 @@ import {
   parseControllerState,
   type ControllerState,
   isOrientationResetPacket,
+  PACKET_HANGUP,
 } from './controllerParser.js';
 
 export interface WebRTCControllerStreamOptions {
@@ -56,6 +57,11 @@ export class WebRTCControllerStreamer {
     this.onConnectionChange = options.onConnectionChange;
     this.onOrientationReset = options.onOrientationReset;
 
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', this.handlePageUnload);
+      window.addEventListener('pagehide', this.handlePageUnload);
+    }
+
     if (this.autoStart) {
       this.ensureStarted();
     }
@@ -70,6 +76,10 @@ export class WebRTCControllerStreamer {
 
   /** Dispose network resources and detach listeners. */
   dispose() {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('beforeunload', this.handlePageUnload);
+      window.removeEventListener('pagehide', this.handlePageUnload);
+    }
     this.cleanupHandlers.forEach((cleanup) => {
       try {
         cleanup();
@@ -143,6 +153,18 @@ export class WebRTCControllerStreamer {
         this.startPromise = null;
       });
   }
+
+  private handlePageUnload = (): void => {
+    if (this.sigcf && this.connected) {
+      try {
+        const hangupPacket = new Uint8Array([PACKET_HANGUP]);
+        this.sigcf.send(undefined, hangupPacket);
+        this.log('sent hangup message on page unload');
+      } catch (e: any) {
+        this.log(`error sending hangup message: ${e?.message || e}`);
+      }
+    }
+  };
 
   private shouldAcceptState(state: ControllerState): boolean {
     const ts = state.sessionTimestampMs;

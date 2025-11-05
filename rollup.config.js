@@ -2,16 +2,18 @@ import commonjs from '@rollup/plugin-commonjs';
 import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 
-export default {
+const basePlugins = [
+	resolve({
+		browser: true,
+		preferBuiltins: false,
+	}),
+	commonjs(),
+];
+
+const libraryConfig = {
 	input: 'lib/index.js',
 	external: ['@mediapipe/tasks-vision'],
-	plugins: [
-		resolve({
-			browser: true,
-			preferBuiltins: false,
-		}),
-		commonjs(),
-	],
+	plugins: basePlugins,
 	output: [
 		// UMD build
 		{
@@ -41,3 +43,25 @@ export default {
 		},
 	],
 };
+
+const standaloneConfig = {
+	input: 'lib/standalone.js',
+	plugins: basePlugins,
+	output: [
+		{
+			file: 'build/iwer-standalone.js',
+			format: 'iife',
+			name: 'IWERStandalone',
+			inlineDynamicImports: true,
+		},
+		{
+			file: 'build/iwer-standalone.min.js',
+			format: 'iife',
+			name: 'IWERStandalone',
+			inlineDynamicImports: true,
+			plugins: [terser()],
+		},
+	],
+};
+
+export default [libraryConfig, standaloneConfig];

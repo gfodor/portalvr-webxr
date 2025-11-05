@@ -10,7 +10,7 @@
     "lib"
   ],
   "scripts": {
-    "prebuild": "node -p \"'export const VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
+    "prebuild": "node ./scripts/prebuild.mjs",
     "build": "tsc && node ./scripts/copy-portal-wasm.mjs && rollup -c",
     "doc": "typedoc",
     "format": "prettier --write ./src/**/*",
@@ -61,6 +61,7 @@
     "@mediapipe/tasks-vision": "^0.10.21",
     "gl-matrix": "^3.4.3",
     "qrcode": "^1.5.4",
-    "webxr-layers-polyfill": "^1.1.0"
+    "webxr-layers-polyfill": "^1.1.0",
+    "webxr-polyfill": "^2.0.3"
   }
 }

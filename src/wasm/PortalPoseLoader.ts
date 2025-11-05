@@ -10,13 +10,15 @@ let modulePromise: Promise<PortalPoseModuleInstance> | null = null;
 export interface PortalPoseLoadOptions extends PortalPoseModuleConfig {
   /** Optional absolute or relative URL that points to the directory containing portal_pose.wasm. */
   wasmBaseURL?: string;
+  /** Optional data URL (or absolute URL) representing the portal_pose.wasm binary. */
+  wasmDataUrl?: string;
 }
 
 export async function loadPortalPoseModule(
   options: PortalPoseLoadOptions = {},
 ): Promise<PortalPoseModuleInstance> {
   if (!modulePromise) {
-    if (process.env.NODE_ENV !== 'production') {
+    if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
       console.debug('[PortalPoseLoader] PortalPoseModule typeof', typeof PortalPoseModule);
     }
@@ -24,6 +26,9 @@ export async function loadPortalPoseModule(
       ...options,
       locateFile: (path, prefix) => {
         if (path.endsWith('.wasm')) {
+          if (options.wasmDataUrl) {
+            return options.wasmDataUrl;
+          }
           if (options.locateFile) {
             return options.locateFile(path, prefix);
           }
