@@ -204,6 +204,13 @@ export class XRSession extends EventTarget {
         }
         const context = baseLayer.context;
         const canvas = context.canvas;
+        const stereoActive =
+          this[P_SESSION].mode !== 'inline' &&
+          this[P_SESSION].device.stereoEnabled;
+        this[P_SESSION].device.ensureStereoViewportHijack(
+          context,
+          stereoActive,
+        );
 
         /**
          * This code snippet is designed to clear the buffers attached to an opaque framebuffer
@@ -350,6 +357,14 @@ export class XRSession extends EventTarget {
           }
         }
         this[P_SESSION].currentFrameCallbacks = null;
+
+        if (stereoActive) {
+          this[P_SESSION].device.compositeStereoFrame(
+            context,
+            context.drawingBufferWidth,
+            context.drawingBufferHeight,
+          );
+        }
 
         // - Set frame’s active boolean to false.
         frame[P_FRAME].active = false;

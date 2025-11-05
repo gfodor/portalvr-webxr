@@ -74,6 +74,14 @@ import {
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
+import { StereoCompositePass } from '../rendering/StereoCompositePass.js';
+import {
+  ensurePortalDeviceSuffix,
+  getAdvertisedDeviceName,
+  getUiDeviceCode,
+  PORTAL_DEVICE_SUFFIX_STORAGE_KEY,
+  PORTAL_DEVICE_STORAGE_KEY_CANDIDATES,
+} from './PortalDeviceName.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -221,6 +229,48 @@ interface RuntimeOptions {
   enforce?: boolean;
 }
 
+type StereoEyeLabel = 'left' | 'right';
+
+type HijackedViewportFn = WebGLRenderingContext['viewport'];
+type HijackedBindFramebufferFn =
+  | WebGLRenderingContext['bindFramebuffer']
+  | WebGL2RenderingContext['bindFramebuffer'];
+
+type StereoEyeResources = {
+  framebuffer: WebGLFramebuffer;
+  colorTexture: WebGLTexture;
+  depthStencil: WebGLRenderbuffer | null;
+  width: number;
+  height: number;
+};
+
+type EyeReadbackStatus = 'pending' | 'success' | 'empty' | 'failed';
+
+type StereoFboHijackState = {
+  gl: WebGLRenderingContext | WebGL2RenderingContext;
+  originalViewport: HijackedViewportFn | null;
+  originalViewportBound: HijackedViewportFn | null;
+  viewportWrapper: HijackedViewportFn | null;
+  originalBindFramebuffer: HijackedBindFramebufferFn | null;
+  originalBindFramebufferBound: HijackedBindFramebufferFn | null;
+  bindFramebufferWrapper: HijackedBindFramebufferFn | null;
+  compositePass: StereoCompositePass | null;
+  active: boolean;
+  currentEye: StereoEyeLabel | null;
+  activeEye: StereoEyeLabel | null;
+  logCountdown: number;
+  lastLoggedLabel: string | null;
+  lastViewport: { x: number; y: number; width: number; height: number } | null;
+  contextAttributes: WebGLContextAttributes | null;
+  eyeResources: Record<StereoEyeLabel, StereoEyeResources | null>;
+  appFramebuffers: Record<StereoEyeLabel, WebGLFramebuffer | null>;
+  eyeCreationLogged: Record<StereoEyeLabel, boolean>;
+  eyeBindLogged: Record<StereoEyeLabel, boolean>;
+  readbackEnabled: boolean;
+  readbackResults: Record<StereoEyeLabel, EyeReadbackStatus>;
+  readbackLogCountdown: number;
+};
+
 const Z_INDEX_SEM_CANVAS = 1;
 const Z_INDEX_APP_CANVAS = 2;
 const Z_INDEX_DEVUI_CANVAS = 3;
@@ -325,6 +375,11 @@ export class XRDevice {
     }>;
     interactionMode: XRInteractionMode;
     userAgent: string;
+    portalDeviceSuffix: string;
+    portalDeviceAdvertisedName: string;
+    portalDeviceUiCode: string;
+    portalDeviceStorageKey: string;
+    portalDeviceStorageKeyOptions: readonly string[];
 
     // device state
     position: Vector3;
@@ -344,6 +399,8 @@ export class XRDevice {
     globalSpace: GlobalSpace;
     viewerSpace: XRReferenceSpace;
     viewSpaces: { [key in XREye]: XRSpace };
+
+    stereoFboHijack: StereoFboHijackState | null;
 
     canvasData?: {
       canvas: HTMLCanvasElement;
@@ -459,6 +516,10 @@ export class XRDevice {
     canvasContainer.style.overflow = 'hidden';
     canvasContainer.style.zIndex = '999';
 
+    const portalDeviceSuffix = ensurePortalDeviceSuffix();
+    const portalDeviceAdvertisedName = getAdvertisedDeviceName();
+    const portalDeviceUiCode = getUiDeviceCode();
+
     this[P_DEVICE] = {
       name: deviceConfig.name,
       supportedSessionModes: deviceConfig.supportedSessionModes,
@@ -469,12 +530,17 @@ export class XRDevice {
       environmentBlendModes: deviceConfig.environmentBlendModes,
       interactionMode: deviceConfig.interactionMode,
       userAgent: deviceConfig.userAgent,
+      portalDeviceSuffix,
+      portalDeviceAdvertisedName,
+      portalDeviceUiCode,
+      portalDeviceStorageKey: PORTAL_DEVICE_SUFFIX_STORAGE_KEY,
+      portalDeviceStorageKeyOptions: PORTAL_DEVICE_STORAGE_KEY_CANDIDATES,
 
       position:
         deviceOptions.headsetPosition ?? DEFAULTS.headsetPosition.clone(),
       quaternion:
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
-      stereoEnabled: deviceOptions.stereoEnabled ?? DEFAULTS.stereoEnabled,
+      stereoEnabled: true, //deviceOptions.stereoEnabled ?? DEFAULTS.stereoEnabled,
       ipd: deviceOptions.ipd ?? DEFAULTS.ipd,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
@@ -489,6 +555,7 @@ export class XRDevice {
       globalSpace,
       viewerSpace,
       viewSpaces,
+      stereoFboHijack: null,
       canvasContainer,
 
       getViewport: (layer: XRWebGLLayer, view: XRView) => {
@@ -569,6 +636,7 @@ export class XRDevice {
         canvas.height = window.innerHeight;
       },
       onSessionEnd: () => {
+        this.releaseStereoViewportHijack();
         if (this[P_DEVICE].canvasData) {
           this.resetCanvasZoomTransform();
           const { canvas, parent, width, height, zIndex } =
@@ -654,7 +722,725 @@ export class XRDevice {
     globalThis;
   }
 
-	installRuntime(options?: RuntimeOptions) {
+  ensureStereoViewportHijack(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    active: boolean,
+  ): void {
+    if (!gl || typeof (gl as any).viewport !== 'function') {
+      return;
+    }
+
+    let state = this[P_DEVICE].stereoFboHijack;
+    if (!state || state.gl !== gl) {
+      if (state) {
+        this.releaseStereoViewportHijack();
+      }
+      state = this.createStereoViewportHijack(gl);
+      this[P_DEVICE].stereoFboHijack = state;
+    }
+
+    if (!state.viewportWrapper || !state.bindFramebufferWrapper) {
+      return;
+    }
+
+    const wasActive = state.active;
+    state.active = !!active;
+    if (state.active && !wasActive) {
+      state.lastLoggedLabel = null;
+      state.currentEye = null;
+      state.activeEye = null;
+      state.readbackEnabled = true;
+      state.readbackResults.left = 'pending';
+      state.readbackResults.right = 'pending';
+      state.readbackLogCountdown = 10;
+      state.appFramebuffers.left = null;
+      state.appFramebuffers.right = null;
+    }
+    if (!state.active) {
+      state.currentEye = null;
+      state.activeEye = null;
+      state.readbackEnabled = false;
+      this.releaseStereoViewportHijack();
+    }
+  }
+
+  compositeStereoFrame(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+    outputWidth: number,
+    outputHeight: number,
+  ): void {
+    if (outputWidth <= 0 || outputHeight <= 0) {
+      return;
+    }
+    const state = this[P_DEVICE].stereoFboHijack;
+    if (!state || !state.active) {
+      return;
+    }
+    const left = state.eyeResources.left;
+    const right = state.eyeResources.right;
+    if (!left || !right) {
+      return;
+    }
+    if (!state.compositePass) {
+      state.compositePass = new StereoCompositePass(gl);
+    }
+    state.compositePass.compose({
+      leftTexture: left.colorTexture,
+      rightTexture: right.colorTexture,
+      outputFramebuffer: null,
+      outputWidth,
+      outputHeight,
+    });
+  }
+
+  private createStereoViewportHijack(
+    gl: WebGLRenderingContext | WebGL2RenderingContext,
+  ): StereoFboHijackState {
+    const originalViewport = gl.viewport as HijackedViewportFn | undefined;
+    const originalBindFramebuffer =
+      gl.bindFramebuffer as HijackedBindFramebufferFn | undefined;
+    const contextAttributes =
+      typeof gl.getContextAttributes === 'function'
+        ? gl.getContextAttributes() ?? null
+        : null;
+
+    if (typeof originalViewport !== 'function') {
+      const boundBindFramebuffer =
+        typeof originalBindFramebuffer === 'function'
+          ? originalBindFramebuffer.bind(gl)
+          : null;
+      return {
+        gl,
+        originalViewport: null,
+        originalViewportBound: null,
+        viewportWrapper: null,
+        originalBindFramebuffer:
+          typeof originalBindFramebuffer === 'function'
+            ? originalBindFramebuffer
+            : null,
+        originalBindFramebufferBound: boundBindFramebuffer,
+        bindFramebufferWrapper: null,
+        compositePass: null,
+        active: false,
+        currentEye: null,
+        activeEye: null,
+        logCountdown: 0,
+        lastLoggedLabel: null,
+        lastViewport: null,
+        contextAttributes,
+        eyeResources: { left: null, right: null },
+        appFramebuffers: { left: null, right: null },
+        eyeCreationLogged: { left: false, right: false },
+        eyeBindLogged: { left: false, right: false },
+        readbackEnabled: false,
+        readbackResults: { left: 'pending', right: 'pending' },
+        readbackLogCountdown: 10,
+      };
+    }
+
+    const originalBindFramebufferBound =
+      typeof originalBindFramebuffer === 'function'
+        ? originalBindFramebuffer.bind(gl)
+        : null;
+
+    const state: StereoFboHijackState = {
+      gl,
+      originalViewport,
+      originalViewportBound: originalViewport.bind(gl),
+      viewportWrapper: null,
+      originalBindFramebuffer:
+        typeof originalBindFramebuffer === 'function'
+          ? originalBindFramebuffer
+          : null,
+      originalBindFramebufferBound,
+      bindFramebufferWrapper: null,
+      compositePass: null,
+      active: false,
+      currentEye: null,
+      activeEye: null,
+      logCountdown: 60,
+      lastLoggedLabel: null,
+      lastViewport: null,
+      contextAttributes,
+      eyeResources: { left: null, right: null },
+      appFramebuffers: { left: null, right: null },
+      eyeCreationLogged: { left: false, right: false },
+      eyeBindLogged: { left: false, right: false },
+      readbackEnabled: false,
+      readbackResults: { left: 'pending', right: 'pending' },
+      readbackLogCountdown: 10,
+    };
+
+    const bindFramebufferRaw = (
+      target: number,
+      framebuffer: WebGLFramebuffer | null,
+    ): void => {
+      if (state.originalBindFramebufferBound) {
+        state.originalBindFramebufferBound(target, framebuffer);
+      } else if (state.originalBindFramebuffer) {
+        state.originalBindFramebuffer.call(gl, target, framebuffer);
+      } else {
+        gl.bindFramebuffer(target, framebuffer);
+      }
+    };
+
+    const destroyEyeResources = (eye: StereoEyeLabel): void => {
+      const resources = state.eyeResources[eye];
+      if (!resources) {
+        return;
+      }
+      if (resources.depthStencil) {
+        state.gl.deleteRenderbuffer(resources.depthStencil);
+      }
+      state.gl.deleteTexture(resources.colorTexture);
+      state.gl.deleteFramebuffer(resources.framebuffer);
+      state.eyeResources[eye] = null;
+      state.eyeCreationLogged[eye] = false;
+      state.eyeBindLogged[eye] = false;
+    };
+
+    const ensureEyeResources = (
+      eye: StereoEyeLabel,
+    ): StereoEyeResources | null => {
+      const lastViewport = state.lastViewport;
+      const fallbackWidth =
+        state.gl.drawingBufferWidth > 0
+          ? state.gl.drawingBufferWidth
+          : Number(((state.gl as any).canvas as HTMLCanvasElement | undefined)?.width ?? 0);
+      const fallbackHeight =
+        state.gl.drawingBufferHeight > 0
+          ? state.gl.drawingBufferHeight
+          : Number(((state.gl as any).canvas as HTMLCanvasElement | undefined)?.height ?? 0);
+
+      let targetWidth =
+        typeof lastViewport?.width === 'number' && lastViewport.width > 0
+          ? lastViewport.width
+          : fallbackWidth;
+      let targetHeight =
+        typeof lastViewport?.height === 'number' && lastViewport.height > 0
+          ? lastViewport.height
+          : fallbackHeight;
+
+      if (!Number.isFinite(targetWidth)) targetWidth = 0;
+      if (!Number.isFinite(targetHeight)) targetHeight = 0;
+
+      targetWidth = Math.max(1, Math.floor(targetWidth));
+      targetHeight = Math.max(1, Math.floor(targetHeight));
+
+      if (targetWidth <= 0 || targetHeight <= 0) {
+        console.warn(
+          `[FBOHijack] unable to resolve ${eye} dimensions (width=${targetWidth}, height=${targetHeight})`,
+        );
+        return null;
+      }
+
+      const existing = state.eyeResources[eye];
+      if (
+        existing &&
+        existing.width === targetWidth &&
+        existing.height === targetHeight
+      ) {
+        return existing;
+      }
+
+      if (existing) {
+        destroyEyeResources(eye);
+      }
+
+      const framebuffer = state.gl.createFramebuffer();
+      const colorTexture = state.gl.createTexture();
+      if (!framebuffer || !colorTexture) {
+        if (framebuffer) {
+          state.gl.deleteFramebuffer(framebuffer);
+        }
+        if (colorTexture) {
+          state.gl.deleteTexture(colorTexture);
+        }
+        return null;
+      }
+
+      const prevFramebuffer = state.gl.getParameter(
+        state.gl.FRAMEBUFFER_BINDING,
+      ) as WebGLFramebuffer | null;
+      const prevTexture = state.gl.getParameter(
+        state.gl.TEXTURE_BINDING_2D,
+      ) as WebGLTexture | null;
+      const prevRenderbuffer = state.gl.getParameter(
+        state.gl.RENDERBUFFER_BINDING,
+      ) as WebGLRenderbuffer | null;
+
+      bindFramebufferRaw(state.gl.FRAMEBUFFER, framebuffer);
+      state.gl.bindTexture(state.gl.TEXTURE_2D, colorTexture);
+      state.gl.texParameteri(state.gl.TEXTURE_2D, state.gl.TEXTURE_MIN_FILTER, state.gl.LINEAR);
+      state.gl.texParameteri(state.gl.TEXTURE_2D, state.gl.TEXTURE_MAG_FILTER, state.gl.LINEAR);
+      state.gl.texParameteri(state.gl.TEXTURE_2D, state.gl.TEXTURE_WRAP_S, state.gl.CLAMP_TO_EDGE);
+      state.gl.texParameteri(state.gl.TEXTURE_2D, state.gl.TEXTURE_WRAP_T, state.gl.CLAMP_TO_EDGE);
+      state.gl.texImage2D(
+        state.gl.TEXTURE_2D,
+        0,
+        state.gl.RGBA,
+        targetWidth,
+        targetHeight,
+        0,
+        state.gl.RGBA,
+        state.gl.UNSIGNED_BYTE,
+        null,
+      );
+      state.gl.framebufferTexture2D(
+        state.gl.FRAMEBUFFER,
+        state.gl.COLOR_ATTACHMENT0,
+        state.gl.TEXTURE_2D,
+        colorTexture,
+        0,
+      );
+
+      let depthStencil: WebGLRenderbuffer | null = null;
+      if (state.contextAttributes?.depth || state.contextAttributes?.stencil) {
+        depthStencil = state.gl.createRenderbuffer();
+        if (depthStencil) {
+          state.gl.bindRenderbuffer(state.gl.RENDERBUFFER, depthStencil);
+          const needDepth = !!state.contextAttributes?.depth;
+          const needStencil = !!state.contextAttributes?.stencil;
+          if (needDepth && needStencil) {
+            const gl2 = state.gl as WebGL2RenderingContext;
+            const depthStencilFormat =
+              typeof gl2.DEPTH24_STENCIL8 === 'number'
+                ? gl2.DEPTH24_STENCIL8
+                : state.gl.DEPTH_STENCIL;
+            const depthStencilAttachment =
+              typeof gl2.DEPTH_STENCIL_ATTACHMENT === 'number'
+                ? gl2.DEPTH_STENCIL_ATTACHMENT
+                : state.gl.DEPTH_STENCIL_ATTACHMENT;
+            state.gl.renderbufferStorage(
+              state.gl.RENDERBUFFER,
+              depthStencilFormat,
+              targetWidth,
+              targetHeight,
+            );
+            state.gl.framebufferRenderbuffer(
+              state.gl.FRAMEBUFFER,
+              depthStencilAttachment,
+              state.gl.RENDERBUFFER,
+              depthStencil,
+            );
+          } else if (needDepth) {
+            state.gl.renderbufferStorage(
+              state.gl.RENDERBUFFER,
+              state.gl.DEPTH_COMPONENT16,
+              targetWidth,
+              targetHeight,
+            );
+            state.gl.framebufferRenderbuffer(
+              state.gl.FRAMEBUFFER,
+              state.gl.DEPTH_ATTACHMENT,
+              state.gl.RENDERBUFFER,
+              depthStencil,
+            );
+          } else if (needStencil) {
+            state.gl.renderbufferStorage(
+              state.gl.RENDERBUFFER,
+              state.gl.STENCIL_INDEX8,
+              targetWidth,
+              targetHeight,
+            );
+            state.gl.framebufferRenderbuffer(
+              state.gl.FRAMEBUFFER,
+              state.gl.STENCIL_ATTACHMENT,
+              state.gl.RENDERBUFFER,
+              depthStencil,
+            );
+          }
+        }
+      }
+
+      state.gl.bindTexture(state.gl.TEXTURE_2D, prevTexture);
+      state.gl.bindRenderbuffer(state.gl.RENDERBUFFER, prevRenderbuffer);
+      bindFramebufferRaw(state.gl.FRAMEBUFFER, prevFramebuffer);
+
+      const resources: StereoEyeResources = {
+        framebuffer,
+        colorTexture,
+        depthStencil,
+        width: targetWidth,
+        height: targetHeight,
+      };
+      state.eyeResources[eye] = resources;
+
+      if (!state.eyeCreationLogged[eye]) {
+        console.log(
+          `[FBOHijack] created ${eye} eye framebuffer ${targetWidth}x${targetHeight}`,
+        );
+        state.eyeCreationLogged[eye] = true;
+      }
+
+      state.eyeBindLogged[eye] = false;
+      return resources;
+    };
+
+    const epsilon = 2;
+
+    const rebindEyeFramebuffer = (
+      eye: StereoEyeLabel,
+      originalFramebuffer: WebGLFramebuffer | null = null,
+    ): boolean => {
+      const resources = ensureEyeResources(eye);
+      if (!resources) {
+        if (state.logCountdown > 0) {
+          console.warn(`[FBOHijack] missing framebuffer resources for ${eye}`);
+          state.logCountdown -= 1;
+        }
+        return false;
+      }
+
+      const glAny = state.gl;
+      const currentBinding = glAny.getParameter(
+        glAny.FRAMEBUFFER_BINDING,
+      ) as WebGLFramebuffer | null;
+      if (currentBinding !== resources.framebuffer) {
+        bindFramebufferRaw(glAny.FRAMEBUFFER, resources.framebuffer);
+      }
+
+      if (originalFramebuffer) {
+        state.appFramebuffers[eye] = originalFramebuffer;
+      }
+
+      if (!state.eyeBindLogged[eye]) {
+        console.log(`[FBOHijack] redirect default framebuffer -> ${eye}`);
+        state.eyeBindLogged[eye] = true;
+      }
+
+      state.activeEye = eye;
+      return true;
+    };
+
+    const markReadbackSuccess = (): void => {
+      if (!state.readbackEnabled) {
+        return;
+      }
+      if (
+        state.readbackResults.left === 'success' &&
+        state.readbackResults.right === 'success'
+      ) {
+        state.readbackEnabled = false;
+        console.log('[FBOHijack] readback validation complete; disabling sampling');
+      }
+    };
+
+    const performEyeReadback = (eye: StereoEyeLabel): void => {
+      if (!state.readbackEnabled) {
+        return;
+      }
+      if (state.readbackResults[eye] === 'success') {
+        return;
+      }
+
+      const resources = state.eyeResources[eye];
+      if (!resources) {
+        if (state.readbackLogCountdown > 0) {
+          console.warn(`[FBOHijack] readback ${eye} skipped (no resources yet)`);
+          state.readbackLogCountdown -= 1;
+        }
+        return;
+      }
+
+      const glAny = state.gl;
+      const prevFramebuffer = glAny.getParameter(
+        glAny.FRAMEBUFFER_BINDING,
+      ) as WebGLFramebuffer | null;
+      if (prevFramebuffer !== resources.framebuffer) {
+        bindFramebufferRaw(glAny.FRAMEBUFFER, resources.framebuffer);
+      }
+
+      const pixel = new Uint8Array(4);
+      const width = Math.max(1, resources.width);
+      const height = Math.max(1, resources.height);
+      const samplePositions: Array<[number, number]> = [
+        [Math.floor(width / 2), Math.floor(height / 2)],
+        [0, 0],
+        [width - 1, 0],
+        [0, height - 1],
+        [width - 1, height - 1],
+      ];
+
+      let detectedColor = false;
+      let lastSample: [number, number] = [0, 0];
+      for (const [sx, sy] of samplePositions) {
+        lastSample = [sx, sy];
+        try {
+          glAny.readPixels(sx, sy, 1, 1, glAny.RGBA, glAny.UNSIGNED_BYTE, pixel);
+        } catch (error) {
+          if (state.readbackLogCountdown > 0) {
+            console.warn(
+              `[FBOHijack] readback ${eye} threw`,
+              error instanceof Error ? error.message : error,
+            );
+            state.readbackLogCountdown -= 1;
+          }
+          state.readbackResults[eye] = 'failed';
+          break;
+        }
+
+        if (pixel[0] || pixel[1] || pixel[2] || pixel[3]) {
+          detectedColor = true;
+          break;
+        }
+      }
+
+      if (prevFramebuffer !== resources.framebuffer) {
+        bindFramebufferRaw(glAny.FRAMEBUFFER, prevFramebuffer);
+      }
+
+      if (state.readbackResults[eye] === 'failed') {
+        return;
+      }
+
+      if (detectedColor) {
+        state.readbackResults[eye] = 'success';
+        console.log(
+          `[FBOHijack] readback ${eye} success at (${lastSample[0]}, ${lastSample[1]}) rgba=(${pixel[0]},${pixel[1]},${pixel[2]},${pixel[3]})`,
+        );
+        markReadbackSuccess();
+      } else if (state.readbackLogCountdown > 0) {
+        console.warn(
+          `[FBOHijack] readback ${eye} returned only zeros (last sample ${lastSample[0]}, ${lastSample[1]})`,
+        );
+        state.readbackLogCountdown -= 1;
+      }
+    };
+    const inferEyeFromViewport = (
+      viewport: { x: number; width: number } | null,
+      canvasWidth: number,
+    ): StereoEyeLabel | null => {
+      if (!viewport || canvasWidth <= 0) {
+        return null;
+      }
+      const halfWidth = canvasWidth * 0.5;
+      if (Math.abs(viewport.width - halfWidth) <= epsilon) {
+        if (Math.abs(viewport.x) <= epsilon) {
+          return 'left';
+        }
+        if (Math.abs(viewport.x - halfWidth) <= epsilon) {
+          return 'right';
+        }
+      }
+      return null;
+    };
+    const viewportWrapper: HijackedViewportFn = function (
+      this: WebGLRenderingContext | WebGL2RenderingContext,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ) {
+      const targetGl =
+        this && typeof (this as any).viewport === 'function' ? this : gl;
+      const args: Parameters<HijackedViewportFn> = [x, y, width, height];
+      state.lastViewport = { x, y, width, height };
+
+      if (state.active) {
+        const canvasWidth = Number(
+          (targetGl as any).drawingBufferWidth ??
+            ((targetGl as any).canvas
+              ? (targetGl as any).canvas.width
+              : 0) ??
+            0,
+        );
+        const halfWidth = canvasWidth * 0.5;
+        let label: string | null = null;
+
+        if (canvasWidth > 0 && Math.abs(width - halfWidth) <= epsilon) {
+          if (Math.abs(x) <= epsilon) {
+            label = 'left';
+          } else if (Math.abs(x - halfWidth) <= epsilon) {
+            label = 'right';
+          }
+        } else if (
+          canvasWidth > 0 &&
+          Math.abs(width - canvasWidth) <= epsilon &&
+          Math.abs(x) <= epsilon
+        ) {
+          label = 'mono';
+        }
+
+        const viewportEye =
+          label === 'left' || label === 'right' ? (label as StereoEyeLabel) : null;
+
+        if (viewportEye && state.activeEye && state.activeEye !== viewportEye) {
+          performEyeReadback(state.activeEye);
+        }
+
+        if (viewportEye && state.activeEye !== viewportEye) {
+          const rebound = rebindEyeFramebuffer(viewportEye);
+          if (!rebound && state.logCountdown > 0) {
+            console.warn(
+              `[FBOHijack] failed to bind ${viewportEye} framebuffer during viewport change`,
+            );
+            state.logCountdown -= 1;
+          }
+        }
+
+        if (!viewportEye && state.activeEye && state.readbackEnabled) {
+          performEyeReadback(state.activeEye);
+        }
+
+        state.currentEye = viewportEye;
+
+        const shouldLogViewport = state.logCountdown > 0 && canvasWidth > 0;
+        const outputLabel = label ?? 'unknown';
+        if (shouldLogViewport && outputLabel !== state.lastLoggedLabel) {
+          console.log(
+            `[FBOHijack] viewport -> ${outputLabel} (x=${x}, width=${width}, canvasWidth=${canvasWidth})`,
+          );
+          state.lastLoggedLabel = outputLabel;
+          state.logCountdown -= 1;
+        }
+      } else {
+        state.currentEye = null;
+      }
+
+      if (state.originalViewport) {
+        return state.originalViewport.apply(targetGl, args);
+      }
+      if (state.originalViewportBound) {
+        return state.originalViewportBound(...args);
+      }
+      return undefined;
+    };
+
+    Object.defineProperty(viewportWrapper, 'name', {
+      value: 'FBOHijackViewport',
+      configurable: true,
+    });
+
+    (gl as any).viewport = viewportWrapper;
+    state.viewportWrapper = viewportWrapper;
+
+    if (state.originalBindFramebuffer) {
+      const bindWrapper: HijackedBindFramebufferFn = function (
+        this: WebGLRenderingContext | WebGL2RenderingContext,
+        target: number,
+        framebuffer: WebGLFramebuffer | null,
+      ) {
+        const targetGl =
+          this && typeof (this as any).bindFramebuffer === 'function' ? this : gl;
+        const args: Parameters<HijackedBindFramebufferFn> = [target, framebuffer];
+        const canvasWidth = Number(
+          (targetGl as any).drawingBufferWidth ??
+            ((targetGl as any).canvas
+              ? (targetGl as any).canvas.width
+              : 0) ??
+            0,
+        );
+
+        if (state.active) {
+          const drawFramebufferConst =
+            typeof (targetGl as WebGL2RenderingContext).DRAW_FRAMEBUFFER === 'number'
+              ? (targetGl as WebGL2RenderingContext).DRAW_FRAMEBUFFER
+              : null;
+          const isDefaultTarget =
+            target === targetGl.FRAMEBUFFER ||
+            (drawFramebufferConst !== null && target === drawFramebufferConst);
+
+          const resolveEyeForBind = (): StereoEyeLabel => {
+            const eyeFromState = state.currentEye ?? state.activeEye;
+            if (eyeFromState) {
+              return eyeFromState;
+            }
+            const inferred = inferEyeFromViewport(state.lastViewport, canvasWidth);
+            return inferred ?? 'left';
+          };
+
+          if (framebuffer === null && isDefaultTarget) {
+            const eyeToBind = resolveEyeForBind();
+            if (rebindEyeFramebuffer(eyeToBind)) {
+              const resources = state.eyeResources[eyeToBind];
+              if (resources) {
+                args[1] = resources.framebuffer;
+              }
+              state.currentEye = null;
+            }
+          } else if (framebuffer !== null && isDefaultTarget) {
+            const eyeToBind = resolveEyeForBind();
+            if (rebindEyeFramebuffer(eyeToBind, framebuffer)) {
+              const resources = state.eyeResources[eyeToBind];
+              if (resources) {
+                args[1] = resources.framebuffer;
+              }
+              state.currentEye = null;
+            }
+          } else if (framebuffer !== null) {
+            // Non-default framebuffer; track for diagnostics and mark active
+            state.activeEye = null;
+            if (state.logCountdown > 0) {
+              console.log(
+                `[FBOHijack] passthrough bindFramebuffer to non-default target=${target}`,
+              );
+              state.logCountdown -= 1;
+            }
+          }
+        }
+
+        return state.originalBindFramebuffer!.apply(targetGl, args);
+      };
+
+      Object.defineProperty(bindWrapper, 'name', {
+        value: 'FBOHijackBindFramebuffer',
+        configurable: true,
+      });
+
+      (gl as any).bindFramebuffer = bindWrapper as WebGLRenderingContext['bindFramebuffer'];
+      state.bindFramebufferWrapper = bindWrapper;
+    }
+
+    return state;
+  }
+
+  releaseStereoViewportHijack(): void {
+    const state = this[P_DEVICE].stereoFboHijack;
+    if (!state) {
+      return;
+    }
+
+    if (state.originalViewport) {
+      (state.gl as any).viewport = state.originalViewport;
+    }
+
+    if (state.originalBindFramebuffer) {
+      (state.gl as any).bindFramebuffer = state.originalBindFramebuffer;
+    }
+
+    if (state.compositePass) {
+      state.compositePass.dispose();
+      state.compositePass = null;
+    }
+
+    (['left', 'right'] as StereoEyeLabel[]).forEach((eye) => {
+      const resources = state.eyeResources[eye];
+      if (!resources) {
+        return;
+      }
+      if (resources.depthStencil) {
+        state.gl.deleteRenderbuffer(resources.depthStencil);
+      }
+      state.gl.deleteTexture(resources.colorTexture);
+      state.gl.deleteFramebuffer(resources.framebuffer);
+      state.eyeResources[eye] = null;
+      state.eyeCreationLogged[eye] = false;
+      state.eyeBindLogged[eye] = false;
+      state.appFramebuffers[eye] = null;
+    });
+
+    state.currentEye = null;
+    state.activeEye = null;
+    state.readbackEnabled = false;
+    state.readbackResults.left = 'pending';
+    state.readbackResults.right = 'pending';
+    state.readbackLogCountdown = 10;
+
+    this[P_DEVICE].stereoFboHijack = null;
+  }
+
+  installRuntime(options?: RuntimeOptions) {
 		const globalObject = options?.globalObject ?? globalThis;
 		const polyfillLayers = options?.polyfillLayers;
 		const enforce = options?.enforce ?? true;
@@ -982,6 +1768,26 @@ export class XRDevice {
 
   get name() {
     return this[P_DEVICE].name;
+  }
+
+  get portalDeviceAdvertisedName(): string {
+    return this[P_DEVICE].portalDeviceAdvertisedName;
+  }
+
+  get portalDeviceUiCode(): string {
+    return this[P_DEVICE].portalDeviceUiCode;
+  }
+
+  get portalDeviceSuffix(): string {
+    return this[P_DEVICE].portalDeviceSuffix;
+  }
+
+  get portalDeviceStorageKey(): string {
+    return this[P_DEVICE].portalDeviceStorageKey;
+  }
+
+  get portalDeviceStorageKeyOptions(): readonly string[] {
+    return this[P_DEVICE].portalDeviceStorageKeyOptions;
   }
 
   grantOfferedSession(): void {
