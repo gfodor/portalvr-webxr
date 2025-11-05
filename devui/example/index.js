@@ -7,13 +7,13 @@
 
 import * as THREE from 'three';
 
-import { XRDevice, metaQuest3 } from 'iwer';
+import { XRDevice, metaQuest3 } from 'portalvr';
 
 import { ARButton } from 'three/addons/webxr/ARButton.js';
-import { DevUI } from '@iwer/devui';
+import { DevUI } from '@portalvr/devui';
 import { OculusHandModel } from 'three/addons/webxr/OculusHandModel.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { SyntheticEnvironmentModule } from '@iwer/sem';
+import { SyntheticEnvironmentModule } from '@portalvr/sem';
 import { Text } from 'troika-three-text';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 

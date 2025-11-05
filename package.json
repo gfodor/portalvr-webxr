@@ -1,7 +1,7 @@
 {
-  "name": "iwer",
-  "version": "2.1.0",
-  "description": "Javascript WebXR Runtime for Emulation",
+  "name": "portalvr",
+  "version": "1.0.0",
+  "description": "PortalVR for WebXR",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -9,10 +9,11 @@
     "build",
     "lib"
   ],
-  "scripts": {
-    "prebuild": "node ./scripts/prebuild.mjs",
-    "build": "tsc && node ./scripts/copy-portal-wasm.mjs && rollup -c",
-    "doc": "typedoc",
+	"scripts": {
+		"prebuild": "node ./scripts/prebuild.mjs",
+		"build": "tsc && node ./scripts/copy-portal-wasm.mjs && rollup -c",
+		"build:emulator": "npm run build && npm --prefix devui run build && npm --prefix sem run build && npm --prefix immersive-web-emulator run build",
+		"doc": "typedoc",
     "format": "prettier --write ./src/**/*",
     "test": "jest",
     "prepublishOnly": "npm run build",
@@ -20,17 +21,19 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/meta-quest/immersive-web-emulation-runtime.git"
-  },
-  "keywords": [],
-  "author": "Felix Zhang <fe1ix@meta.com>",
+  "keywords": [
+    "portalvr",
+    "webxr",
+    "xr",
+    "ar",
+    "vr"
+  ],
+  "author": "Portal VR, Inc. <admin@portalvr.io>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/meta-quest/immersive-web-emulation-runtime/issues"
+    "url": "https://portalvr.io/support"
   },
-  "homepage": "https://github.com/meta-quest/immersive-web-emulation-runtime#readme",
+  "homepage": "https://portalvr.io",
   "devDependencies": {
     "@rollup/plugin-commonjs": "^25.0.7",
     "@rollup/plugin-node-resolve": "^15.2.3",

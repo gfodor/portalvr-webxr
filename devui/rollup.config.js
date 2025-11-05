@@ -5,12 +5,12 @@ import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 
 const globals = {
-	iwer: 'IWER', // Change this to the global variable name for the iwer module
+	portalvr: 'PortalVR', // Global variable exposed by the PortalVR runtime bundle
 };
 
 export default {
 	input: 'lib/index.js',
-	external: ['iwer'],
+	external: ['portalvr'],
 	plugins: [
 		peerDepsExternal(),
 		resolve(),
@@ -23,28 +23,28 @@ export default {
 	output: [
 		// UMD build
 		{
-			file: 'build/iwer-devui.js',
+			file: 'build/portalvr-devui.js',
 			format: 'umd',
-			name: 'IWER_DevUI',
+			name: 'PortalVR_DevUI',
 			globals,
 		},
 		// Minified UMD build
 		{
-			file: 'build/iwer-devui.min.js',
+			file: 'build/portalvr-devui.min.js',
 			format: 'umd',
-			name: 'IWER_DevUI',
+			name: 'PortalVR_DevUI',
 			globals,
 			plugins: [terser()],
 		},
 		// ES module build
 		{
-			file: 'build/iwer-devui.module.js',
+			file: 'build/portalvr-devui.module.js',
 			format: 'es',
 			globals,
 		},
 		// Minified ES module build
 		{
-			file: 'build/iwer-devui.module.min.js',
+			file: 'build/portalvr-devui.module.min.js',
 			format: 'es',
 			globals,
 			plugins: [terser()],

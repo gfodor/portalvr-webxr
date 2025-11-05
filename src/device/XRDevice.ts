@@ -253,34 +253,49 @@ function resolveDefaultWebRTCStreamOptions(): WebRTCControllerStreamOptions | nu
   if (typeof globalThis === 'undefined') return null;
   const globalAny = globalThis as Record<string, any>;
   const disableFlag =
-    globalAny.__IWER_DISABLE_WEBRTC_STREAM__ ?? globalAny.__IWER_DISABLE_WEBRTC_HOOKS__;
+    globalAny.__PORTALVR_DISABLE_WEBRTC_STREAM__ ??
+    globalAny.__PORTALVR_DISABLE_WEBRTC_HOOKS__ ??
+    globalAny.__IWER_DISABLE_WEBRTC_STREAM__ ??
+    globalAny.__IWER_DISABLE_WEBRTC_HOOKS__;
   if (disableFlag) return null;
   if (typeof globalAny.window === 'undefined') return null;
   if (typeof globalAny.RTCPeerConnection !== 'function') return null;
 
   let enable = true;
 
-  const legacyEnable = globalAny.__IWER_ENABLE_WEBRTC_HOOKS__;
-  const explicitEnable = globalAny.__IWER_ENABLE_WEBRTC_STREAM__ ?? legacyEnable;
+  const legacyEnable =
+    globalAny.__PORTALVR_ENABLE_WEBRTC_HOOKS__ ?? globalAny.__IWER_ENABLE_WEBRTC_HOOKS__;
+  const explicitEnable =
+    globalAny.__PORTALVR_ENABLE_WEBRTC_STREAM__ ??
+    globalAny.__IWER_ENABLE_WEBRTC_STREAM__ ??
+    legacyEnable;
   if (explicitEnable === false) enable = false;
   if (explicitEnable === true) enable = true;
 
   let roomId: string | undefined =
-    typeof globalAny.__IWER_WEBRTC_ROOM__ === 'string'
-      ? globalAny.__IWER_WEBRTC_ROOM__
-      : undefined;
+    typeof globalAny.__PORTALVR_WEBRTC_ROOM__ === 'string'
+      ? globalAny.__PORTALVR_WEBRTC_ROOM__
+      : typeof globalAny.__IWER_WEBRTC_ROOM__ === 'string'
+        ? globalAny.__IWER_WEBRTC_ROOM__
+        : undefined;
   let workerUrl: string | undefined =
-    typeof globalAny.__IWER_WEBRTC_WORKER__ === 'string'
-      ? globalAny.__IWER_WEBRTC_WORKER__
-      : undefined;
+    typeof globalAny.__PORTALVR_WEBRTC_WORKER__ === 'string'
+      ? globalAny.__PORTALVR_WEBRTC_WORKER__
+      : typeof globalAny.__IWER_WEBRTC_WORKER__ === 'string'
+        ? globalAny.__IWER_WEBRTC_WORKER__
+        : undefined;
   let autoStart: boolean | undefined =
-    typeof globalAny.__IWER_WEBRTC_AUTOSTART__ === 'boolean'
-      ? globalAny.__IWER_WEBRTC_AUTOSTART__
-      : undefined;
+    typeof globalAny.__PORTALVR_WEBRTC_AUTOSTART__ === 'boolean'
+      ? globalAny.__PORTALVR_WEBRTC_AUTOSTART__
+      : typeof globalAny.__IWER_WEBRTC_AUTOSTART__ === 'boolean'
+        ? globalAny.__IWER_WEBRTC_AUTOSTART__
+        : undefined;
   const customLog =
-    typeof globalAny.__IWER_WEBRTC_LOG__ === 'function'
-      ? (globalAny.__IWER_WEBRTC_LOG__ as (m: string) => void)
-      : undefined;
+    typeof globalAny.__PORTALVR_WEBRTC_LOG__ === 'function'
+      ? (globalAny.__PORTALVR_WEBRTC_LOG__ as (m: string) => void)
+      : typeof globalAny.__IWER_WEBRTC_LOG__ === 'function'
+        ? (globalAny.__IWER_WEBRTC_LOG__ as (m: string) => void)
+        : undefined;
 
   const search =
     typeof globalAny.location?.search === 'string'
@@ -290,24 +305,48 @@ function resolveDefaultWebRTCStreamOptions(): WebRTCControllerStreamOptions | nu
   if (search) {
     try {
       const params = new URLSearchParams(search);
-      if (params.has('iwerWebRTC')) {
-        const val = params.get('iwerWebRTC');
+      const runtimeToggleKey =
+        params.has('portalvrWebRTC') && params.get('portalvrWebRTC') !== null
+          ? 'portalvrWebRTC'
+          : params.has('iwerWebRTC')
+            ? 'iwerWebRTC'
+            : null;
+      if (runtimeToggleKey) {
+        const val = params.get(runtimeToggleKey);
         if (val === '0' || val?.toLowerCase() === 'false') {
           enable = false;
         } else if (val && val.toLowerCase() !== '0') {
           enable = true;
         }
       }
-      if (params.has('iwerWebRTCRoom')) {
-        const value = params.get('iwerWebRTCRoom');
+      const roomKey =
+        params.has('portalvrWebRTCRoom') && params.get('portalvrWebRTCRoom') !== null
+          ? 'portalvrWebRTCRoom'
+          : params.has('iwerWebRTCRoom')
+            ? 'iwerWebRTCRoom'
+            : null;
+      if (roomKey) {
+        const value = params.get(roomKey);
         roomId = value || undefined;
       }
-      if (params.has('iwerWebRTCWorker')) {
-        const value = params.get('iwerWebRTCWorker');
+      const workerKey =
+        params.has('portalvrWebRTCWorker') && params.get('portalvrWebRTCWorker') !== null
+          ? 'portalvrWebRTCWorker'
+          : params.has('iwerWebRTCWorker')
+            ? 'iwerWebRTCWorker'
+            : null;
+      if (workerKey) {
+        const value = params.get(workerKey);
         workerUrl = value || undefined;
       }
-      if (params.has('iwerWebRTCAutoStart')) {
-        const value = params.get('iwerWebRTCAutoStart');
+      const autoStartKey =
+        params.has('portalvrWebRTCAutoStart') && params.get('portalvrWebRTCAutoStart') !== null
+          ? 'portalvrWebRTCAutoStart'
+          : params.has('iwerWebRTCAutoStart')
+            ? 'iwerWebRTCAutoStart'
+            : null;
+      if (autoStartKey) {
+        const value = params.get(autoStartKey);
         if (value) {
           const normalized = value.toLowerCase();
           autoStart = !(normalized === '0' || normalized === 'false');
@@ -921,7 +960,7 @@ export class XRDevice {
 			typeof (globalObject as any).WebXRPolyfill === 'function'
 				? (globalObject as any).WebXRPolyfill
 				: null;
-		const guardCtor = function IWERWebXRPolyfillGuard(
+		const guardCtor = function PortalVRWebXRPolyfillGuard(
 			this: unknown,
 			...args: any[]
 		) {

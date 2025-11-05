@@ -1,5 +1,5 @@
 {
-	"name": "iwer-example",
+	"name": "portalvr-example",
 	"private": true,
 	"devDependencies": {
 		"css-loader": "^5.2.1",
@@ -16,9 +16,9 @@
 		"serve": "webpack serve"
 	},
 	"dependencies": {
-		"@iwer/devui": "file:../devui",
+		"@portalvr/devui": "file:../devui",
 		"dat.gui": "0.7.9",
-		"iwer": "file:../",
+		"portalvr": "file:../",
 		"three": "npm:super-three@0.158.0"
 	}
 }

@@ -7,9 +7,9 @@
 
 import * as THREE from 'three';
 
-import { XRDevice, metaQuest3 } from 'iwer';
+import { XRDevice, metaQuest3 } from 'portalvr';
 
-import { DevUI } from '@iwer/devui';
+import { DevUI } from '@portalvr/devui';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
@@ -24,13 +24,13 @@ let controls;
 let xrdevice;
 const prepare = async () => {
   const params = new URLSearchParams(window.location.search);
-  const forceIwer = params.get('forceIWER') === '1';
+  const forcePortalVR = params.get('forcePortalVR') === '1';
   const nativeVRSupport = navigator.xr
     ? await navigator.xr.isSessionSupported('immersive-vr')
     : false;
-  if (!nativeVRSupport || forceIwer) {
-    if (forceIwer) {
-      console.log('[example] Forcing IWER runtime via ?forceIWER=1');
+  if (!nativeVRSupport || forcePortalVR) {
+    if (forcePortalVR) {
+      console.log('[example] Forcing PortalVR runtime via ?forcePortalVR=1');
     }
     xrdevice = new XRDevice(metaQuest3);
     xrdevice.stereoEnabled = true;
@@ -40,10 +40,10 @@ const prepare = async () => {
     xrdevice.installDevUI(DevUI);
   }
   Array.from(document.getElementsByClassName('native')).forEach((el) => {
-    el.style.display = nativeVRSupport && !forceIwer ? 'block' : 'none';
+    el.style.display = nativeVRSupport && !forcePortalVR ? 'block' : 'none';
   });
   Array.from(document.getElementsByClassName('emulated')).forEach((el) => {
-    el.style.display = nativeVRSupport && !forceIwer ? 'none' : 'block';
+    el.style.display = nativeVRSupport && !forcePortalVR ? 'none' : 'block';
   });
 };
 

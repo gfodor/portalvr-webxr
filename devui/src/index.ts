@@ -5,7 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import { XRDevice } from 'iwer';
+import { XRDevice } from 'portalvr';
 
 import { VERSION } from './version.js';
 
@@ -75,8 +75,8 @@ export class DevUI {
 
 		const label =
 			xrDevice.name !== undefined && xrDevice.name !== null
-				? `${xrDevice.name} Dev UI`
-				: 'Dev UI Placeholder';
+				? `${xrDevice.name} PortalVR Dev UI`
+				: 'PortalVR Dev UI Placeholder';
 		placeholder.textContent = label;
 	}
 

@@ -17,27 +17,27 @@ const libraryConfig = {
 	output: [
 		// UMD build
 		{
-			file: 'build/iwer.js',
+			file: 'build/portalvr.js',
 			format: 'umd',
-			name: 'IWER',
+			name: 'PortalVR',
 			inlineDynamicImports: true,
 		},
 		// Minified UMD build
 		{
-			file: 'build/iwer.min.js',
+			file: 'build/portalvr.min.js',
 			format: 'umd',
-			name: 'IWER',
+			name: 'PortalVR',
 			inlineDynamicImports: true,
 			plugins: [terser()],
 		},
 		// ES module build
 		{
-			file: 'build/iwer.module.js',
+			file: 'build/portalvr.module.js',
 			format: 'es',
 		},
 		// Minified ES module build
 		{
-			file: 'build/iwer.module.min.js',
+			file: 'build/portalvr.module.min.js',
 			format: 'es',
 			plugins: [terser()],
 		},
@@ -49,15 +49,15 @@ const standaloneConfig = {
 	plugins: basePlugins,
 	output: [
 		{
-			file: 'build/iwer-standalone.js',
+			file: 'build/portalvr-standalone.js',
 			format: 'iife',
-			name: 'IWERStandalone',
+			name: 'PortalVRStandalone',
 			inlineDynamicImports: true,
 		},
 		{
-			file: 'build/iwer-standalone.min.js',
+			file: 'build/portalvr-standalone.min.js',
 			format: 'iife',
-			name: 'IWERStandalone',
+			name: 'PortalVRStandalone',
 			inlineDynamicImports: true,
 			plugins: [terser()],
 		},

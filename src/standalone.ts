@@ -4,7 +4,7 @@ import { XRDevice } from './device/XRDevice.js';
 import { metaQuest3 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 
-const GLOBAL_STATE_KEY = '__IWER_META_QUEST3_EMULATOR__';
+const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
 
 type StandaloneState = {
   device: XRDevice;
@@ -81,5 +81,5 @@ async function installEmulator(): Promise<XRDevice | null> {
 }
 
 void installEmulator().catch((error) => {
-  console.error('[IWER Standalone] Failed to install emulator', error);
+  console.error('[PortalVR Standalone] Failed to install emulator', error);
 });
