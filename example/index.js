@@ -33,7 +33,8 @@ const prepare = async () => {
       console.log('[example] Forcing IWER runtime via ?forceIWER=1');
     }
     xrdevice = new XRDevice(metaQuest3);
-    xrdevice.ipd = 0;
+    xrdevice.stereoEnabled = true;
+    xrdevice.ipd = 0.004;
     xrdevice.installRuntime();
     xrdevice.enablePortalPoseCamera();
     xrdevice.installDevUI(DevUI);
@@ -149,21 +150,28 @@ function init() {
   scene.add(hand2);
 
   // cubes
-  const cubeGeometry = new THREE.BoxGeometry(0.05, 0.05, 0.05);
-  const cubeMaterial = new THREE.MeshMatcapMaterial({
-    color: 'red',
-  });
-  const cube1 = new THREE.Mesh(cubeGeometry, cubeMaterial);
-  cube1.position.set(0, 1.5, -0.4);
-  scene.add(cube1);
-
-  const cube2 = new THREE.Mesh(cubeGeometry, cubeMaterial);
-  cube2.position.set(-0.4, 1.5, -0.4);
-  scene.add(cube2);
-
-  const cube3 = new THREE.Mesh(cubeGeometry, cubeMaterial);
-  cube3.position.set(0.4, 1.5, -0.4);
-  scene.add(cube3);
+  const cubeGeometry = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+  const cubeCount = 36;
+  for (let i = 0; i < cubeCount; i += 1) {
+    const cubeMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHSL(Math.random(), 0.6, 0.55),
+      roughness: 0.4,
+      metalness: 0.1,
+    });
+    const cube = new THREE.Mesh(cubeGeometry, cubeMaterial);
+    cube.position.set(
+      THREE.MathUtils.randFloatSpread(3),
+      THREE.MathUtils.randFloat(1.0, 2.2),
+      THREE.MathUtils.randFloatSpread(3),
+    );
+    cube.rotation.set(
+      THREE.MathUtils.randFloat(0, Math.PI * 2),
+      THREE.MathUtils.randFloat(0, Math.PI * 2),
+      THREE.MathUtils.randFloat(0, Math.PI * 2),
+    );
+    cube.castShadow = true;
+    scene.add(cube);
+  }
 
   window.addEventListener('resize', onWindowResize);
 

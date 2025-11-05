@@ -29,7 +29,12 @@ import {
   XRInputSource,
   XRInputSourceArray,
 } from '../input/XRInputSource.js';
-import { XRLayer, XRWebGLLayer } from '../layers/XRWebGLLayer.js';
+import {
+  XRLayer,
+  XRWebGLLayer,
+  type StereoTargets,
+} from '../layers/XRWebGLLayer.js';
+import { StereoCompositePass } from '../rendering/StereoCompositePass.js';
 import {
   XRReferenceSpace,
   XRReferenceSpaceType,
@@ -353,6 +358,9 @@ export class XRDevice {
       zIndex: string;
     };
     canvasContainer: HTMLDivElement;
+    currentBaseLayer: XRWebGLLayer | null;
+    stereoTargets: StereoTargets | null;
+    stereoCompositePass: StereoCompositePass | null;
 
     getViewport: (layer: XRWebGLLayer, view: XRView) => XRViewport;
     updateViews: () => void;
@@ -490,8 +498,21 @@ export class XRDevice {
       viewerSpace,
       viewSpaces,
       canvasContainer,
+      currentBaseLayer: null as XRWebGLLayer | null,
+      stereoTargets: null as StereoTargets | null,
+      stereoCompositePass: null,
 
       getViewport: (layer: XRWebGLLayer, view: XRView) => {
+        const isStereoEye =
+          this[P_DEVICE].stereoEnabled && view.eye !== XREye.None;
+
+        if (isStereoEye) {
+          const gl = layer.context;
+          if (layer.ensureStereoTargets(gl.drawingBufferWidth, gl.drawingBufferHeight)) {
+            this[P_DEVICE].stereoTargets = layer.getStereoTargets();
+          }
+        }
+
         const canvas = layer.context.canvas;
         const { width, height } = canvas;
         switch (view.eye) {
@@ -537,6 +558,28 @@ export class XRDevice {
       onBaseLayerSet: (baseLayer: XRWebGLLayer | null) => {
         if (!baseLayer) return;
 
+        this[P_DEVICE].currentBaseLayer = baseLayer;
+
+        if (this[P_DEVICE].stereoEnabled) {
+          const gl = baseLayer.context;
+          if (!(gl instanceof WebGL2RenderingContext)) {
+            console.warn('[XRDevice] Stereo rendering requires WebGL2 context.');
+            this[P_DEVICE].stereoTargets = null;
+          } else {
+            baseLayer.ensureStereoTargets(
+              gl.drawingBufferWidth,
+              gl.drawingBufferHeight,
+            );
+            this[P_DEVICE].stereoTargets = baseLayer.getStereoTargets();
+            if (!this[P_DEVICE].stereoCompositePass) {
+              this[P_DEVICE].stereoCompositePass = new StereoCompositePass(gl);
+            }
+          }
+        } else {
+          baseLayer.disposeStereoTargets();
+          this[P_DEVICE].stereoTargets = null;
+        }
+
         // backup canvas data
         const canvas = baseLayer.context.canvas as HTMLCanvasElement;
         if (canvas.parentElement !== this[P_DEVICE].canvasContainer) {
@@ -565,10 +608,21 @@ export class XRDevice {
           document.body.appendChild(this[P_DEVICE].canvasContainer);
         }
 
-        canvas.width = window.innerWidth;
+        if (this[P_DEVICE].stereoEnabled) {
+          canvas.width = window.innerWidth * 2;
+        } else {
+          canvas.width = window.innerWidth;
+        }
         canvas.height = window.innerHeight;
       },
       onSessionEnd: () => {
+        this[P_DEVICE].currentBaseLayer?.disposeStereoTargets();
+        this[P_DEVICE].currentBaseLayer = null;
+        this[P_DEVICE].stereoTargets = null;
+        if (this[P_DEVICE].stereoCompositePass) {
+          this[P_DEVICE].stereoCompositePass.dispose();
+          this[P_DEVICE].stereoCompositePass = null;
+        }
         if (this[P_DEVICE].canvasData) {
           this.resetCanvasZoomTransform();
           const { canvas, parent, width, height, zIndex } =

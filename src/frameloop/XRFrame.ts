@@ -122,6 +122,21 @@ export class XRFrame {
     const session = this[P_FRAME].session;
     const device = session[P_SESSION].device;
     const pose = this.getPose(device.viewerSpace, referenceSpace);
+    const viewerTransform = pose.transform;
+    const viewerPositionDom = viewerTransform.position;
+    const viewerOrientationDom = viewerTransform.orientation;
+    const viewerPosition = vec3.fromValues(
+      viewerPositionDom.x,
+      viewerPositionDom.y,
+      viewerPositionDom.z,
+    );
+    const viewerOrientation = quat.fromValues(
+      viewerOrientationDom.x,
+      viewerOrientationDom.y,
+      viewerOrientationDom.z,
+      viewerOrientationDom.w,
+    );
+    quat.normalize(viewerOrientation, viewerOrientation);
     const eyes =
       session[P_SESSION].mode === 'inline'
         ? [XREye.None]
@@ -129,13 +144,37 @@ export class XRFrame {
 
     const views: XRView[] = [];
     eyes.forEach((eye) => {
-      const viewSpace = device.viewSpaces[eye];
-      const viewPose = this.getPose(viewSpace, referenceSpace);
       const projectionMatrix = session[P_SESSION].getProjectionMatrix(eye);
+      let eyeTransform: XRRigidTransform;
+      if (eye === XREye.None) {
+        eyeTransform = viewerTransform;
+      } else {
+        const halfIpd = device.ipd * 0.5;
+        const localOffset = vec3.fromValues(eye === XREye.Left ? -halfIpd : halfIpd, 0, 0);
+        const rotatedOffset = vec3.create();
+        vec3.transformQuat(rotatedOffset, localOffset, viewerOrientation);
+        const eyePosition = vec3.create();
+        vec3.add(eyePosition, viewerPosition, rotatedOffset);
+        eyeTransform = new XRRigidTransform(
+          {
+            x: eyePosition[0],
+            y: eyePosition[1],
+            z: eyePosition[2],
+            w: 1,
+          },
+          {
+            x: viewerOrientation[0],
+            y: viewerOrientation[1],
+            z: viewerOrientation[2],
+            w: viewerOrientation[3],
+          },
+        );
+      }
+
       const view = new XRView(
         eye,
         new Float32Array(projectionMatrix),
-        viewPose.transform,
+        eyeTransform,
         session,
       );
       views.push(view);

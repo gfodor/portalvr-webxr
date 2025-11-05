@@ -234,6 +234,17 @@ export class XRSession extends EventTarget {
          * with a clean slate.
          */
         if (this[P_SESSION].mode != 'inline') {
+          const deviceState = this[P_SESSION].device[P_DEVICE];
+          if (deviceState.stereoEnabled) {
+            baseLayer.ensureStereoTargets(
+              context.drawingBufferWidth,
+              context.drawingBufferHeight,
+            );
+            deviceState.stereoTargets = baseLayer.getStereoTargets();
+          } else {
+            deviceState.stereoTargets = null;
+          }
+
           const currentClearColor = context.getParameter(
             context.COLOR_CLEAR_VALUE,
           );
@@ -243,14 +254,30 @@ export class XRSession extends EventTarget {
           const currentClearStencil = context.getParameter(
             context.STENCIL_CLEAR_VALUE,
           );
+
+          const framebuffer = baseLayer.framebuffer;
+          context.bindFramebuffer(context.FRAMEBUFFER, framebuffer);
+
           context.clearColor(0.0, 0.0, 0.0, 0.0);
           context.clearDepth(1);
           context.clearStencil(0.0);
-          context.clear(
+
+          const clearMask =
             context.DEPTH_BUFFER_BIT |
-              context.COLOR_BUFFER_BIT |
-              context.STENCIL_BUFFER_BIT,
-          );
+            context.COLOR_BUFFER_BIT |
+            context.STENCIL_BUFFER_BIT;
+
+          const stereoTargets = baseLayer.getStereoTargets();
+          if (deviceState.stereoEnabled && stereoTargets) {
+            baseLayer.bindFramebufferForEye(XREye.Left);
+            context.clear(clearMask);
+            baseLayer.bindFramebufferForEye(XREye.Right);
+            context.clear(clearMask);
+            baseLayer.bindFramebufferForEye(XREye.Left);
+          } else {
+            context.clear(clearMask);
+          }
+
           context.clearColor(
             currentClearColor[0],
             currentClearColor[1],
@@ -259,6 +286,8 @@ export class XRSession extends EventTarget {
           );
           context.clearDepth(currentClearDepth);
           context.clearStencil(currentClearStencil);
+
+          context.bindFramebuffer(context.FRAMEBUFFER, framebuffer);
         }
 
         // Calculate projection matrices
@@ -350,6 +379,48 @@ export class XRSession extends EventTarget {
           }
         }
         this[P_SESSION].currentFrameCallbacks = null;
+
+        const deviceState = this[P_SESSION].device[P_DEVICE];
+        const stereoTargets = deviceState.stereoTargets;
+        const compositePass = deviceState.stereoCompositePass;
+        if (
+          deviceState.stereoEnabled &&
+          stereoTargets &&
+          compositePass &&
+          context instanceof WebGL2RenderingContext
+        ) {
+          baseLayer.copyStereoTargets();
+
+          const depthNear = this[P_SESSION].renderState.depthNear;
+          const fovy = deviceState.fovy;
+          const aspect = canvas.width / canvas.height;
+          let focalOffset = 0;
+          if (
+            deviceState.ipd > 0 &&
+            depthNear > 0 &&
+            Math.tan(fovy / 2) > 0 &&
+            aspect > 0
+          ) {
+            const halfWidth = depthNear * Math.tan(fovy / 2) * aspect;
+            if (halfWidth > 0) {
+              focalOffset = (deviceState.ipd / 2) / halfWidth;
+            }
+          }
+
+          const prevFramebuffer = context.getParameter(
+            context.FRAMEBUFFER_BINDING,
+          ) as WebGLFramebuffer | null;
+          compositePass.compose({
+            leftTexture: stereoTargets.leftTexture,
+            rightTexture: stereoTargets.rightTexture,
+            outputFramebuffer: null,
+            outputWidth: canvas.width,
+            outputHeight: canvas.height,
+            focalOffset,
+          });
+          context.bindFramebuffer(context.FRAMEBUFFER, prevFramebuffer);
+          baseLayer.bindFramebufferForEye(XREye.Left);
+        }
 
         // - Set frame’s active boolean to false.
         frame[P_FRAME].active = false;
