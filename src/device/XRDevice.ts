@@ -74,6 +74,7 @@ import {
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
+import { getPersistentPortalDeviceIdentity } from './PortalDeviceIdentity.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -325,6 +326,9 @@ export class XRDevice {
     }>;
     interactionMode: XRInteractionMode;
     userAgent: string;
+    portalDeviceSuffix: string;
+    portalDeviceName: string;
+    portalDeviceUiCode: string;
 
     // device state
     position: Vector3;
@@ -407,6 +411,7 @@ export class XRDevice {
     deviceConfig: XRDeviceConfig,
     deviceOptions: Partial<XRDeviceOptions> = {},
   ) {
+    const portalIdentity = getPersistentPortalDeviceIdentity();
     const globalSpace = new GlobalSpace();
     const viewerSpace = new XRReferenceSpace(
       XRReferenceSpaceType.Viewer,
@@ -469,6 +474,9 @@ export class XRDevice {
       environmentBlendModes: deviceConfig.environmentBlendModes,
       interactionMode: deviceConfig.interactionMode,
       userAgent: deviceConfig.userAgent,
+      portalDeviceSuffix: portalIdentity.suffix,
+      portalDeviceName: portalIdentity.fullName,
+      portalDeviceUiCode: portalIdentity.uiCode,
 
       position:
         deviceOptions.headsetPosition ?? DEFAULTS.headsetPosition.clone(),
@@ -883,6 +891,18 @@ export class XRDevice {
 
   get internalNominalFrameRate() {
     return this[P_DEVICE].internalNominalFrameRate;
+  }
+
+  get portalDeviceName(): string {
+    return this[P_DEVICE].portalDeviceName;
+  }
+
+  get portalDeviceSuffix(): string {
+    return this[P_DEVICE].portalDeviceSuffix;
+  }
+
+  get portalDeviceUiCode(): string {
+    return this[P_DEVICE].portalDeviceUiCode;
   }
 
   get stereoEnabled() {
