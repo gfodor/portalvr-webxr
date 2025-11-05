@@ -19,7 +19,7 @@ import {
 	Vector3,
 	WebGLRenderer,
 } from 'three';
-import { NativeMesh, NativePlane, XRDevice } from 'iwer';
+import { NativeMesh, NativePlane, XRDevice } from 'portalvr';
 import { SpatialEntity, SpatialEntityType } from './native/entity.js';
 
 import { Environments } from './registry.js';
@@ -185,7 +185,7 @@ export class SyntheticEnvironmentModule extends EventTarget {
 	loadDefaultEnvironment(envId: string) {
 		if (typeof __IS_UMD__ !== 'undefined' && __IS_UMD__) {
 			// Use fetch for UMD builds to load JSON from CDN
-			const url = `https://www.unpkg.com/@iwer/sem@${VERSION}/captures/${envId}.json`;
+			const url = `https://www.unpkg.com/@portalvr/sem@${VERSION}/captures/${envId}.json`;
 			fetch(url)
 				.then((response) => {
 					if (!response.ok) {

@@ -4,7 +4,7 @@ import {
 	NativePlane,
 	XRRigidTransform,
 	XRSemanticLabels,
-} from 'iwer';
+} from 'portalvr';
 import {
 	SpatialEntity as PBSpatialEntity,
 	SemanticLabelMETA,

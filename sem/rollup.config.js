@@ -6,7 +6,7 @@ import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 
 const globals = {
-	iwer: 'IWER',
+	portalvr: 'PortalVR',
 };
 
 const basePlugins = [peerDepsExternal(), resolve(), commonjs(), json()];
@@ -31,19 +31,19 @@ export default [
 	// UMD builds
 	{
 		input: 'lib/index.js',
-		external: ['iwer'],
+		external: ['portalvr'],
 		plugins: umdPlugins,
 		output: [
 			{
-				file: 'build/iwer-sem.js',
+				file: 'build/portalvr-sem.js',
 				format: 'umd',
-				name: 'IWER_SEM',
+				name: 'PortalVR_SEM',
 				globals,
 			},
 			{
-				file: 'build/iwer-sem.min.js',
+				file: 'build/portalvr-sem.min.js',
 				format: 'umd',
-				name: 'IWER_SEM',
+				name: 'PortalVR_SEM',
 				globals,
 				plugins: [terser()],
 			},
@@ -52,7 +52,7 @@ export default [
 	// ES module builds
 	{
 		input: 'lib/index.js',
-		external: ['iwer'],
+		external: ['portalvr'],
 		plugins: esPlugins,
 		output: [
 			{

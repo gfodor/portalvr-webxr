@@ -1,7 +1,7 @@
 {
-	"name": "@iwer/sem",
+	"name": "@portalvr/sem",
 	"version": "0.2.5",
-	"description": "Synthetic Environment Module for IWER",
+	"description": "Synthetic Environment Module for PortalVR",
 	"type": "module",
 	"main": "lib/index.js",
 	"types": "lib/index.d.ts",
@@ -16,21 +16,21 @@
 	},
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/meta-quest/immersive-web-emulation-runtime.git"
+		"url": "git+https://github.com/portalvr/portalvr-webxr.git"
 	},
 	"keywords": [],
-	"author": "Felix Zhang <fe1ix@meta.com>",
+	"author": "Portal VR, Inc. <team@portalvr.io>",
 	"license": "MIT",
 	"bugs": {
-		"url": "https://github.com/meta-quest/immersive-web-emulation-runtime/issues"
+		"url": "https://portalvr.io/support"
 	},
-	"homepage": "https://github.com/meta-quest/immersive-web-emulation-runtime#readme",
+	"homepage": "https://portalvr.io",
 	"dependencies": {
 		"three": "^0.165.0",
 		"ts-proto": "^2.6.0"
 	},
 	"peerDependencies": {
-		"iwer": "^2.0.0"
+		"portalvr": "^1.0.0"
 	},
 	"devDependencies": {
 		"@rollup/plugin-commonjs": "^28.0.1",
@@ -41,6 +41,7 @@
 		"@types/three": "^0.170.0",
 		"rollup": "^4.24.3",
 		"rollup-plugin-peer-deps-external": "^2.2.4",
-		"typescript": "^5.6.3"
+		"typescript": "^5.6.3",
+		"portalvr": "file:../"
 	}
 }

@@ -1,0 +1,36 @@
+{
+	"name": "immersive-web-emulator",
+	"scripts": {
+		"build": "rimraf build && tsc && rollup -c && node ./scripts/copy-runtime-assets.mjs",
+		"zip": "rimraf iwe-release.zip && npm run build && bestzip iwe-release.zip build/* icons/* manifest.json LICENSE"
+	},
+	"pre-commit": [
+		"lint"
+	],
+	"dependencies": {
+		"three": "^0.165.0",
+		"tldts": "^6.1.75"
+	},
+	"devDependencies": {
+		"@rollup/plugin-alias": "^5.1.0",
+		"@rollup/plugin-commonjs": "^26.0.1",
+		"@rollup/plugin-json": "^6.1.0",
+		"@rollup/plugin-node-resolve": "^15.2.3",
+		"@rollup/plugin-replace": "^5.0.7",
+		"@rollup/plugin-strip": "^3.0.4",
+		"@rollup/plugin-terser": "^0.4.4",
+		"@types/chrome": "^0.0.299",
+		"@types/node": "^18.7.13",
+		"@typescript-eslint/eslint-plugin": "^5.55.0",
+		"@typescript-eslint/parser": "^5.55.0",
+		"bestzip": "^2.2.1",
+		"eslint": "^8.36.0",
+		"eslint-config-prettier": "^8.10.0",
+		"eslint-plugin-prettier": "^5.0.1",
+		"npm": "^11.0.0",
+		"prettier": "^3.0.3",
+		"rimraf": "^6.0.1",
+		"rollup": "^2.79.1",
+		"typescript": "^5.5.3"
+	}
+}
