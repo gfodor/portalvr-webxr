@@ -91,7 +91,7 @@ async function registerDomainContentScript(domain: string) {
 	await chrome.scripting.registerContentScripts([
 		{
 			id: getScriptId(domain),
-			matches: matches,
+			matches,
 			js: ['build/iwe.min.js'],
 			allFrames: true,
 			runAt: 'document_start',

@@ -10,6 +10,7 @@ import { XRDevice, metaQuest3 } from 'portalvr';
 import { DevUI } from '@portalvr/devui';
 import { SyntheticEnvironmentModule } from '@portalvr/sem';
 import sceneJson from '@portalvr/sem/captures/living_room.json';
+import { getPortalPoseWasmDataURL } from 'portalvr/wasm/portal-pose/portal_pose_embed.js';
 
 export const injectRuntime = () => {
 	// eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -20,4 +21,6 @@ export const injectRuntime = () => {
 	xrDevice.installDevUI(DevUI);
 	xrDevice.installSEM(SyntheticEnvironmentModule);
 	xrDevice.sem?.loadEnvironment(sceneJson);
+
+	xrDevice.enablePortalPoseCamera({ wasmDataUrl: getPortalPoseWasmDataURL() });
 };

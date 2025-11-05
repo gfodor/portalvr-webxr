@@ -14,10 +14,21 @@ const ROOT_DIR = resolvePath(__dirname, '..');
 const RUNTIME_MODULE_PATH = resolvePath(ROOT_DIR, 'build', 'portalvr.module.js');
 const DEVUI_LIB_DIR = resolvePath(ROOT_DIR, 'devui', 'lib');
 const SEM_LIB_DIR = resolvePath(ROOT_DIR, 'sem', 'lib');
+const PORTAL_POSE_EMBED_PATH = resolvePath(
+	ROOT_DIR,
+	'lib',
+	'wasm',
+	'portal-pose',
+	'portal_pose_embed.js',
+);
 
 const createRuntimeAlias = () =>
 	alias({
 		entries: [
+			{
+				find: 'portalvr/wasm/portal-pose/portal_pose_embed.js',
+				replacement: PORTAL_POSE_EMBED_PATH,
+			},
 			{ find: 'portalvr', replacement: RUNTIME_MODULE_PATH },
 			{ find: '@portalvr/devui', replacement: DEVUI_LIB_DIR },
 			{ find: '@portalvr/sem', replacement: SEM_LIB_DIR },
