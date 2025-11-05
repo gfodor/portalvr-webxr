@@ -201,8 +201,10 @@ export interface XRDeviceOptions {
   canvasContainer: HTMLDivElement;
 }
 
+const FORCED_IPD_METERS = 0.0075;
+
 const DEFAULTS = {
-  ipd: 0.063,
+  ipd: FORCED_IPD_METERS,
   fovy: Math.PI / 2,
   headsetPosition: new Vector3(0, 1.6, 0),
   headsetQuaternion: new Quaternion(),
@@ -523,7 +525,7 @@ export class XRDevice {
       quaternion:
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
       stereoEnabled: deviceOptions.stereoEnabled ?? DEFAULTS.stereoEnabled,
-      ipd: deviceOptions.ipd ?? DEFAULTS.ipd,
+      ipd: FORCED_IPD_METERS,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
       hands,
@@ -1008,7 +1010,8 @@ export class XRDevice {
   }
 
   set ipd(value: number) {
-    this[P_DEVICE].ipd = value;
+    void value; // IPD is pinned for consistent emulator behaviour.
+    this[P_DEVICE].ipd = FORCED_IPD_METERS;
   }
 
   get fovy() {

@@ -1,5 +1,5 @@
 import { SignalingClient } from './signaling.js';
-import { gatherSelectedPair, nowIso, parseCandidateLine, sleep } from './utils.js';
+import { gatherSelectedPair, nowIso, parseCandidateLine } from './utils.js';
 
 // --- SDP helpers (unchanged logic, TS typed) ---
 
@@ -86,6 +86,9 @@ function safeDcSend(dc: RTCDataChannel | null | undefined, data: any): boolean {
     return false;
   }
 }
+
+const BACKOFF_WAKE_DEBOUNCE_MS = 5000;
+const MOUSE_IDLE_THRESHOLD_MS = 15000;
 
 interface RoomSessionOpts {
   label: 'local' | 'remote';
@@ -657,6 +660,12 @@ export class DualRoomCoordinator {
   private _attempt = 0;
   private _connectionWaiters = new Set<{ settled: boolean; timer: any; done: (v: boolean) => void }>();
   private _connectTimeoutMs = 10000;
+  private _backoffInterrupt: (() => void) | null = null;
+  private _backoffWaiting = false;
+  private _idleCleanup: Array<() => void> = [];
+  private _lastWakeTriggerMs = 0;
+  private _mouseIdle = true;
+  private _mouseIdleTimer: ReturnType<typeof setTimeout> | null = null;
 
   localCandidates: any[] = [];
   remoteCandidates: any[] = [];
@@ -680,6 +689,130 @@ export class DualRoomCoordinator {
     this._pcOptions = opts.pcOptions;
     this._pcConstraints = opts.pcConstraints;
     this._sdpTransform = opts.sdpTransform;
+
+    this._setupIdleWakeListeners();
+  }
+
+  private _setupIdleWakeListeners() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') {
+      return;
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        this._handleWakeEvent('visibility');
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    this._idleCleanup.push(() => document.removeEventListener('visibilitychange', onVisibility));
+
+    const onMouseMove = () => {
+      this._handleMouseMove();
+    };
+    window.addEventListener('mousemove', onMouseMove, { passive: true });
+    this._idleCleanup.push(() => window.removeEventListener('mousemove', onMouseMove));
+
+    this._scheduleMouseIdleReset();
+  }
+
+  private _teardownIdleWakeListeners() {
+    if (this._mouseIdleTimer) {
+      clearTimeout(this._mouseIdleTimer);
+      this._mouseIdleTimer = null;
+    }
+    this._mouseIdle = true;
+    if (!this._idleCleanup.length) {
+      return;
+    }
+    const cleanup = this._idleCleanup.splice(0);
+    cleanup.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // ignore listener cleanup errors
+      }
+    });
+  }
+
+  private _handleMouseMove() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (this._mouseIdle) {
+      this._handleWakeEvent('mouse');
+    }
+    this._mouseIdle = false;
+    this._scheduleMouseIdleReset();
+  }
+
+  private _scheduleMouseIdleReset() {
+    if (this._mouseIdleTimer) {
+      clearTimeout(this._mouseIdleTimer);
+      this._mouseIdleTimer = null;
+    }
+    if (typeof window === 'undefined') {
+      return;
+    }
+    this._mouseIdleTimer = setTimeout(() => {
+      this._mouseIdle = true;
+      this._mouseIdleTimer = null;
+    }, MOUSE_IDLE_THRESHOLD_MS);
+  }
+
+  private _handleWakeEvent(source: 'visibility' | 'mouse') {
+    const now = Date.now();
+    if (now - this._lastWakeTriggerMs < BACKOFF_WAKE_DEBOUNCE_MS) {
+      return;
+    }
+    if (!this._reconnectInFlight || !this._backoffWaiting) {
+      return;
+    }
+    if (this.connected) {
+      return;
+    }
+
+    this._lastWakeTriggerMs = now;
+    this.log(`wakeup via ${source}; resetting backoff and retrying immediately`);
+    this._resetBackoffForWake();
+  }
+
+  private _resetBackoffForWake() {
+    this._backoffMs = 1000;
+    this._attempt = 1;
+    if (this._backoffInterrupt) {
+      const interrupt = this._backoffInterrupt;
+      this._backoffInterrupt = null;
+      this.nextBackoffMs = 0;
+      this._tick();
+      interrupt();
+    }
+  }
+
+  private async _waitWithInterrupt(delay: number): Promise<void> {
+    if (delay <= 0) {
+      return;
+    }
+    this._backoffWaiting = true;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finalize = () => {
+        if (settled) return;
+        settled = true;
+        this._backoffWaiting = false;
+        this._backoffInterrupt = null;
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        finalize();
+      }, delay);
+      this._backoffInterrupt = () => {
+        if (settled) {
+          return;
+        }
+        clearTimeout(timer);
+        finalize();
+      };
+    });
   }
 
   async start(): Promise<void> {
@@ -842,7 +975,7 @@ export class DualRoomCoordinator {
       this.log(`reconnect attempt #${this._attempt} in ${Math.ceil(delay / 1000)}s (reason=${reason})`);
       this.nextBackoffMs = delay;
       this._tick();
-      await sleep(delay);
+      await this._waitWithInterrupt(delay);
       this.nextBackoffMs = 0;
       this._tick();
 
@@ -959,6 +1092,12 @@ export class DualRoomCoordinator {
   }
 
   end() {
+    this._teardownIdleWakeListeners();
+    if (this._backoffInterrupt) {
+      const interrupt = this._backoffInterrupt;
+      this._backoffInterrupt = null;
+      interrupt();
+    }
     this.s1?.end();
     this.s2?.end();
   }
