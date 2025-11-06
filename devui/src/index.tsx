@@ -18,6 +18,7 @@ export class DevUI {
 	private readonly reactRoot: Root;
 	private readonly xrDevice: XRDevice;
 	private controllerConnected = false;
+	private controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden' = 'qr';
 
 	constructor(xrDevice: XRDevice) {
 		this.xrDevice = xrDevice;
@@ -57,9 +58,26 @@ export class DevUI {
 
 	public setControllerConnected(connected: boolean): void {
 		if (this.controllerConnected === connected) {
-			return;
+			// still re-render if prompt differs (new API may have set it differently)
 		}
 		this.controllerConnected = connected;
+		// If only connectivity is known, show QR when not connected, hide otherwise.
+		this.controllerPrompt = connected ? 'hidden' : 'qr';
+		this.renderReact();
+	}
+
+	public setControllerPromptStatus(
+		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
+	): void {
+		if (this.controllerPrompt === status) {
+			return;
+		}
+		this.controllerPrompt = status;
+		// keep controllerConnected heuristically in sync for any legacy checks
+		this.controllerConnected =
+			status !== 'qr' && status !== 'hidden'
+				? true
+				: this.controllerConnected;
 		this.renderReact();
 	}
 
@@ -67,7 +85,7 @@ export class DevUI {
 		this.reactRoot.render(
 			<DevUIRoot
 				xrDevice={this.xrDevice}
-				controllerConnected={this.controllerConnected}
+				controllerPrompt={this.controllerPrompt}
 			/>,
 		);
 	}

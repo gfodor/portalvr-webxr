@@ -85,7 +85,6 @@ import {
 } from './PortalEmulatorConfig.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
 import { getPersistentPortalDeviceIdentity } from './PortalDeviceIdentity.js';
-import { PortalDeviceQrOverlay } from './PortalDeviceQrOverlay.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -119,18 +118,10 @@ function resolveActiveWandState(mode: number): ActiveWandState {
   }
 }
 
-const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
 const PORTAL_DEVICE_ID_PREFIX = 'PORTALVR-';
 
 function buildPortalDeviceId(suffix: string): string {
   return `${PORTAL_DEVICE_ID_PREFIX}${suffix}`;
-}
-
-function buildSigcfPairingUrl(deviceId: string): string {
-  const url = new URL(SIGCF_PAIRING_BASE_URL);
-  url.searchParams.set('device_id', deviceId);
-  url.searchParams.set('service_type', 'sigcf');
-  return url.toString();
 }
 
 function getNowMs(): number {
@@ -227,6 +218,7 @@ export interface DevUI {
   get devUICanvas(): HTMLCanvasElement;
   get devUIContainer(): HTMLDivElement;
   setControllerConnected(connected: boolean): void;
+	setControllerPromptStatus(status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden'): void;
 }
 
 export interface SEMConstructor {
@@ -469,7 +461,6 @@ export class XRDevice {
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
   private lastControllerPacketMs: number | null = null;
-  private portalQrOverlay: PortalDeviceQrOverlay | null = null;
   private readonly lastControllerPoseByHand = {
     left: null as PortalPose | null,
     right: null as PortalPose | null,
@@ -497,6 +488,8 @@ export class XRDevice {
   private lastDualSubmode: 'mirrored' | 'opposed' | null = null;
   private readonly baseCanvasFovRad: number;
   private lastCanvasZoomScale = 1;
+	private isControllerConnected = false;
+	private hasSeenOrientationResetOnce = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -563,18 +556,6 @@ export class XRDevice {
     canvasContainer.style.zIndex = '999';
 
     const portalDeviceId = buildPortalDeviceId(portalIdentity.suffix);
-
-    if (typeof document !== 'undefined') {
-      const pairingUrl = buildSigcfPairingUrl(portalDeviceId);
-      this.portalQrOverlay = new PortalDeviceQrOverlay({
-        parent: canvasContainer,
-        pairingUrl,
-        deviceName: portalIdentity.fullName,
-        deviceUiCode: portalIdentity.uiCode,
-        deviceId: portalDeviceId,
-      });
-      this.portalQrOverlay.setVisible(false);
-    }
 
     this[P_DEVICE] = {
       name: deviceConfig.name,
@@ -1042,8 +1023,6 @@ export class XRDevice {
 
   installDevUI(devUIConstructor: DevUIConstructor) {
     const devui = new devUIConstructor(this);
-    this.portalQrOverlay?.dispose();
-    this.portalQrOverlay = null;
     devui.setControllerConnected(false);
     this[P_DEVICE].devui = devui;
   }
@@ -1318,12 +1297,18 @@ export class XRDevice {
     const activeState = resolveActiveWandState(state.wandMode);
     this.setActiveWandState(activeState);
     this.updateControllerButtons(state, activeState);
+
+	// Update prompt after ingesting state (tracking stability may have changed)
+	this.updateControllerPromptUI();
   };
 
   private handleControllerConnectionChange = (connected: boolean) => {
-    this.portalQrOverlay?.setVisible(!connected);
+	this.isControllerConnected = connected;
     this[P_DEVICE].devui?.setControllerConnected(connected);
+
     if (!connected) {
+		// Reset per-connection state
+		this.hasSeenOrientationResetOnce = false;
       this.portalControllerRuntime?.handleDisconnect();
       this.lastControllerState = null;
       this.lastControllerPacketMs = null;
@@ -1335,15 +1320,19 @@ export class XRDevice {
       this.updateCameraLockState('right', false);
       this.setActiveWandState('none', true);
     }
+
+	this.updateControllerPromptUI();
   };
 
   private handleOrientationReset = () => {
     this.faceTrackingRecenterPending = true;
+	this.hasSeenOrientationResetOnce = true;
     if (this.portalControllerRuntime) {
       this.portalControllerRuntime.handleOrientationReset();
     } else {
       this.pendingOrientationReset = true;
     }
+	this.updateControllerPromptUI();
   };
 
   private handleVisibilityChange = (): void => {
@@ -1376,6 +1365,42 @@ export class XRDevice {
     }
     this.resumeWebRTCStreamingAfterVisibility();
   };
+
+	private isTrackingStableFromState(state: ControllerState | null): boolean {
+	if (!state) {
+		return false;
+	}
+	const encoded = Number(state.trackingState);
+	if (!Number.isFinite(encoded)) {
+		return false;
+	}
+	const normalized = encoded & 0x03;
+	if (state.version >= 0x02) {
+		// Protocol v2 encodes TRACKING as 0x01 and everything else as non-stable.
+		return normalized === 0x01;
+	}
+	// Legacy protocol did not include tracking state; treat as stable to avoid false alarms.
+	return true;
+	}
+
+	private computeControllerPromptStatus(): 'qr' | 'tracking-issues' | 'swipe' | 'hidden' {
+	if (!this.isControllerConnected) {
+		return 'qr';
+	}
+	const trackingStable = this.isTrackingStableFromState(this.lastControllerState);
+	if (!trackingStable) {
+		return 'tracking-issues';
+	}
+	if (!this.hasSeenOrientationResetOnce) {
+		return 'swipe';
+	}
+	return 'hidden';
+	}
+
+	private updateControllerPromptUI(): void {
+	const status = this.computeControllerPromptStatus();
+	this[P_DEVICE].devui?.setControllerPromptStatus(status);
+	}
 
   private ensurePortalControllerRuntime(): Promise<PortalControllerRuntime> {
     if (!this.portalControllerRuntimePromise) {

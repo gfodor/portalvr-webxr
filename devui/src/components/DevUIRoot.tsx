@@ -25,7 +25,7 @@ import {
 
 type DevUIRootProps = {
 	xrDevice: XRDevice;
-	controllerConnected: boolean;
+	controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
 };
 
 type EmulatorSettingsState = {
@@ -40,7 +40,7 @@ const AMAZON_3D_GLASSES_URL =
 
 export function DevUIRoot({
 	xrDevice,
-	controllerConnected,
+	controllerPrompt,
 }: DevUIRootProps): JSX.Element {
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
 	const [isHelpOpen, setHelpOpen] = useState(false);
@@ -211,7 +211,7 @@ export function DevUIRoot({
 				deviceName={deviceName}
 				deviceUiCode={deviceUiCode}
 				deviceId={deviceId}
-				visible={!controllerConnected}
+				status={controllerPrompt}
 			/>
 
 			<div

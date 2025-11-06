@@ -6,7 +6,9 @@ export type PortalQrPromptProps = {
 	deviceName: string;
 	deviceUiCode: string;
 	deviceId: string;
+	// Old prop `visible` is replaced by `status`. Keep it optional for back-compat but unused now.
 	visible?: boolean;
+	status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
 };
 
 const QR_SIZE = 384;
@@ -17,13 +19,16 @@ export function PortalQrPrompt({
 	deviceName,
 	deviceUiCode,
 	deviceId,
-	visible = true,
+	status,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
 	useEffect(() => {
+		if (status !== 'qr') {
+			return;
+		}
 		const canvas = canvasRef.current;
-		if (!canvas || !visible) {
+		if (!canvas) {
 			return;
 		}
 		const qr = qrcodeGenerator(0, 'M');
@@ -61,22 +66,31 @@ export function PortalQrPrompt({
 		return () => {
 			ctx.clearRect(0, 0, QR_SIZE, QR_SIZE);
 		};
-	}, [pairingUrl, visible]);
+	}, [pairingUrl, status]);
 
-	if (!visible) {
+	if (status === 'hidden') {
 		return null;
 	}
 
+	const title =
+		status === 'qr'
+			? `Scan to pair ${deviceName}`
+			: status === 'tracking-issues'
+				? 'Tracking issues, hold the controller still and ensure camera is clear.'
+				: 'Point controller at screen and swipe from right edge';
+
 	return (
 		<aside className="portal-qr-pill" role="status" aria-live="polite">
-			<span className="portal-qr-pill__title">Scan to pair {deviceName}</span>
-			<canvas
-				ref={canvasRef}
-				className="portal-qr-pill__canvas"
-				width={QR_SIZE}
-				height={QR_SIZE}
-				aria-label={`PortalVR pairing QR code for ${deviceName}`}
-			/>
+			<span className="portal-qr-pill__title">{title}</span>
+			{status === 'qr' && (
+				<canvas
+					ref={canvasRef}
+					className="portal-qr-pill__canvas"
+					width={QR_SIZE}
+					height={QR_SIZE}
+					aria-label={`PortalVR pairing QR code for ${deviceName}`}
+				/>
+			)}
 			<span className="portal-qr-pill__subtitle">
 				{deviceUiCode} · {deviceId}
 			</span>
