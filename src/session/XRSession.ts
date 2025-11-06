@@ -256,13 +256,51 @@ export class XRSession extends EventTarget {
           const currentClearStencil = context.getParameter(
             context.STENCIL_CLEAR_VALUE,
           );
+          const previousColorMask = context.getParameter(
+            context.COLOR_WRITEMASK,
+          ) as boolean[];
+          const previousDepthMask = context.getParameter(
+            context.DEPTH_WRITEMASK,
+          ) as boolean;
+          const previousStencilMask = context.getParameter(
+            context.STENCIL_WRITEMASK,
+          ) as number;
+          const previousBackStencilMask =
+            context instanceof WebGL2RenderingContext
+              ? (context.getParameter(
+                  context.STENCIL_BACK_WRITEMASK,
+                ) as number)
+              : previousStencilMask;
+          const scissorEnabled = context.isEnabled(context.SCISSOR_TEST);
+          const previousScissorBox = context.getParameter(
+            context.SCISSOR_BOX,
+          ) as Int32Array;
 
           const framebuffer = baseLayer.framebuffer;
           context.bindFramebuffer(context.FRAMEBUFFER, framebuffer);
 
-          context.clearColor(0.0, 0.0, 0.0, 0.0);
-          context.clearDepth(1);
-          context.clearStencil(0.0);
+          // Ensure our implicit clears behave like driver clears and do not
+          // inherit whatever write masks or scissors the app left behind.
+          context.colorMask(true, true, true, true);
+          context.depthMask(true);
+          if (context instanceof WebGL2RenderingContext) {
+            context.stencilMaskSeparate(context.FRONT, 0xffffffff);
+            context.stencilMaskSeparate(context.BACK, 0xffffffff);
+          } else {
+            context.stencilMask(0xff);
+          }
+          if (scissorEnabled) {
+            context.disable(context.SCISSOR_TEST);
+          }
+
+          context.clearColor(
+            currentClearColor[0],
+            currentClearColor[1],
+            currentClearColor[2],
+            currentClearColor[3],
+          );
+          context.clearDepth(currentClearDepth);
+          context.clearStencil(currentClearStencil);
 
           const clearMask =
             context.DEPTH_BUFFER_BIT |
@@ -278,6 +316,44 @@ export class XRSession extends EventTarget {
             baseLayer.bindFramebufferForEye(XREye.Left);
           } else {
             context.clear(clearMask);
+          }
+
+          // Restore masks and scissor state to match the app's expectations.
+          if (scissorEnabled) {
+            context.scissor(
+              previousScissorBox[0],
+              previousScissorBox[1],
+              previousScissorBox[2],
+              previousScissorBox[3],
+            );
+            context.enable(context.SCISSOR_TEST);
+          } else {
+            context.scissor(
+              previousScissorBox[0],
+              previousScissorBox[1],
+              previousScissorBox[2],
+              previousScissorBox[3],
+            );
+            context.disable(context.SCISSOR_TEST);
+          }
+          context.colorMask(
+            previousColorMask[0],
+            previousColorMask[1],
+            previousColorMask[2],
+            previousColorMask[3],
+          );
+          context.depthMask(previousDepthMask);
+          if (context instanceof WebGL2RenderingContext) {
+            context.stencilMaskSeparate(
+              context.FRONT,
+              previousStencilMask,
+            );
+            context.stencilMaskSeparate(
+              context.BACK,
+              previousBackStencilMask,
+            );
+          } else {
+            context.stencilMask(previousStencilMask);
           }
 
           context.clearColor(

@@ -180,7 +180,8 @@ function makeIdentityPortalPose(): PortalPose {
   };
 }
 
-const THUMBSTICK_TOUCH_EPSILON = 1e-3;
+// Matches the native Android driver threshold (fabs(axis) > 0.0001f).
+const THUMBSTICK_TOUCH_EPSILON = 1e-4;
 
 export interface XRDeviceConfig {
   name: string;
@@ -1659,19 +1660,21 @@ export class XRDevice {
     const left = controllers[XRHandedness.Left];
     const right = controllers[XRHandedness.Right];
 
+    const axisX = clampAxis(state.joystick.x);
+    const axisY = clampAxis(state.joystick.y);
     const thumbstickTouched =
-      Math.abs(state.joystick.x) > THUMBSTICK_TOUCH_EPSILON ||
-      Math.abs(state.joystick.y) > THUMBSTICK_TOUCH_EPSILON ||
+      Math.abs(axisX) > THUMBSTICK_TOUCH_EPSILON ||
+      Math.abs(axisY) > THUMBSTICK_TOUCH_EPSILON ||
       state.buttons.stick;
 
     if (activeState === 'left' || activeState === 'both') {
-      this.applyButtonsToController(left, state, XRHandedness.Left, thumbstickTouched);
+      this.applyButtonsToController(left, state, XRHandedness.Left, thumbstickTouched, axisX, axisY);
     } else if (left) {
       this.resetControllerState(left);
     }
 
     if (activeState === 'right' || activeState === 'both') {
-      this.applyButtonsToController(right, state, XRHandedness.Right, thumbstickTouched);
+      this.applyButtonsToController(right, state, XRHandedness.Right, thumbstickTouched, axisX, axisY);
     } else if (right) {
       this.resetControllerState(right);
     }
@@ -1682,6 +1685,8 @@ export class XRDevice {
     state: ControllerState,
     handedness: XRHandedness,
     thumbstickTouched: boolean,
+    axisX: number,
+    axisY: number,
   ) {
     if (!controller) {
       return;
@@ -1698,11 +1703,7 @@ export class XRDevice {
       controller.updateButtonTouch('thumbstick', thumbstickTouched);
     }
     if (this.controllerHasAxis(controller, 'thumbstick')) {
-      controller.updateAxes(
-        'thumbstick',
-        clampAxis(state.joystick.x),
-        clampAxis(state.joystick.y),
-      );
+      controller.updateAxes('thumbstick', axisX, axisY);
     }
 
     if (handedness === XRHandedness.Left) {
