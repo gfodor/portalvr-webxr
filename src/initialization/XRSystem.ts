@@ -112,6 +112,11 @@ export class XRSystem extends EventTarget {
     options: XRSessionInit = {},
   ): Promise<XRSession> {
     return new Promise<XRSession>((resolve, reject) => {
+      const stack = new Error().stack;
+      if (stack) {
+        console.log('[PortalVR] requestSession stack trace:', stack);
+        this[P_SYSTEM].device.updateEngineDetectionFromStack(stack);
+      }
       this.isSessionSupported(mode)
         .then((isSupported) => {
           if (!isSupported) {

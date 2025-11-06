@@ -158,6 +158,12 @@ const FACE_TRACKER_WASM_PATH =
 const FACE_TRACKER_MODEL_PATH =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
+type EngineDetectionState = {
+  wonderland: boolean;
+  lastStack: string | null;
+  suppressedFullscreenLogged: boolean;
+};
+
 const FACE_TRACKING_RESOLUTIONS: Array<{ width: number; height: number }> = [
   { width: 320, height: 240 },
   { width: 640, height: 480 },
@@ -400,6 +406,7 @@ export class XRDevice {
 	/** New: user preference for face tracking */
 	faceTrackingEnabled: boolean;
     immersiveFullscreenEnabled: boolean;
+    engineDetection: EngineDetectionState;
     ipd: number;
     fovy: number;
     controllers: { [key in XRHandedness]?: XRController };
@@ -582,6 +589,11 @@ export class XRDevice {
       stereoEnabled: initialStereoEnabled,
       faceTrackingEnabled: configFaceTrackingEnabled,
       immersiveFullscreenEnabled: configImmersiveFullscreenEnabled,
+      engineDetection: {
+        wonderland: false,
+        lastStack: null,
+        suppressedFullscreenLogged: false,
+      },
       ipd: FORCED_IPD_METERS,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
@@ -1124,6 +1136,22 @@ export class XRDevice {
     } else {
       this.exitFullscreenForImmersiveSession();
     }
+  }
+
+  updateEngineDetectionFromStack(stack: string): void {
+    const state = this[P_DEVICE].engineDetection;
+    const normalized = stack.toLowerCase();
+    const isWonderland = normalized.includes('wonderland');
+    if (state.wonderland !== isWonderland) {
+      state.wonderland = isWonderland;
+      state.suppressedFullscreenLogged = false;
+      if (isWonderland) {
+        console.info(
+          '[XRDevice] Wonderland engine detected from requestSession stack; immersive fullscreen will remain disabled.',
+        );
+      }
+    }
+    state.lastStack = stack;
   }
 
   get ipd() {
@@ -2157,6 +2185,16 @@ export class XRDevice {
     }
     const session = this.activeSession;
     if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+      return;
+    }
+    const detection = this[P_DEVICE].engineDetection;
+    if (detection.wonderland) {
+      if (!detection.suppressedFullscreenLogged) {
+        console.info(
+          '[XRDevice] Skipping fullscreen for immersive session (Wonderland engine detected).',
+        );
+        detection.suppressedFullscreenLogged = true;
+      }
       return;
     }
     if (!this[P_DEVICE].immersiveFullscreenEnabled) {
