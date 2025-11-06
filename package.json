@@ -56,7 +56,7 @@
     "renamer": "^4.0.0",
     "rimraf": "^5.0.5",
     "rollup": "^2.79.1",
-    "ts-jest": "^29.1.1",
+    "ts-jest": "^29.4.5",
     "typescript": "^4.9.5",
     "vitepress": "1.0.1"
   },
