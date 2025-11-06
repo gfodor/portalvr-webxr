@@ -8,6 +8,7 @@ const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
 const DEFAULT_SETTINGS: PortalEmulatorConfig['settings'] = {
 	faceTrackingEnabled: true,
 	stereoRenderingEnabled: false,
+	immersiveFullscreenEnabled: true,
 };
 const DEFAULT_VERSION = 1;
 
@@ -168,6 +169,11 @@ function parseConfig(candidate: unknown): PortalEmulatorConfig | null {
 			?
 				(settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled
 			: undefined;
+	const fullscreenCandidate =
+		settingsCandidate && typeof settingsCandidate === 'object'
+			?
+				(settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled
+			: undefined;
 	return {
 		device: { suffix: typeof suffixCandidate === 'string' ? suffixCandidate : '' },
 		settings: {
@@ -179,6 +185,10 @@ function parseConfig(candidate: unknown): PortalEmulatorConfig | null {
 				typeof stereoCandidate === 'boolean'
 					? stereoCandidate
 					: DEFAULT_SETTINGS.stereoRenderingEnabled,
+			immersiveFullscreenEnabled:
+				typeof fullscreenCandidate === 'boolean'
+					? fullscreenCandidate
+					: DEFAULT_SETTINGS.immersiveFullscreenEnabled,
 		},
 		version: typeof versionCandidate === 'number' ? versionCandidate : DEFAULT_VERSION,
 	};

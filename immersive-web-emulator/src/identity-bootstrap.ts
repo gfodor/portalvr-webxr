@@ -13,6 +13,7 @@ type PortalDeviceIdentity = {
 const DEFAULT_SETTINGS: PortalEmulatorConfig['settings'] = {
 	faceTrackingEnabled: true,
 	stereoRenderingEnabled: false,
+	immersiveFullscreenEnabled: true,
 };
 const DEFAULT_VERSION = 1;
 
@@ -105,6 +106,7 @@ function buildConfig(
 		settings: {
 			faceTrackingEnabled: DEFAULT_SETTINGS.faceTrackingEnabled,
 			stereoRenderingEnabled: DEFAULT_SETTINGS.stereoRenderingEnabled,
+			immersiveFullscreenEnabled: DEFAULT_SETTINGS.immersiveFullscreenEnabled,
 		},
 		version: DEFAULT_VERSION,
 	};
@@ -130,6 +132,10 @@ function buildConfig(
 		const stereoCandidate = (settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled;
 		if (typeof stereoCandidate === 'boolean') {
 			result.settings.stereoRenderingEnabled = stereoCandidate;
+		}
+		const fullscreenCandidate = (settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled;
+		if (typeof fullscreenCandidate === 'boolean') {
+			result.settings.immersiveFullscreenEnabled = fullscreenCandidate;
 		}
 	}
 

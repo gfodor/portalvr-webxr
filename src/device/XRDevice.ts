@@ -405,6 +405,7 @@ export class XRDevice {
     stereoEnabled: boolean;
 	/** New: user preference for face tracking */
 	faceTrackingEnabled: boolean;
+    immersiveFullscreenEnabled: boolean;
     ipd: number;
     fovy: number;
     controllers: { [key in XRHandedness]?: XRController };
@@ -501,6 +502,8 @@ export class XRDevice {
     const persistedConfig = getPortalEmulatorConfig();
     const configStereoEnabled = Boolean(persistedConfig.settings.stereoRenderingEnabled);
     const configFaceTrackingEnabled = persistedConfig.settings.faceTrackingEnabled !== false;
+    const configImmersiveFullscreenEnabled =
+      persistedConfig.settings.immersiveFullscreenEnabled !== false;
     const initialStereoEnabled =
       deviceOptions.stereoEnabled ?? configStereoEnabled;
     const globalSpace = new GlobalSpace();
@@ -590,6 +593,7 @@ export class XRDevice {
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
       stereoEnabled: initialStereoEnabled,
       faceTrackingEnabled: configFaceTrackingEnabled,
+      immersiveFullscreenEnabled: configImmersiveFullscreenEnabled,
       ipd: FORCED_IPD_METERS,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
@@ -1109,6 +1113,28 @@ export class XRDevice {
 		this.stopFaceTracking();
 	}
 	}
+
+  get immersiveFullscreenEnabled(): boolean {
+    return this[P_DEVICE].immersiveFullscreenEnabled;
+  }
+
+  set immersiveFullscreenEnabled(value: boolean) {
+    const next = Boolean(value);
+    const prev = this[P_DEVICE].immersiveFullscreenEnabled;
+    if (prev === next) {
+      return;
+    }
+    this[P_DEVICE].immersiveFullscreenEnabled = next;
+    const session = this.activeSession;
+    if (!session || !this.isImmersiveSession(session)) {
+      return;
+    }
+    if (next) {
+      this.ensureFullscreenForImmersiveSession();
+    } else {
+      this.exitFullscreenForImmersiveSession();
+    }
+  }
 
   get ipd() {
     return this[P_DEVICE].ipd;
@@ -2082,6 +2108,9 @@ export class XRDevice {
     if (!session || session[P_SESSION].mode !== 'immersive-vr') {
       return;
     }
+    if (!this[P_DEVICE].immersiveFullscreenEnabled) {
+      return;
+    }
     const container = this[P_DEVICE].canvasContainer;
     if (this.getActiveFullscreenElement() === container) {
       return;
@@ -2185,6 +2214,18 @@ export class XRDevice {
     const nextFaceTrackingEnabled = config.settings?.faceTrackingEnabled !== false;
     if (nextFaceTrackingEnabled !== this[P_DEVICE].faceTrackingEnabled) {
       this.faceTrackingEnabled = nextFaceTrackingEnabled;
+    }
+    const nextFullscreenEnabled = config.settings?.immersiveFullscreenEnabled !== false;
+    if (nextFullscreenEnabled !== this[P_DEVICE].immersiveFullscreenEnabled) {
+      this[P_DEVICE].immersiveFullscreenEnabled = nextFullscreenEnabled;
+      const session = this.activeSession;
+      if (session && this.isImmersiveSession(session)) {
+        if (nextFullscreenEnabled) {
+          this.ensureFullscreenForImmersiveSession();
+        } else {
+          this.exitFullscreenForImmersiveSession();
+        }
+      }
     }
   }
 

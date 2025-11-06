@@ -109,6 +109,7 @@ export class DevUI {
 
 		const faceInput = document.createElement('input');
 		const stereoInput = document.createElement('input');
+		const fullscreenInput = document.createElement('input');
 
 		const closeBtn = document.createElement('button');
 		closeBtn.textContent = 'Close';
@@ -123,6 +124,7 @@ export class DevUI {
 		modal.appendChild(header);
 		modal.appendChild(mkRow('Enable face tracking', faceInput));
 		modal.appendChild(mkRow('Enable stereo rendering (requires reload)', stereoInput));
+		modal.appendChild(mkRow('Auto fullscreen immersive sessions', fullscreenInput));
 		modal.appendChild(closeBtn);
 		modalBackdrop.appendChild(modal);
 
@@ -130,6 +132,7 @@ export class DevUI {
 			const cfg = getPortalEmulatorConfig();
 			faceInput.checked = cfg.settings?.faceTrackingEnabled !== false;
 			stereoInput.checked = Boolean(cfg.settings?.stereoRenderingEnabled);
+			fullscreenInput.checked = cfg.settings?.immersiveFullscreenEnabled !== false;
 		};
 
 		applyInitial();
@@ -161,6 +164,16 @@ export class DevUI {
 			const enabled = Boolean(stereoInput.checked);
 			updatePortalEmulatorConfig({ settings: { stereoRenderingEnabled: enabled } });
 			console.info('[DevUI] Stereo rendering preference saved. Reload the page to apply.');
+		});
+
+		fullscreenInput.addEventListener('change', () => {
+			const enabled = Boolean(fullscreenInput.checked);
+			updatePortalEmulatorConfig({ settings: { immersiveFullscreenEnabled: enabled } });
+			try {
+				xrDevice.immersiveFullscreenEnabled = enabled;
+			} catch {
+				// ignore if not available
+			}
 		});
 
 		this.devUIContainer.appendChild(placeholder);

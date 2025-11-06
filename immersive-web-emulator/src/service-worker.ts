@@ -23,6 +23,7 @@ interface PortalEmulatorConfig {
 	settings: {
 		faceTrackingEnabled: boolean;
 		stereoRenderingEnabled: boolean;
+		immersiveFullscreenEnabled: boolean;
 	};
 	version?: number;
 }
@@ -37,6 +38,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	settings: {
 		faceTrackingEnabled: true,
 		stereoRenderingEnabled: false,
+		immersiveFullscreenEnabled: true,
 	},
 	version: 1,
 };
@@ -119,6 +121,7 @@ function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfi
 		settings: {
 			faceTrackingEnabled: config.settings.faceTrackingEnabled,
 			stereoRenderingEnabled: config.settings.stereoRenderingEnabled,
+			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
 		},
 		version:
 			typeof config.version === 'number' ? config.version : DEFAULT_CONFIG.version,
@@ -135,6 +138,7 @@ function normalizeConfig(
 		settings: {
 			faceTrackingEnabled: base.settings.faceTrackingEnabled,
 			stereoRenderingEnabled: base.settings.stereoRenderingEnabled,
+			immersiveFullscreenEnabled: base.settings.immersiveFullscreenEnabled,
 		},
 		version:
 			typeof base.version === 'number' ? base.version : DEFAULT_CONFIG.version,
@@ -165,6 +169,10 @@ function normalizeConfig(
 		const stereoCandidate = (settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled;
 		if (typeof stereoCandidate === 'boolean') {
 			result.settings.stereoRenderingEnabled = stereoCandidate;
+		}
+		const fullscreenCandidate = (settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled;
+		if (typeof fullscreenCandidate === 'boolean') {
+			result.settings.immersiveFullscreenEnabled = fullscreenCandidate;
 		}
 	}
 

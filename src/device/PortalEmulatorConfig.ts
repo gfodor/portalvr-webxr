@@ -5,6 +5,7 @@
  *  - device.suffix (persistent device identity suffix)
  *  - settings.faceTrackingEnabled (default true)
  *  - settings.stereoRenderingEnabled (default false)
+ *  - settings.immersiveFullscreenEnabled (default true)
  *
  * All reads/writes are resilient to localStorage errors and missing window.
  */
@@ -28,6 +29,7 @@ export interface PortalEmulatorConfig {
   settings: {
     faceTrackingEnabled: boolean;
     stereoRenderingEnabled: boolean;
+    immersiveFullscreenEnabled: boolean;
   };
   /** reserved for future migrations */
   version?: number;
@@ -44,6 +46,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
   settings: {
     faceTrackingEnabled: true,
     stereoRenderingEnabled: false,
+    immersiveFullscreenEnabled: true,
   },
   version: 1,
 };
@@ -89,6 +92,10 @@ function parseConfig(raw: string | null): PortalEmulatorConfig | null {
           typeof settings.stereoRenderingEnabled === 'boolean'
             ? settings.stereoRenderingEnabled
             : DEFAULT_CONFIG.settings.stereoRenderingEnabled,
+        immersiveFullscreenEnabled:
+          typeof settings.immersiveFullscreenEnabled === 'boolean'
+            ? settings.immersiveFullscreenEnabled
+            : DEFAULT_CONFIG.settings.immersiveFullscreenEnabled,
       },
       version: typeof obj.version === 'number' ? obj.version : DEFAULT_CONFIG.version,
     };
