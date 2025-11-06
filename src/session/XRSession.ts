@@ -395,9 +395,6 @@ export class XRSession extends EventTarget {
 
           const focalOffset = ANAGLYPH_FOCAL_OFFSET;
 
-          const prevFramebuffer = context.getParameter(
-            context.FRAMEBUFFER_BINDING,
-          ) as WebGLFramebuffer | null;
           compositePass.compose({
             leftTexture: stereoTargets.leftTexture,
             rightTexture: stereoTargets.rightTexture,
@@ -406,8 +403,6 @@ export class XRSession extends EventTarget {
             outputHeight: canvas.height,
             focalOffset,
           });
-          context.bindFramebuffer(context.FRAMEBUFFER, prevFramebuffer);
-          baseLayer.bindFramebufferForEye(XREye.Left);
         }
 
         // - Set frame’s active boolean to false.

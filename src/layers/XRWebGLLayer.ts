@@ -301,9 +301,11 @@ export class XRWebGLLayer extends XRLayer {
       return;
     }
 
-    const prevActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE);
-    const prevFramebufferDraw = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const prevActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
+    const prevFramebufferDraw = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
     const prevFramebufferRead = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const prevReadBuffer = gl.getParameter(gl.READ_BUFFER) as number;
+
     const prevTex0 = (() => {
       gl.activeTexture(gl.TEXTURE0);
       return gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
@@ -327,8 +329,11 @@ export class XRWebGLLayer extends XRLayer {
     gl.bindTexture(gl.TEXTURE_2D, targets.rightTexture);
     gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, halfWidth, 0, halfWidth, height);
 
+    // Restore read framebuffer and its read buffer first, then restore draw framebuffer
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevFramebufferRead);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebufferDraw);
+    gl.readBuffer(prevReadBuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevFramebufferDraw);
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, prevTex0);
     gl.activeTexture(gl.TEXTURE1);

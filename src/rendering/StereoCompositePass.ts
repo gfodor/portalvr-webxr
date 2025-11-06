@@ -121,31 +121,67 @@ export class StereoCompositePass {
 
     const gl = this.gl;
 
-    const prevFramebuffer = gl.getParameter(gl.FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
-    const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+    // ---- Snapshot state we will touch ----
+    // Programs & viewport
     const prevProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
+    const prevViewport = gl.getParameter(gl.VIEWPORT) as Int32Array;
+
+    // Textures & active unit
     const prevActiveTexture = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     gl.activeTexture(gl.TEXTURE0);
     const prevTex0 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
     gl.activeTexture(gl.TEXTURE1);
     const prevTex1 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
+
+    // Vertex array binding (VAO)
+    const prevVAO = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
+
+    // Framebuffers (READ & DRAW separately in WebGL2)
+    const prevDrawFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+    const prevReadFramebuffer = gl.getParameter(gl.READ_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+
+    // Enables
     const depthTestEnabled = gl.isEnabled(gl.DEPTH_TEST);
     const blendEnabled = gl.isEnabled(gl.BLEND);
     const cullEnabled = gl.isEnabled(gl.CULL_FACE);
+    const scissorEnabled = gl.isEnabled(gl.SCISSOR_TEST);
+
+    // Masks
     const prevColorMask = gl.getParameter(gl.COLOR_WRITEMASK) as boolean[];
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, outputFramebuffer);
+    // Blend function/equation/color (these can be mutated by libraries)
+    const prevBlendSrcRGB   = gl.getParameter(gl.BLEND_SRC_RGB) as number;
+    const prevBlendDstRGB   = gl.getParameter(gl.BLEND_DST_RGB) as number;
+    const prevBlendSrcAlpha = gl.getParameter(gl.BLEND_SRC_ALPHA) as number;
+    const prevBlendDstAlpha = gl.getParameter(gl.BLEND_DST_ALPHA) as number;
+    const prevBlendEqRGB    = gl.getParameter(gl.BLEND_EQUATION_RGB) as number;
+    const prevBlendEqAlpha  = gl.getParameter(gl.BLEND_EQUATION_ALPHA) as number;
+    const prevBlendColor    = gl.getParameter(gl.BLEND_COLOR) as Float32Array;
+
+    // Scissor box (in case the engine had set a tight box)
+    const prevScissorBox = gl.getParameter(gl.SCISSOR_BOX) as Int32Array;
+
+    // ---- Set state for fullscreen composite ----
+    // Bind only DRAW framebuffer so READ stays untouched
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, outputFramebuffer);
     gl.viewport(0, 0, outputWidth, outputHeight);
 
     if (depthTestEnabled) gl.disable(gl.DEPTH_TEST);
-    if (blendEnabled) gl.disable(gl.BLEND);
-    if (cullEnabled) gl.disable(gl.CULL_FACE);
+    if (blendEnabled)     gl.disable(gl.BLEND);
+    if (cullEnabled)      gl.disable(gl.CULL_FACE);
+
+    // Disable scissor to ensure full-screen draw, regardless of prior engine scissor
+    if (scissorEnabled) gl.disable(gl.SCISSOR_TEST);
+
     gl.colorMask(true, true, true, true);
 
     gl.useProgram(this.program);
+
+    // Bind textures
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, leftTexture);
     gl.uniform1i(this.uLeftLoc, 0);
+
     if (this.uRightLoc) {
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, rightTexture);
@@ -155,23 +191,45 @@ export class StereoCompositePass {
       gl.uniform1f(this.uFocalOffsetLoc, focalOffset);
     }
 
+    // Draw fullscreen triangle using compositor VAO
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.bindVertexArray(null);
 
+    // ---- Restore previous state (inverse order is a reasonable heuristic) ----
+    // Restore VAO binding
+    gl.bindVertexArray(prevVAO);
+
+    // Restore masks & toggles
     gl.colorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
-    if (cullEnabled) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
+
+    // Restore scissor state & box
+    gl.scissor(prevScissorBox[0], prevScissorBox[1], prevScissorBox[2], prevScissorBox[3]);
+    if (scissorEnabled) gl.enable(gl.SCISSOR_TEST); else gl.disable(gl.SCISSOR_TEST);
+
+    // Restore blend func/equation/color and toggle
+    gl.blendFuncSeparate(prevBlendSrcRGB, prevBlendDstRGB, prevBlendSrcAlpha, prevBlendDstAlpha);
+    gl.blendEquationSeparate(prevBlendEqRGB, prevBlendEqAlpha);
+    gl.blendColor(prevBlendColor[0], prevBlendColor[1], prevBlendColor[2], prevBlendColor[3]);
     if (blendEnabled) gl.enable(gl.BLEND); else gl.disable(gl.BLEND);
+
+    // Restore cull/depth toggles
+    if (cullEnabled) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
     if (depthTestEnabled) gl.enable(gl.DEPTH_TEST); else gl.disable(gl.DEPTH_TEST);
 
+    // Restore textures & active texture
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, prevTex1);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, prevTex0);
     gl.activeTexture(prevActiveTexture);
+
+    // Restore program & viewport
     gl.useProgram(prevProgram);
     gl.viewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
+
+    // Restore READ/DRAW FBOs exactly as they were
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, prevDrawFramebuffer);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, prevReadFramebuffer);
   }
 
   private initProgram() {

@@ -226,6 +226,7 @@ export interface DevUI {
   render(time: number): void;
   get devUICanvas(): HTMLCanvasElement;
   get devUIContainer(): HTMLDivElement;
+  setControllerConnected(connected: boolean): void;
 }
 
 export interface SEMConstructor {
@@ -1037,7 +1038,11 @@ export class XRDevice {
 	}
 
   installDevUI(devUIConstructor: DevUIConstructor) {
-    this[P_DEVICE].devui = new devUIConstructor(this);
+    const devui = new devUIConstructor(this);
+    this.portalQrOverlay?.dispose();
+    this.portalQrOverlay = null;
+    devui.setControllerConnected(false);
+    this[P_DEVICE].devui = devui;
   }
 
   installSEM(semConstructor: SEMConstructor) {
@@ -1314,6 +1319,7 @@ export class XRDevice {
 
   private handleControllerConnectionChange = (connected: boolean) => {
     this.portalQrOverlay?.setVisible(!connected);
+    this[P_DEVICE].devui?.setControllerConnected(connected);
     if (!connected) {
       this.portalControllerRuntime?.handleDisconnect();
       this.lastControllerState = null;

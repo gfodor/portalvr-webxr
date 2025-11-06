@@ -13,7 +13,10 @@ export default {
 	external: ['portalvr'],
 	plugins: [
 		peerDepsExternal(),
-		resolve(),
+		resolve({
+			browser: true,
+			preferBuiltins: false,
+		}),
 		commonjs(),
 		replace({
 			'process.env.NODE_ENV': JSON.stringify('production'),
