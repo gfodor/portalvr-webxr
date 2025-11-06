@@ -13,11 +13,18 @@ type ComposeParams = {
 };
 
 const VERT_SRC = `#version 300 es
-layout (location = 0) in vec2 a_position;
 out vec2 v_uv;
+
+const vec2 POSITIONS[3] = vec2[3](
+  vec2(-1.0, -1.0),
+  vec2(3.0, -1.0),
+  vec2(-1.0, 3.0)
+);
+
 void main() {
-  v_uv = a_position * 0.5 + 0.5;
-  gl_Position = vec4(a_position, 0.0, 1.0);
+  vec2 position = POSITIONS[gl_VertexID];
+  v_uv = position * 0.5 + 0.5;
+  gl_Position = vec4(position, 0.0, 1.0);
 }
 `;
 
@@ -76,8 +83,6 @@ void main() {
 export class StereoCompositePass {
   private readonly gl: WebGL2RenderingContext;
   private program: WebGLProgram | null = null;
-  private vao: WebGLVertexArrayObject | null = null;
-  private vbo: WebGLBuffer | null = null;
   private uLeftLoc: WebGLUniformLocation | null = null;
   private uRightLoc: WebGLUniformLocation | null = null;
   private uFocalOffsetLoc: WebGLUniformLocation | null = null;
@@ -90,20 +95,16 @@ export class StereoCompositePass {
   dispose() {
     const gl = this.gl;
     try {
-      if (this.vbo) gl.deleteBuffer(this.vbo);
-      if (this.vao) gl.deleteVertexArray(this.vao);
       if (this.program) gl.deleteProgram(this.program);
     } catch (error) {
       console.warn('[StereoCompositePass] dispose failed', error);
     }
-    this.vbo = null;
-    this.vao = null;
     this.program = null;
     this.uLeftLoc = null;
   }
 
   compose(params: ComposeParams) {
-    if (!this.program || !this.vao || !this.uLeftLoc) {
+    if (!this.program || !this.uLeftLoc) {
       return;
     }
 
@@ -132,9 +133,6 @@ export class StereoCompositePass {
     const prevTex0 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
     gl.activeTexture(gl.TEXTURE1);
     const prevTex1 = gl.getParameter(gl.TEXTURE_BINDING_2D) as WebGLTexture | null;
-
-    // Vertex array binding (VAO)
-    const prevVAO = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
 
     // Framebuffers (READ & DRAW separately in WebGL2)
     const prevDrawFramebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
@@ -191,14 +189,10 @@ export class StereoCompositePass {
       gl.uniform1f(this.uFocalOffsetLoc, focalOffset);
     }
 
-    // Draw fullscreen triangle using compositor VAO
-    gl.bindVertexArray(this.vao);
+    // Draw fullscreen triangle via gl_VertexID
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // ---- Restore previous state (inverse order is a reasonable heuristic) ----
-    // Restore VAO binding
-    gl.bindVertexArray(prevVAO);
-
     // Restore masks & toggles
     gl.colorMask(prevColorMask[0], prevColorMask[1], prevColorMask[2], prevColorMask[3]);
 
@@ -262,26 +256,6 @@ export class StereoCompositePass {
     this.uRightLoc = gl.getUniformLocation(program, 'u_right');
     this.uFocalOffsetLoc = gl.getUniformLocation(program, 'u_focalOffset');
 
-    this.vao = gl.createVertexArray();
-    this.vbo = gl.createBuffer();
-
-    if (!this.vao || !this.vbo) {
-      console.warn('[StereoCompositePass] Failed to allocate buffers');
-      return;
-    }
-
-    gl.bindVertexArray(this.vao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-    const verts = new Float32Array([
-      -1, -1,
-       3, -1,
-      -1,  3,
-    ]);
-    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, null);
-    gl.bindVertexArray(null);
   }
 
   private createShader(type: GLenum, source: string): WebGLShader | null {
