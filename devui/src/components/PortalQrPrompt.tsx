@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import qrcodeGenerator from 'qrcode-generator';
+import { ASSET_SWIPE_CALIBRATION } from '../generated/assets.js';
 
 export type PortalQrPromptProps = {
 	pairingUrl: string;
@@ -78,6 +79,7 @@ export function PortalQrPrompt({
 		return null;
 	}
 
+	const isSwipePrompt = status === 'swipe';
 	const clampedCountdown =
 		searchCountdownSeconds != null ? Math.max(0, searchCountdownSeconds) : null;
 
@@ -92,39 +94,57 @@ export function PortalQrPrompt({
 			? `Scan to pair ${deviceName}`
 			: status === 'tracking-issues'
 				? 'Tracking issues, hold the controller still and ensure camera is clear.'
-				: 'Point controller at screen and swipe from right edge';
+				: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
+
+	const containerClassName = isSwipePrompt
+		? 'portal-qr-pill portal-qr-pill--swipe'
+		: 'portal-qr-pill';
 
 	return (
-		<aside className="portal-qr-pill" role="status" aria-live="polite">
-			<span className="portal-qr-pill__title">{title}</span>
-			{status === 'qr' && (
-				<canvas
-					ref={canvasRef}
-					className="portal-qr-pill__canvas"
-					width={QR_SIZE}
-					height={QR_SIZE}
-					aria-label={`PortalVR pairing QR code for ${deviceName}`}
+		<aside className={containerClassName} role="status" aria-live="polite">
+			{isSwipePrompt && (
+				<video
+					className="portal-qr-pill__swipe-video"
+					src={ASSET_SWIPE_CALIBRATION}
+					width={75}
+					muted
+					autoPlay
+					loop
+					playsInline
+					aria-hidden="true"
 				/>
 			)}
-			{status === 'qr' && (
-				<div className="portal-qr-pill__footer">
-					<span className="portal-qr-pill__search-status">{footerLabel}</span>
-					{!isSearchingActively && onSearchNow && clampedCountdown != null && (
-						<button
-							type="button"
-							className="portal-qr-pill__search-button"
-							onClick={onSearchNow}
-						>
-							Search Now
-						</button>
-					)}
-				</div>
-			)}
-			{status !== 'qr' && (
-				<span className="portal-qr-pill__subtitle">
-					{deviceUiCode} · {deviceId}
-				</span>
-			)}
+			<div className="portal-qr-pill__content">
+				<span className="portal-qr-pill__title">{title}</span>
+				{status === 'qr' && (
+					<canvas
+						ref={canvasRef}
+						className="portal-qr-pill__canvas"
+						width={QR_SIZE}
+						height={QR_SIZE}
+						aria-label={`PortalVR pairing QR code for ${deviceName}`}
+					/>
+				)}
+				{status === 'qr' && (
+					<div className="portal-qr-pill__footer">
+						<span className="portal-qr-pill__search-status">{footerLabel}</span>
+						{!isSearchingActively && onSearchNow && clampedCountdown != null && (
+							<button
+								type="button"
+								className="portal-qr-pill__search-button"
+								onClick={onSearchNow}
+							>
+								Search Now
+							</button>
+						)}
+					</div>
+				)}
+				{status !== 'qr' && (
+					<span className="portal-qr-pill__subtitle">
+						{deviceUiCode} · {deviceId}
+					</span>
+				)}
+			</div>
 		</aside>
 	);
 }

@@ -212,6 +212,34 @@ const portalCss = `
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+.portal-qr-pill--swipe {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--portal-spacing-md);
+}
+
+.portal-qr-pill__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--portal-spacing-sm);
+  text-align: center;
+}
+
+.portal-qr-pill--swipe .portal-qr-pill__content {
+  align-items: flex-start;
+  text-align: left;
+}
+
+.portal-qr-pill__swipe-video {
+  width: 125px;
+  border-radius: var(--portal-radius-card);
+  flex-shrink: 0;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  object-ft: cover;
+}
+
 .portal-qr-pill__title {
   font-size: 0.875rem;
   font-weight: 600;

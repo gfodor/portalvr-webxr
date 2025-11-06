@@ -640,6 +640,7 @@ interface DualCoordOpts {
   pcOptions?: RTCConfiguration;
   pcConstraints?: any;
   sdpTransform?: (s: string) => string;
+  enableLocalPath?: boolean;
 }
 
 export interface SignalingPathSnapshot {
@@ -668,6 +669,7 @@ export class DualRoomCoordinator {
   _pcOptions?: RTCConfiguration;
   _pcConstraints?: any;
   _sdpTransform?: (s: string) => string;
+  private _enableLocalPath: boolean;
 
   connected = false;
   reconnecting = false;
@@ -705,6 +707,7 @@ export class DualRoomCoordinator {
     this._pcOptions = opts.pcOptions;
     this._pcConstraints = opts.pcConstraints;
     this._sdpTransform = opts.sdpTransform;
+    this._enableLocalPath = opts.enableLocalPath !== false;
 
     this._setupIdleWakeListeners();
   }
@@ -832,7 +835,14 @@ export class DualRoomCoordinator {
   }
 
   async start(): Promise<void> {
-    const localCfg: RTCConfiguration = { ...(this._pcOptions || {}), iceServers: [] };
+    this.localCandidates = [];
+    this.remoteCandidates = [];
+    this.local2Candidates = [];
+    this.remote2Candidates = [];
+    this.stats1 = null;
+    this.stats2 = null;
+    this.winner = undefined;
+
     const remoteCfg: RTCConfiguration = {
       ...(this._pcOptions || {}),
       iceServers: [],
@@ -840,24 +850,38 @@ export class DualRoomCoordinator {
       iceTransportPolicy: 'relay' as any,
     };
 
-    const localRoom = `${this.base}_local`;
+    const startPromises: Array<Promise<unknown>> = [];
+
+    if (this._enableLocalPath) {
+      const localCfg: RTCConfiguration = { ...(this._pcOptions || {}), iceServers: [] };
+      const localRoom = `${this.base}_local`;
+      this.s1 = this._initSession('local', {
+        roomId: localRoom,
+        iceConfig: localCfg,
+        requestTurn: false,
+        trickle: false,
+      });
+      startPromises.push(this.s1.start());
+    } else {
+      if (this.s1) {
+        try {
+          this.s1.end();
+        } catch {}
+      }
+      this.s1 = null;
+      this.log('LAN path disabled; skipping local signaling session');
+    }
+
     const remoteRoom = `${this.base}_remote`;
-
-    this.s1 = this._initSession('local', {
-      roomId: localRoom,
-      iceConfig: localCfg,
-      requestTurn: false,
-      trickle: false,
-    });
-
     this.s2 = this._initSession('remote', {
       roomId: remoteRoom,
       iceConfig: remoteCfg,
       requestTurn: true,
       trickle: true,
     });
+    startPromises.push(this.s2.start());
 
-    const results = await Promise.allSettled([this.s1.start(), this.s2.start()]);
+    const results = await Promise.allSettled(startPromises);
     const allRejected = results.every((r) => r.status === 'rejected');
     if (allRejected && !this.connected) {
       this.log(`both session starts failed; scheduling reconnect`);
@@ -1180,12 +1204,14 @@ export class SIGCF {
       rtcPeerConnectionProprietaryConstraints,
       sdpTransform,
       log,
+      enableLocalPath,
     }: {
       workerUrl: string;
       rtcPeerConnectionOptions?: RTCConfiguration;
       rtcPeerConnectionProprietaryConstraints?: any;
       sdpTransform?: (s: string) => string;
       log?: (m: string) => void;
+      enableLocalPath?: boolean;
     } = { workerUrl: '' as any },
   ) {
     this.roomId = roomId;
@@ -1220,6 +1246,7 @@ export class SIGCF {
       pcOptions: rtcPeerConnectionOptions,
       pcConstraints: rtcPeerConnectionProprietaryConstraints,
       sdpTransform: typeof sdpTransform === 'function' ? sdpTransform : (s) => s,
+      enableLocalPath,
     });
   }
 

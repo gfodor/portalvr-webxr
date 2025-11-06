@@ -14,6 +14,7 @@ const DEFAULT_SETTINGS: PortalEmulatorConfig['settings'] = {
 	faceTrackingEnabled: true,
 	stereoRenderingEnabled: false,
 	immersiveFullscreenEnabled: true,
+	connectToControllerViaLan: true,
 };
 const DEFAULT_VERSION = 1;
 
@@ -107,6 +108,7 @@ function buildConfig(
 			faceTrackingEnabled: DEFAULT_SETTINGS.faceTrackingEnabled,
 			stereoRenderingEnabled: DEFAULT_SETTINGS.stereoRenderingEnabled,
 			immersiveFullscreenEnabled: DEFAULT_SETTINGS.immersiveFullscreenEnabled,
+			connectToControllerViaLan: DEFAULT_SETTINGS.connectToControllerViaLan,
 		},
 		version: DEFAULT_VERSION,
 	};
@@ -136,6 +138,10 @@ function buildConfig(
 		const fullscreenCandidate = (settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled;
 		if (typeof fullscreenCandidate === 'boolean') {
 			result.settings.immersiveFullscreenEnabled = fullscreenCandidate;
+		}
+		const lanCandidate = (settingsCandidate as { connectToControllerViaLan?: unknown }).connectToControllerViaLan;
+		if (typeof lanCandidate === 'boolean') {
+			result.settings.connectToControllerViaLan = lanCandidate;
 		}
 	}
 

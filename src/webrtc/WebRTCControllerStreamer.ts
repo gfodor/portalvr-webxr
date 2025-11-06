@@ -22,6 +22,8 @@ export interface WebRTCControllerStreamOptions {
   log?: (m: string) => void;
   /** Auto-start the connection as soon as the streamer is created. Default: true. */
   autoStart?: boolean;
+  /** Enable the LAN-optimized (host candidate) path. Default: true. */
+  enableLocalPath?: boolean;
   /** Called whenever a controller packet is decoded. */
   onControllerState?: (state: ControllerState) => void;
   /** Called when the data channel connection changes state. */
@@ -39,6 +41,7 @@ export class WebRTCControllerStreamer {
   private readonly roomId: string;
   private readonly log: (m: string) => void;
   private readonly autoStart: boolean;
+  private readonly enableLocalPath: boolean;
   private readonly onControllerState?: (state: ControllerState) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly onOrientationReset?: () => void;
@@ -56,6 +59,7 @@ export class WebRTCControllerStreamer {
     this.roomId = options.roomId || 'test2';
     this.log = typeof options.log === 'function' ? options.log : (m: string) => console.log(`[webrtc] ${m}`);
     this.autoStart = options.autoStart !== false;
+    this.enableLocalPath = options.enableLocalPath !== false;
     this.onControllerState = options.onControllerState;
     this.onConnectionChange = options.onConnectionChange;
     this.onOrientationReset = options.onOrientationReset;
@@ -112,6 +116,7 @@ export class WebRTCControllerStreamer {
     this.sigcf = new SIGCF(this.roomId, {
       workerUrl: this.workerUrl,
       log: (m) => this.log(m),
+      enableLocalPath: this.enableLocalPath,
     });
 
     if (this.onSignalingStatus) {

@@ -32,6 +32,7 @@ type EmulatorSettingsState = {
 	faceTrackingEnabled: boolean;
 	stereoRenderingEnabled: boolean;
 	immersiveFullscreenEnabled: boolean;
+	connectToControllerViaLan: boolean;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -208,6 +209,20 @@ export function DevUIRoot({
 		[xrDevice],
 	);
 
+	const toggleControllerLan = useCallback(
+		(event: ChangeEvent<HTMLInputElement>) => {
+			const enabled = event.currentTarget.checked;
+			setSettings((prev) => ({
+				...prev,
+				connectToControllerViaLan: enabled,
+			}));
+			updatePortalEmulatorConfig({
+				settings: { connectToControllerViaLan: enabled },
+			});
+		},
+		[],
+	);
+
 	const closeOnScrimClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
@@ -352,17 +367,29 @@ export function DevUIRoot({
 								</label>
 						</section>
 
-						<section className="portal-section">
-							<h3 className="portal-section__heading">Immersive Display</h3>
-							<label className="portal-toggle-row">
-								<input
-									type="checkbox"
-									checked={settings.immersiveFullscreenEnabled}
-									onChange={toggleFullscreen}
-								/>
-								<span>Enable fullscreen when entering VR</span>
-							</label>
-						</section>
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Immersive Display</h3>
+						<label className="portal-toggle-row">
+							<input
+								type="checkbox"
+								checked={settings.immersiveFullscreenEnabled}
+								onChange={toggleFullscreen}
+							/>
+							<span>Enable fullscreen when entering VR</span>
+						</label>
+					</section>
+
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Controller Connection</h3>
+						<label className="portal-toggle-row">
+							<input
+								type="checkbox"
+								checked={settings.connectToControllerViaLan}
+								onChange={toggleControllerLan}
+							/>
+							<span>Connect to controller via LAN</span>
+						</label>
+					</section>
 
 						<section className="portal-section">
 							<h3 className="portal-section__heading">Rendering Mode</h3>
@@ -454,6 +481,8 @@ function readSettings(): EmulatorSettingsState {
 		stereoRenderingEnabled: Boolean(config.settings?.stereoRenderingEnabled),
 		immersiveFullscreenEnabled:
 			config.settings?.immersiveFullscreenEnabled !== false,
+		connectToControllerViaLan:
+			config.settings?.connectToControllerViaLan !== false,
 	};
 }
 

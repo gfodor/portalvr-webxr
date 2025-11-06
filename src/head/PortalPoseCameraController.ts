@@ -18,33 +18,16 @@ const QUAT_SIZE_BYTES = QUAT_COMPONENTS * FLOAT_SIZE_BYTES; // 16
 const VEC3_SIZE_BYTES = VEC3_COMPONENTS * FLOAT_SIZE_BYTES; // 12
 const POSE_SIZE_BYTES = QUAT_SIZE_BYTES + VEC3_SIZE_BYTES; // 28 (float-aligned)
 
-const KEY_FORWARD = 'KeyW';
-const KEY_BACK = 'KeyS';
-const KEY_LEFT = 'KeyA';
-const KEY_RIGHT = 'KeyD';
-const KEY_UP = 'KeyQ';
-const KEY_DOWN = 'KeyE';
-const KEY_YAW_LEFT = 'KeyZ';
-const KEY_YAW_RIGHT = 'KeyC';
-const KEY_PITCH_UP = 'KeyF';
-const KEY_PITCH_DOWN = 'KeyV';
-
-const DEFAULT_SPEED_MPS = 1.25;
-const YAW_SPEED_RAD_S = degreesToRadians(60);
-const PITCH_SPEED_RAD_S = degreesToRadians(30);
 const Y_OFFSET_MIN = -1.5;
 const Y_OFFSET_MAX = 1.5;
 
 interface PortalPoseCameraInternalOptions {
-  speed: number;
   cameraPitchRad: number;
   fixedDisplayLocked: boolean;
   debug: boolean;
 }
 
 export interface PortalPoseCameraOptions extends PortalPoseLoadOptions {
-  /** Movement speed applied while a key is held, in metres per second. Default: 1.25. */
-  speedMetersPerSecond?: number;
   /** Overrides the virtual camera pitch before offsets (degrees). Default: 45. */
   cameraPitchDegrees?: number;
   /** Treat the camera as fixed display-locked to avoid vertical coupling. Default: false. */
@@ -55,14 +38,12 @@ export interface PortalPoseCameraOptions extends PortalPoseLoadOptions {
 
 class PortalPoseCameraNudger {
   private readonly module: PortalPoseModuleInstance;
-  private readonly speed: number;
   private readonly cameraPitchRad: number;
   private readonly cameraPitchSin: number;
   private readonly fixedDisplayLocked: number;
   private readonly basePosition: Vec3Like;
   private readonly baseOrientation: QuatLike;
   private readonly debugEnabled: boolean;
-  private readonly keyState: Record<string, boolean> = Object.create(null);
   private readonly smoothedPosPtr: number;
   private readonly smoothedQuatPtr: number;
   private readonly uiOffsetPtr: number;
@@ -76,33 +57,12 @@ class PortalPoseCameraNudger {
   private lastPredictedMs: number | null = null;
   private lastNowMs: number | null = null;
 
-  private readonly handleKeyDown = (event: KeyboardEvent) => {
-    if (!this.isMovementKey(event.code)) {
-      return;
-    }
-    if (event.target instanceof HTMLElement) {
-      const tag = event.target.tagName.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || event.target.isContentEditable) {
-        return;
-      }
-    }
-    this.keyState[event.code] = true;
-  };
-
-  private readonly handleKeyUp = (event: KeyboardEvent) => {
-    if (!this.isMovementKey(event.code)) {
-      return;
-    }
-    this.keyState[event.code] = false;
-  };
-
   constructor(
     module: PortalPoseModuleInstance,
     device: XRDevice,
     options: PortalPoseCameraInternalOptions,
   ) {
     this.module = module;
-    this.speed = options.speed;
     this.cameraPitchRad = options.cameraPitchRad;
     this.cameraPitchSin = Math.sin(this.cameraPitchRad);
     this.fixedDisplayLocked = options.fixedDisplayLocked ? 1 : 0;
@@ -157,8 +117,6 @@ class PortalPoseCameraNudger {
     ]);
     this.latestFinalPose = new Float32Array(this.latestSmoothedPose);
 
-    window.addEventListener('keydown', this.handleKeyDown);
-    window.addEventListener('keyup', this.handleKeyUp);
   }
 
   public getYawOffsetRad(): number {
@@ -166,21 +124,7 @@ class PortalPoseCameraNudger {
   }
 
   handleFrame(device: XRDevice, frame: XRFrame) {
-    const dt = this.computeDeltaSeconds(frame);
-    if (dt > 0) {
-      const move = this.computeKeyboardDelta(dt);
-      if (move.dx !== 0 || move.dy !== 0 || move.dz !== 0) {
-        this.applyKeyboardDelta(move.dx, move.dy, move.dz);
-      }
-      const dYaw = this.computeYawDelta(dt);
-      if (dYaw !== 0) {
-        this.applyYawDelta(dYaw);
-      }
-      const dPitch = this.computePitchDelta(dt);
-      if (dPitch !== 0) {
-        this.offsetController.nudgePitchLocal(dPitch);
-      }
-    }
+    void this.computeDeltaSeconds(frame);
     const nowNs = this.nowNs();
     this.offsetController.stepSmoothing(nowNs);
     this.addPoseSample(nowNs);
@@ -196,7 +140,7 @@ class PortalPoseCameraNudger {
 
     // 1) Vertical translation along screen-up
     if (Math.abs(inc.incY) > 1e-6) {
-      this.applyKeyboardDelta(0, inc.incY, 0);
+      this.applyTranslationDelta(0, inc.incY, 0);
     }
 
     // 2) Yaw (use RAW-baselined continuity path already implemented by applyYawDelta)
@@ -211,15 +155,12 @@ class PortalPoseCameraNudger {
 
     // 4) Horizontal camera-local translation (X/Z)
     if (Math.abs(inc.incX) > 1e-6 || Math.abs(inc.incZ) > 1e-6) {
-      this.applyKeyboardDelta(inc.incX, 0, inc.incZ);
+      this.applyTranslationDelta(inc.incX, 0, inc.incZ);
     }
   }
 
   public resetOrientation() {
     this.offsetController.resetAll();
-    for (const code of Object.keys(this.keyState)) {
-      this.keyState[code] = false;
-    }
     const sample: PoseArray = [
       this.basePosition.x,
       this.basePosition.y,
@@ -237,32 +178,12 @@ class PortalPoseCameraNudger {
   }
 
   public dispose() {
-    window.removeEventListener('keydown', this.handleKeyDown);
-    window.removeEventListener('keyup', this.handleKeyUp);
     this.module._free(this.smoothedPosPtr);
     this.module._free(this.smoothedQuatPtr);
     this.module._free(this.uiOffsetPtr);
     this.module._free(this.deltaPtr);
     this.module._free(this.posePtr);
     this.module._free(this.yawResultPtr);
-  }
-
-  private isMovementKey(code: string): boolean {
-    switch (code) {
-      case KEY_FORWARD:
-      case KEY_BACK:
-      case KEY_LEFT:
-      case KEY_RIGHT:
-      case KEY_UP:
-      case KEY_DOWN:
-      case KEY_YAW_LEFT:
-      case KEY_YAW_RIGHT:
-      case KEY_PITCH_UP:
-      case KEY_PITCH_DOWN:
-        return true;
-      default:
-        return false;
-    }
   }
 
   private computeDeltaSeconds(frame: XRFrame): number {
@@ -284,28 +205,7 @@ class PortalPoseCameraNudger {
     return dtMs > 0 ? dtMs / 1000 : 0;
   }
 
-  private computeKeyboardDelta(dt: number): { dx: number; dy: number; dz: number } {
-    const forward = this.keyState[KEY_FORWARD] ? 1 : 0;
-    const backward = this.keyState[KEY_BACK] ? 1 : 0;
-    const left = this.keyState[KEY_LEFT] ? 1 : 0;
-    const right = this.keyState[KEY_RIGHT] ? 1 : 0;
-    const up = this.keyState[KEY_UP] ? 1 : 0;
-    const down = this.keyState[KEY_DOWN] ? 1 : 0;
-
-    const axisZ = backward - forward;
-    const axisX = left - right;
-    const axisY = up - down;
-
-    if (axisX === 0 && axisY === 0 && axisZ === 0) {
-      return { dx: 0, dy: 0, dz: 0 };
-    }
-
-    const length = Math.hypot(axisX, axisY, axisZ) || 1;
-    const scale = (this.speed * dt) / length;
-    return { dx: axisX * scale, dy: axisY * scale, dz: axisZ * scale };
-  }
-
-  private applyKeyboardDelta(dx: number, dy: number, dz: number) {
+  private applyTranslationDelta(dx: number, dy: number, dz: number) {
     const orientation = this.latestSmoothedPose ?? new Float32Array([
       this.basePosition.x,
       this.basePosition.y,
@@ -394,26 +294,6 @@ class PortalPoseCameraNudger {
     const newYaw = this.module.HEAPF32[this.yawResultPtr >>> 2];
     this.offsetController.applyYawAdjust(newYaw, adjust);
     this.debug('yaw-nudge', { dYawRad, newYaw, adjust });
-  }
-
-  private computeYawDelta(dt: number): number {
-    const left = this.keyState[KEY_YAW_LEFT] ? 1 : 0;
-    const right = this.keyState[KEY_YAW_RIGHT] ? 1 : 0;
-    const axis = left - right;
-    if (axis === 0) {
-      return 0;
-    }
-    return axis * YAW_SPEED_RAD_S * dt;
-  }
-
-  private computePitchDelta(dt: number): number {
-    const up = this.keyState[KEY_PITCH_UP] ? 1 : 0;
-    const down = this.keyState[KEY_PITCH_DOWN] ? 1 : 0;
-    const axis = up - down;
-    if (axis === 0) {
-      return 0;
-    }
-    return axis * PITCH_SPEED_RAD_S * dt;
   }
 
   private composeFinalPose(device: XRDevice, predicted: PoseArray | null) {
@@ -625,13 +505,7 @@ export class PortalPoseCameraController {
   }
 
   private async initialize() {
-    const {
-      speedMetersPerSecond,
-      cameraPitchDegrees,
-      fixedDisplayLocked,
-      debugLogging,
-      ...loadOptions
-    } = this.options;
+    const { cameraPitchDegrees, fixedDisplayLocked, debugLogging, ...loadOptions } = this.options;
 
     const module = await loadPortalPoseModule(loadOptions);
     const debugEnabled =
@@ -651,7 +525,6 @@ export class PortalPoseCameraController {
     }
 
     const internalOptions: PortalPoseCameraInternalOptions = {
-      speed: speedMetersPerSecond ?? DEFAULT_SPEED_MPS,
       cameraPitchRad:
         cameraPitchDegrees != null ? degreesToRadians(cameraPitchDegrees) : DEFAULT_CAMERA_PITCH_RAD,
       fixedDisplayLocked: fixedDisplayLocked ?? true,

@@ -6,6 +6,7 @@
  *  - settings.faceTrackingEnabled (default true)
  *  - settings.stereoRenderingEnabled (default false)
  *  - settings.immersiveFullscreenEnabled (default true)
+ *  - settings.connectToControllerViaLan (default true)
  *
  * All reads/writes are resilient to localStorage errors and missing window.
  */
@@ -30,6 +31,7 @@ export interface PortalEmulatorConfig {
     faceTrackingEnabled: boolean;
     stereoRenderingEnabled: boolean;
     immersiveFullscreenEnabled: boolean;
+    connectToControllerViaLan: boolean;
   };
   /** reserved for future migrations */
   version?: number;
@@ -47,6 +49,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
     faceTrackingEnabled: true,
     stereoRenderingEnabled: false,
     immersiveFullscreenEnabled: true,
+    connectToControllerViaLan: true,
   },
   version: 1,
 };
@@ -96,6 +99,10 @@ function parseConfig(raw: string | null): PortalEmulatorConfig | null {
           typeof settings.immersiveFullscreenEnabled === 'boolean'
             ? settings.immersiveFullscreenEnabled
             : DEFAULT_CONFIG.settings.immersiveFullscreenEnabled,
+        connectToControllerViaLan:
+          typeof settings.connectToControllerViaLan === 'boolean'
+            ? settings.connectToControllerViaLan
+            : DEFAULT_CONFIG.settings.connectToControllerViaLan,
       },
       version: typeof obj.version === 'number' ? obj.version : DEFAULT_CONFIG.version,
     };

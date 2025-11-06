@@ -450,6 +450,7 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private connectToControllerViaLan = true;
   private controllerSearchStatus: SIGCFStatusSnapshot | null = null;
   private readonly controllerSearchListeners = new Set<(status: SIGCFStatusSnapshot | null) => void>();
   private webrtcVisibilitySuspendTimer: ReturnType<typeof setTimeout> | null = null;
@@ -512,6 +513,7 @@ export class XRDevice {
     const configFaceTrackingEnabled = persistedConfig.settings.faceTrackingEnabled !== false;
     const configImmersiveFullscreenEnabled =
       persistedConfig.settings.immersiveFullscreenEnabled !== false;
+    const configLanEnabled = persistedConfig.settings.connectToControllerViaLan !== false;
     const initialStereoEnabled =
       deviceOptions.stereoEnabled ?? configStereoEnabled;
     const globalSpace = new GlobalSpace();
@@ -815,6 +817,7 @@ export class XRDevice {
         ? this[P_DEVICE].fovy
         : DEFAULTS.fovy;
 
+    this.connectToControllerViaLan = configLanEnabled;
     this.applyConfigSettings(persistedConfig);
     if (typeof window !== 'undefined') {
       window.addEventListener('portalvr:set-config', this.handleConfigEvent);
@@ -2321,12 +2324,33 @@ export class XRDevice {
         }
       }
     }
+
+    const nextLanEnabled = config.settings?.connectToControllerViaLan !== false;
+    if (nextLanEnabled !== this.connectToControllerViaLan) {
+      this.updateWebRTCLanPreference(nextLanEnabled);
+    }
   }
 
   private cancelWebRTCVisibilitySuspendTimer(): void {
     if (this.webrtcVisibilitySuspendTimer) {
       clearTimeout(this.webrtcVisibilitySuspendTimer);
       this.webrtcVisibilitySuspendTimer = null;
+    }
+  }
+
+  private updateWebRTCLanPreference(enabled: boolean): void {
+    if (this.connectToControllerViaLan === enabled) {
+      return;
+    }
+    this.connectToControllerViaLan = enabled;
+    if (this.webrtcStreamOptions) {
+      this.webrtcStreamOptions = { ...this.webrtcStreamOptions, enableLocalPath: enabled };
+    }
+    if (this.webrtcStreamer) {
+      const restartOptions = this.webrtcStreamOptions
+        ? { ...this.webrtcStreamOptions }
+        : ({ enableLocalPath: enabled } as WebRTCControllerStreamOptions);
+      this.enableWebRTCControllerStreaming(restartOptions);
     }
   }
 
@@ -2711,6 +2735,9 @@ export class XRDevice {
     const nextOptions = {
       ...(options ?? this.webrtcStreamOptions ?? {}),
     } as WebRTCControllerStreamOptions;
+    if (typeof nextOptions.enableLocalPath !== 'boolean') {
+      nextOptions.enableLocalPath = this.connectToControllerViaLan;
+    }
     if (!nextOptions.roomId) {
       nextOptions.roomId = this.portalDeviceId;
     }

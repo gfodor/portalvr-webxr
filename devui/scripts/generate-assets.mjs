@@ -31,6 +31,11 @@ const ASSETS = [
     path: '../assets/mode/mode_3d.png',
     mime: 'image/png',
   },
+  {
+    name: 'ASSET_SWIPE_CALIBRATION',
+    path: '../assets/tutorials/swipe.mp4',
+    mime: 'video/mp4',
+  },
 ];
 
 const outDir = resolve(__dirname, '../src/generated');
