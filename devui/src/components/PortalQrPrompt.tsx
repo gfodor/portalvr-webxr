@@ -39,7 +39,7 @@ export function PortalQrPrompt({
 		canvas.height = QR_SIZE;
 
 		ctx.clearRect(0, 0, QR_SIZE, QR_SIZE);
-		ctx.fillStyle = 'rgba(255, 255, 255, 0.66)';
+		ctx.fillStyle = 'rgb(191, 191, 191)';
 		ctx.fillRect(0, 0, QR_SIZE, QR_SIZE);
 		ctx.fillStyle = '#000000';
 

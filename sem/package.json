@@ -26,11 +26,11 @@
 	},
 	"homepage": "https://portalvr.io",
 	"dependencies": {
-		"three": "^0.165.0",
 		"ts-proto": "^2.6.0"
 	},
 	"peerDependencies": {
-		"portalvr": "^1.0.0"
+		"portalvr": "^1.0.0",
+		"three": "^0.165.0"
 	},
 	"devDependencies": {
 		"@rollup/plugin-commonjs": "^28.0.1",

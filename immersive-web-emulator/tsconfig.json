@@ -37,9 +37,7 @@
 			"portalvr": ["../lib/index"],
 			"portalvr/*": ["../lib/*"],
 			"@portalvr/devui": ["../devui/lib/index"],
-			"@portalvr/devui/*": ["../devui/lib/*"],
-			"@portalvr/sem": ["../sem/lib/index"],
-			"@portalvr/sem/*": ["../sem/lib/*"]
+			"@portalvr/devui/*": ["../devui/lib/*"]
 		} /* Redirect imports to locally built packages */,
 
 		/* Advanced Options */

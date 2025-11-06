@@ -51,11 +51,18 @@ const portalCss = `
   position: fixed;
   left: 0.5cm;
   bottom: 0.5cm;
-  width: clamp(120px, 12.5vw, 180px);
+  width: 250px;
   pointer-events: auto;
   cursor: pointer;
   user-select: none;
   image-rendering: auto;
+  display: block;
+}
+
+.portal-watermark img {
+  width: 100%;
+  height: auto;
+  display: block;
 }
 
 .portal-top-icons {
@@ -74,8 +81,7 @@ const portalCss = `
   place-items: center;
   border: none;
   background: transparent;
-  color: var(--portal-color-accent);
-  opacity: 0.85;
+  color: rgba(76, 99, 182, 0.8);
   cursor: pointer;
   padding: 0;
 }

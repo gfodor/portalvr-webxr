@@ -31,6 +31,7 @@ type DevUIRootProps = {
 type EmulatorSettingsState = {
 	faceTrackingEnabled: boolean;
 	stereoRenderingEnabled: boolean;
+	immersiveFullscreenEnabled: boolean;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -113,6 +114,25 @@ export function DevUIRoot({
 		});
 	}, []);
 
+	const toggleFullscreen = useCallback(
+		(event: ChangeEvent<HTMLInputElement>) => {
+			const enabled = event.currentTarget.checked;
+			setSettings((prev) => ({
+				...prev,
+				immersiveFullscreenEnabled: enabled,
+			}));
+			updatePortalEmulatorConfig({
+				settings: { immersiveFullscreenEnabled: enabled },
+			});
+			try {
+				xrDevice.immersiveFullscreenEnabled = enabled;
+			} catch {
+				// ignore if not supported
+			}
+		},
+		[xrDevice],
+	);
+
 	const closeOnScrimClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
@@ -194,7 +214,19 @@ export function DevUIRoot({
 									checked={settings.faceTrackingEnabled}
 									onChange={toggleFaceTracking}
 								/>
-								<span>Enable face tracking</span>
+									<span>Enable face tracking</span>
+								</label>
+						</section>
+
+						<section className="portal-section">
+							<h3 className="portal-section__heading">Immersive Display</h3>
+							<label className="portal-toggle-row">
+								<input
+									type="checkbox"
+									checked={settings.immersiveFullscreenEnabled}
+									onChange={toggleFullscreen}
+								/>
+								<span>Enable fullscreen when entering VR</span>
 							</label>
 						</section>
 
@@ -285,6 +317,8 @@ function readSettings(): EmulatorSettingsState {
 	return {
 		faceTrackingEnabled: config.settings?.faceTrackingEnabled !== false,
 		stereoRenderingEnabled: Boolean(config.settings?.stereoRenderingEnabled),
+		immersiveFullscreenEnabled:
+			config.settings?.immersiveFullscreenEnabled !== false,
 	};
 }
 

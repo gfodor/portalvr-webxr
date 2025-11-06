@@ -46,8 +46,17 @@ const encode = (buffer) => buffer.toString('base64');
 
 for (const asset of ASSETS) {
   const sourcePath = resolve(__dirname, asset.path);
-  const data = await readFile(sourcePath);
-  const base64 = encode(data);
+  let buffer;
+  if (asset.mime === 'image/svg+xml') {
+    let svg = await readFile(sourcePath, 'utf8');
+    svg = svg
+      .replace(/stroke="#000000"/g, 'stroke="rgba(76, 99, 182, 0.8)"')
+      .replace(/stroke="currentColor"/g, 'stroke="rgba(76, 99, 182, 0.8)"');
+    buffer = Buffer.from(svg, 'utf8');
+  } else {
+    buffer = await readFile(sourcePath);
+  }
+  const base64 = encode(buffer);
   const dataUri = `data:${asset.mime};base64,${base64}`;
   lines.push(`export const ${asset.name} = ${JSON.stringify(dataUri)};`);
 }

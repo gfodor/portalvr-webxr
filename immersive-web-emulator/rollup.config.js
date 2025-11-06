@@ -13,7 +13,6 @@ const __dirname = dirname(__filename);
 const ROOT_DIR = resolvePath(__dirname, '..');
 const RUNTIME_MODULE_PATH = resolvePath(ROOT_DIR, 'build', 'portalvr.module.js');
 const DEVUI_LIB_DIR = resolvePath(ROOT_DIR, 'devui', 'lib');
-const SEM_LIB_DIR = resolvePath(ROOT_DIR, 'sem', 'lib');
 const PORTAL_POSE_EMBED_PATH = resolvePath(
 	ROOT_DIR,
 	'lib',
@@ -26,18 +25,20 @@ const createRuntimeAlias = () =>
 	alias({
 		entries: [
 			{
-				find: 'portalvr/wasm/portal-pose/portal_pose_embed.js',
+				find: /^portalvr\/wasm\/portal-pose\/portal_pose_embed\.js$/,
 				replacement: PORTAL_POSE_EMBED_PATH,
 			},
-			{ find: 'portalvr', replacement: RUNTIME_MODULE_PATH },
+			{ find: /^portalvr$/, replacement: RUNTIME_MODULE_PATH },
 			{ find: '@portalvr/devui', replacement: DEVUI_LIB_DIR },
-			{ find: '@portalvr/sem', replacement: SEM_LIB_DIR },
 		],
 	});
+
+const externalModules = ['three'];
 
 export default [
 	{
 		input: 'lib/content-loader.js',
+		external: externalModules,
 		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],
 		output: {
 			file: 'build/content-loader.js',
@@ -46,6 +47,7 @@ export default [
 	},
 	{
 		input: 'lib/index.js',
+		external: externalModules,
 		plugins: [
 			createRuntimeAlias(),
 			nodeResolve(),
@@ -70,10 +72,12 @@ export default [
 			inlineDynamicImports: true,
 			plugins: [terser()],
 			footer: 'IWE.injectRuntime();',
+			globals: { three: 'THREE' },
 		},
 	},
 	{
 		input: 'lib/identity-bootstrap.js',
+		external: externalModules,
 		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],
 		output: {
 			file: 'build/identity-bootstrap.js',
@@ -82,6 +86,7 @@ export default [
 	},
 	{
 		input: 'lib/service-worker.js',
+		external: externalModules,
 		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],
 		output: {
 			file: 'build/service-worker.min.js',

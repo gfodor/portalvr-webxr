@@ -10,7 +10,7 @@ to avoid confusing Android's tools.
 <svg class="feather feather-help-circle"
     fill="none"
     height="24"
-    stroke="#000000"
+    stroke="currentColor"
     stroke-linecap="round"
     stroke-linejoin="round"
     stroke-width="2"

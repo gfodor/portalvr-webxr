@@ -7,7 +7,10 @@ import terser from '@rollup/plugin-terser';
 
 const globals = {
 	portalvr: 'PortalVR',
+	three: 'THREE',
 };
+
+const externalModules = ['portalvr', 'three'];
 
 const basePlugins = [peerDepsExternal(), resolve(), commonjs(), json()];
 
@@ -31,7 +34,7 @@ export default [
 	// UMD builds
 	{
 		input: 'lib/index.js',
-		external: ['portalvr'],
+		external: externalModules,
 		plugins: umdPlugins,
 		output: [
 			{
@@ -52,7 +55,7 @@ export default [
 	// ES module builds
 	{
 		input: 'lib/index.js',
-		external: ['portalvr'],
+		external: externalModules,
 		plugins: esPlugins,
 		output: [
 			{

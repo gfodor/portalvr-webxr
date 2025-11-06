@@ -16,6 +16,12 @@ Powered by [PortalVR for WebXR](https://portalvr.io/docs), IWE offers a comprehe
 
 ![Immersive Web Emulator](./screenshots/iwe.gif)
 
+## Restoring SEM Integration
+- Re-add the SEM imports in `immersive-web-emulator/src/index.ts:8-24` (`SyntheticEnvironmentModule` plus a capture JSON) and call `xrDevice.installSEM(...)`, removing the temporary TODO comment.
+- Reinstate the Rollup alias entry in `immersive-web-emulator/rollup.config.js:28-35` that maps `@portalvr/sem` to `sem/lib` so the bundle can resolve the package.
+- Restore the TypeScript path mappings for `@portalvr/sem` in `immersive-web-emulator/tsconfig.json:28-36` so local builds compile again.
+- Run `npm run build:emulator` to ensure the SEM bundle outputs correctly once three.js is acceptable in your target environment.
+
 ## Supported Features
 
 IWE supports most mainstream WebXR features and APIs, offering compatibility on par with the WebXR support in the [Meta Quest Browser](https://www.meta.com/experiences/browser/1916519981771802/).

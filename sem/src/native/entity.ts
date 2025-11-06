@@ -1,4 +1,4 @@
-import { Mesh, MeshMatcapMaterial } from 'three';
+import { MathUtils, Mesh, MeshMatcapMaterial } from 'three';
 import {
 	NativeMesh,
 	NativePlane,
@@ -19,7 +19,8 @@ import { Bounded3DComponent } from './components/bounded3d.js';
 import { LocatableComponent } from './components/locatable.js';
 import { SemanticLabelComponent } from './components/semanticlabel.js';
 import { TriangleMeshComponent } from './components/trianglemesh.js';
-import { generateUUID } from 'three/src/math/MathUtils.js';
+
+const generateUUID = MathUtils.generateUUID;
 
 export enum SpatialEntityType {
 	Plane = 'plane',
