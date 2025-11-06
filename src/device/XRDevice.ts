@@ -78,6 +78,11 @@ import {
   PortalControllerRuntime,
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
+import {
+  getPortalEmulatorConfig,
+  onPortalEmulatorConfigChange,
+  type PortalEmulatorConfig,
+} from './PortalEmulatorConfig.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
 import { getPersistentPortalDeviceIdentity } from './PortalDeviceIdentity.js';
 import { PortalDeviceQrOverlay } from './PortalDeviceQrOverlay.js';
@@ -448,6 +453,13 @@ export class XRDevice {
   private lastImmersiveSessionForWebRTC: XRSession | null = null;
   private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
   private portalControllerRuntime: PortalControllerRuntime | null = null;
+  private readonly handleConfigEvent = (event: Event) => {
+    const detail = (event as CustomEvent<PortalEmulatorConfig | null | undefined>).detail;
+    if (!detail) {
+      return;
+    }
+    this.applyConfigSettings(detail);
+  };
   private pendingOrientationReset = false;
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
@@ -486,6 +498,11 @@ export class XRDevice {
     deviceOptions: Partial<XRDeviceOptions> = {},
   ) {
     const portalIdentity = getPersistentPortalDeviceIdentity();
+    const persistedConfig = getPortalEmulatorConfig();
+    const configStereoEnabled = Boolean(persistedConfig.settings.stereoRenderingEnabled);
+    const configFaceTrackingEnabled = persistedConfig.settings.faceTrackingEnabled !== false;
+    const initialStereoEnabled =
+      deviceOptions.stereoEnabled ?? configStereoEnabled;
     const globalSpace = new GlobalSpace();
     const viewerSpace = new XRReferenceSpace(
       XRReferenceSpaceType.Viewer,
@@ -571,8 +588,8 @@ export class XRDevice {
         deviceOptions.headsetPosition ?? DEFAULTS.headsetPosition.clone(),
       quaternion:
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
-      stereoEnabled: deviceOptions.stereoEnabled ?? DEFAULTS.stereoEnabled,
-		faceTrackingEnabled: true,
+      stereoEnabled: initialStereoEnabled,
+      faceTrackingEnabled: configFaceTrackingEnabled,
       ipd: FORCED_IPD_METERS,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
@@ -792,6 +809,14 @@ export class XRDevice {
       Number.isFinite(this[P_DEVICE].fovy) && this[P_DEVICE].fovy > 0
         ? this[P_DEVICE].fovy
         : DEFAULTS.fovy;
+
+    this.applyConfigSettings(persistedConfig);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('portalvr:set-config', this.handleConfigEvent);
+    }
+    onPortalEmulatorConfigChange((config) => {
+      this.applyConfigSettings(config);
+    });
 
     if (typeof document !== 'undefined') {
       const isVisible = document.visibilityState === 'visible';
@@ -2144,12 +2169,23 @@ export class XRDevice {
   }
 
   private shouldRunFaceTrackingForSession(session: XRSession): boolean {
-	return this[P_DEVICE].faceTrackingEnabled && this.isImmersiveSession(session);
+    return this[P_DEVICE].faceTrackingEnabled && this.isImmersiveSession(session);
   }
 
   private isImmersiveSession(session: XRSession): boolean {
     const mode = session[P_SESSION].mode;
     return mode === 'immersive-vr' || mode === 'immersive-ar';
+  }
+
+  private applyConfigSettings(config: PortalEmulatorConfig): void {
+    const nextStereoEnabled = Boolean(config.settings?.stereoRenderingEnabled);
+    if (nextStereoEnabled !== this[P_DEVICE].stereoEnabled) {
+      this.stereoEnabled = nextStereoEnabled;
+    }
+    const nextFaceTrackingEnabled = config.settings?.faceTrackingEnabled !== false;
+    if (nextFaceTrackingEnabled !== this[P_DEVICE].faceTrackingEnabled) {
+      this.faceTrackingEnabled = nextFaceTrackingEnabled;
+    }
   }
 
   private cancelWebRTCVisibilitySuspendTimer(): void {

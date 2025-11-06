@@ -25,9 +25,20 @@ export class PortalDeviceQrOverlay {
     const { parent, pairingUrl, deviceName, deviceUiCode, deviceId } = options;
     this.url = pairingUrl;
     this.container = document.createElement('div');
-    this.container.style.position = 'absolute';
+    this.container.style.position = 'fixed';
     this.container.style.bottom = '16px';
     this.container.style.right = '16px';
+    this.container.style.setProperty(
+      'bottom',
+      'calc(16px + env(safe-area-inset-bottom, 0px))',
+    );
+    this.container.style.setProperty(
+      'right',
+      'calc(16px + env(safe-area-inset-right, 0px))',
+    );
+    this.container.style.maxWidth = 'calc(100vw - 32px)';
+    this.container.style.maxHeight = 'calc(100vh - 32px)';
+    this.container.style.boxSizing = 'border-box';
     this.container.style.display = 'none';
     this.container.style.zIndex = '10000';
     this.container.style.pointerEvents = 'none';
