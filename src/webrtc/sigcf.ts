@@ -642,6 +642,22 @@ interface DualCoordOpts {
   sdpTransform?: (s: string) => string;
 }
 
+export interface SignalingPathSnapshot {
+  stats: any;
+  localCandidates: any[];
+  remoteCandidates: any[];
+}
+
+export interface SIGCFStatusSnapshot {
+  connected: boolean;
+  winner: 'local' | 'remote' | undefined;
+  reconnecting: boolean;
+  nextBackoffMs: number;
+  attempt: number;
+  s1: SignalingPathSnapshot;
+  s2: SignalingPathSnapshot;
+}
+
 export class DualRoomCoordinator {
   base: string;
   server: string;
@@ -1102,7 +1118,23 @@ export class DualRoomCoordinator {
     this.s2?.end();
   }
 
-  snapshot() {
+  triggerImmediateReconnect(reason = 'manual'): boolean {
+    if (this.connected) {
+      this.log(`manual reconnect ignored; already connected`);
+      return false;
+    }
+    if (!this._reconnectInFlight) {
+      this.log(`manual reconnect requested; scheduling reconnect (reason=${reason})`);
+      this._scheduleReconnect(reason);
+      this._resetBackoffForWake();
+      return true;
+    }
+    this.log('manual reconnect requested; interrupting backoff timer');
+    this._resetBackoffForWake();
+    return true;
+  }
+
+  snapshot(): SIGCFStatusSnapshot {
     return {
       connected: this.connected,
       winner: this.winner,
@@ -1222,6 +1254,14 @@ export class SIGCF {
   send(peer: 'local' | 'remote' | undefined, data: ArrayBuffer | ArrayBufferView | Blob | string): boolean {
     const which = peer || (this._coord?.winner as any);
     return !!this._coord?.send(data as any, which);
+  }
+
+  forceReconnect(): boolean {
+    try {
+      return this._coord?.triggerImmediateReconnect?.() ?? false;
+    } catch {
+      return false;
+    }
   }
 
   simulateDisconnect() {

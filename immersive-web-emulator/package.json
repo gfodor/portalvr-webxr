@@ -2,6 +2,7 @@
 	"name": "immersive-web-emulator",
 	"scripts": {
 		"build": "rimraf build && tsc && rollup -c && node ./scripts/copy-runtime-assets.mjs",
+		"build:dev": "rimraf build && tsc && rollup -c --environment IWE_SKIP_CONSOLE_STRIP && node ./scripts/copy-runtime-assets.mjs",
 		"zip": "rimraf iwe-release.zip && npm run build && bestzip iwe-release.zip build/* icons/* manifest.json LICENSE"
 	},
 	"pre-commit": [

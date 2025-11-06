@@ -51,6 +51,10 @@ export function DevUIRoot({
 		() => xrDevice.stereoEnabled,
 	);
 	const [showStereoReloadNotice, setShowStereoReloadNotice] = useState(false);
+	const [nextSearchAttemptAtMs, setNextSearchAttemptAtMs] = useState<number | null>(null);
+	const [searchCountdownSeconds, setSearchCountdownSeconds] = useState<number | null>(null);
+	const [isActiveSearch, setIsActiveSearch] = useState(true);
+	const [isSigcfConnected, setIsSigcfConnected] = useState(false);
 
 	const scrimRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,6 +75,59 @@ export function DevUIRoot({
 		window.addEventListener('keydown', handleKey);
 		return () => window.removeEventListener('keydown', handleKey);
 	}, []);
+
+	useEffect(() => {
+		const unsubscribe = xrDevice.onControllerSearchStatus((status) => {
+			const connected = Boolean(status?.connected);
+			setIsSigcfConnected(connected);
+			if (!status || connected) {
+				setIsActiveSearch(false);
+				setNextSearchAttemptAtMs(null);
+				return;
+			}
+			if (status.nextBackoffMs > 0) {
+				setIsActiveSearch(false);
+				setNextSearchAttemptAtMs((prev) => {
+					const target = Date.now() + status.nextBackoffMs;
+					if (prev != null && Math.abs(prev - target) < 250) {
+						return prev;
+					}
+					return target;
+				});
+				return;
+			}
+			setIsActiveSearch(true);
+			setNextSearchAttemptAtMs(null);
+		});
+		return () => {
+			unsubscribe();
+		};
+	}, [xrDevice]);
+
+	useEffect(() => {
+		if (typeof window === 'undefined') {
+			setSearchCountdownSeconds(null);
+			return;
+		}
+		if (nextSearchAttemptAtMs == null) {
+			setSearchCountdownSeconds(null);
+			return;
+		}
+		const updateCountdown = () => {
+			const diff = nextSearchAttemptAtMs - Date.now();
+			if (diff <= 0) {
+				setNextSearchAttemptAtMs(null);
+				setSearchCountdownSeconds(null);
+				return;
+			}
+			setSearchCountdownSeconds(Math.max(0, Math.ceil(diff / 1000)));
+		};
+		updateCountdown();
+		const timer = window.setInterval(updateCountdown, 1000);
+		return () => {
+			window.clearInterval(timer);
+		};
+	}, [nextSearchAttemptAtMs]);
 
 	const openSettings = useCallback(() => {
 		const nextSettings = readSettings();
@@ -176,6 +233,58 @@ export function DevUIRoot({
 		}
 	}, []);
 
+	const handleSearchNow = useCallback(() => {
+		setIsActiveSearch(true);
+		setNextSearchAttemptAtMs(null);
+		setSearchCountdownSeconds(null);
+		xrDevice.forceControllerSearchNow();
+	}, [xrDevice]);
+
+	const showSearchButton =
+		controllerPrompt === 'qr' &&
+		!isSigcfConnected &&
+		!isActiveSearch &&
+		searchCountdownSeconds != null;
+
+	useEffect(() => {
+		if (controllerPrompt !== 'qr' || isSigcfConnected) {
+			return;
+		}
+		const handleSpaceShortcut = (event: KeyboardEvent) => {
+			if (
+				event.defaultPrevented ||
+				event.altKey ||
+				event.ctrlKey ||
+				event.metaKey ||
+				event.shiftKey
+			) {
+				return;
+			}
+			const key = event.key || event.code;
+			if (key !== ' ' && key !== 'Space' && key !== 'Spacebar') {
+				return;
+			}
+			const target = event.target as HTMLElement | null;
+			if (target) {
+				const tagName = target.tagName;
+				const isEditable =
+					target.isContentEditable ||
+					tagName === 'INPUT' ||
+					tagName === 'TEXTAREA' ||
+					tagName === 'SELECT';
+				if (isEditable) {
+					return;
+				}
+			}
+			event.preventDefault();
+			handleSearchNow();
+		};
+		window.addEventListener('keydown', handleSpaceShortcut);
+		return () => {
+			window.removeEventListener('keydown', handleSpaceShortcut);
+		};
+	}, [controllerPrompt, isSigcfConnected, handleSearchNow]);
+
 	return (
 		<div className="portal-overlay-root" aria-live="polite">
 			<a
@@ -212,6 +321,13 @@ export function DevUIRoot({
 				deviceUiCode={deviceUiCode}
 				deviceId={deviceId}
 				status={controllerPrompt}
+				searchCountdownSeconds={
+					showSearchButton ? searchCountdownSeconds : null
+				}
+				isSearchingActively={controllerPrompt === 'qr' && isActiveSearch}
+				onSearchNow={
+					showSearchButton ? handleSearchNow : undefined
+				}
 			/>
 
 			<div

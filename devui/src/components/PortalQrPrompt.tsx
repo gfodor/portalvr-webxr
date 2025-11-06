@@ -9,6 +9,9 @@ export type PortalQrPromptProps = {
 	// Old prop `visible` is replaced by `status`. Keep it optional for back-compat but unused now.
 	visible?: boolean;
 	status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
+	searchCountdownSeconds?: number | null;
+	isSearchingActively?: boolean;
+	onSearchNow?: () => void;
 };
 
 const QR_SIZE = 384;
@@ -20,6 +23,9 @@ export function PortalQrPrompt({
 	deviceUiCode,
 	deviceId,
 	status,
+	searchCountdownSeconds,
+	isSearchingActively = false,
+	onSearchNow,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -72,6 +78,15 @@ export function PortalQrPrompt({
 		return null;
 	}
 
+	const clampedCountdown =
+		searchCountdownSeconds != null ? Math.max(0, searchCountdownSeconds) : null;
+
+	const footerLabel = isSearchingActively
+		? 'Searching...'
+		: clampedCountdown != null
+			? `Searching in ${clampedCountdown}s`
+			: 'Searching...';
+
 	const title =
 		status === 'qr'
 			? `Scan to pair ${deviceName}`
@@ -91,9 +106,25 @@ export function PortalQrPrompt({
 					aria-label={`PortalVR pairing QR code for ${deviceName}`}
 				/>
 			)}
-			<span className="portal-qr-pill__subtitle">
-				{deviceUiCode} · {deviceId}
-			</span>
+			{status === 'qr' && (
+				<div className="portal-qr-pill__footer">
+					<span className="portal-qr-pill__search-status">{footerLabel}</span>
+					{!isSearchingActively && onSearchNow && clampedCountdown != null && (
+						<button
+							type="button"
+							className="portal-qr-pill__search-button"
+							onClick={onSearchNow}
+						>
+							Search Now
+						</button>
+					)}
+				</div>
+			)}
+			{status !== 'qr' && (
+				<span className="portal-qr-pill__subtitle">
+					{deviceUiCode} · {deviceId}
+				</span>
+			)}
 		</aside>
 	);
 }

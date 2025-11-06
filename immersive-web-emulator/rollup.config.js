@@ -8,6 +8,13 @@ import terser from '@rollup/plugin-terser';
 import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const shouldStripConsole = !process.env.IWE_SKIP_CONSOLE_STRIP;
+const stripConsolePlugin = shouldStripConsole
+	? strip({
+			functions: ['console.*'],
+		})
+	: null;
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT_DIR = resolvePath(__dirname, '..');
@@ -61,9 +68,7 @@ export default [
 				__IS_UMD__: 'true', // Set to true for UMD builds
 				preventAssignment: true,
 			}),
-			strip({
-				functions: ['console.*'],
-			}),
+			...(stripConsolePlugin ? [stripConsolePlugin] : []),
 		],
 		output: {
 			file: 'build/iwe.min.js',

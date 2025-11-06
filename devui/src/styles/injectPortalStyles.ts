@@ -217,6 +217,42 @@ const portalCss = `
   font-weight: 600;
 }
 
+.portal-qr-pill__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--portal-spacing-sm);
+  width: 100%;
+}
+
+.portal-qr-pill__search-status {
+  font-size: 0.75rem;
+  opacity: 0.85;
+}
+
+.portal-qr-pill__search-button {
+  padding: var(--portal-spacing-xs) var(--portal-spacing-md);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--portal-radius-button);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--portal-color-text-inverse);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.portal-qr-pill__search-button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.portal-qr-pill__search-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .portal-qr-pill__subtitle {
   font-size: 0.75rem;
   opacity: 0.8;

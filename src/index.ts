@@ -32,6 +32,7 @@ export {
   WebRTCControllerStreamer,
   type WebRTCControllerStreamOptions,
 } from './webrtc/WebRTCControllerStreamer.js';
+export type { SIGCFStatusSnapshot } from './webrtc/sigcf.js';
 
 // Initialization
 export { XRSystem } from './initialization/XRSystem.js';

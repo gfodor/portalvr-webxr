@@ -13,6 +13,7 @@
 		"prebuild": "node ./scripts/prebuild.mjs",
 		"build": "rimraf ./lib && tsc && node ./scripts/copy-portal-wasm.mjs && rollup -c",
 		"build:emulator": "npm run build && npm --prefix devui run build && npm --prefix sem run build && npm --prefix immersive-web-emulator run build",
+	"build:emulator:dev": "npm run build && npm --prefix devui run build && npm --prefix sem run build && npm --prefix immersive-web-emulator run build:dev",
 		"doc": "typedoc",
     "format": "prettier --write ./src/**/*",
     "test": "jest",

@@ -73,6 +73,7 @@ import {
   WebRTCControllerStreamer,
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
+import { type SIGCFStatusSnapshot } from '../webrtc/sigcf.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
 import {
   PortalControllerRuntime,
@@ -441,6 +442,8 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private controllerSearchStatus: SIGCFStatusSnapshot | null = null;
+  private readonly controllerSearchListeners = new Set<(status: SIGCFStatusSnapshot | null) => void>();
   private webrtcVisibilitySuspendTimer: ReturnType<typeof setTimeout> | null = null;
   private webrtcVisibilitySuspended = false;
   private webrtcSuspendedForVisibility = false;
@@ -1401,6 +1404,20 @@ export class XRDevice {
 	const status = this.computeControllerPromptStatus();
 	this[P_DEVICE].devui?.setControllerPromptStatus(status);
 	}
+
+  private emitControllerSearchStatus(status: SIGCFStatusSnapshot | null): void {
+    this.controllerSearchStatus = status;
+    if (!this.controllerSearchListeners.size) {
+      return;
+    }
+    for (const listener of Array.from(this.controllerSearchListeners)) {
+      try {
+        listener(status);
+      } catch (error) {
+        console.error('[XRDevice] controller search listener error', error);
+      }
+    }
+  }
 
   private ensurePortalControllerRuntime(): Promise<PortalControllerRuntime> {
     if (!this.portalControllerRuntimePromise) {
@@ -2664,6 +2681,8 @@ export class XRDevice {
     const userOnState = nextOptions.onControllerState;
     const userOnConnection = nextOptions.onConnectionChange;
     const userOnOrientationReset = nextOptions.onOrientationReset;
+    const userOnSignalingStatus = nextOptions.onSignalingStatus;
+    this.emitControllerSearchStatus(null);
     this.webrtcStreamer = new WebRTCControllerStreamer({
       ...nextOptions,
       onControllerState: (state) => {
@@ -2678,6 +2697,10 @@ export class XRDevice {
         this.handleOrientationReset();
         userOnOrientationReset?.();
       },
+      onSignalingStatus: (status) => {
+        this.emitControllerSearchStatus(status);
+        userOnSignalingStatus?.(status);
+      },
     });
   }
 
@@ -2687,6 +2710,23 @@ export class XRDevice {
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
     this.handleControllerConnectionChange(false);
+    this.emitControllerSearchStatus(null);
+  }
+
+  onControllerSearchStatus(listener: (status: SIGCFStatusSnapshot | null) => void): () => void {
+    this.controllerSearchListeners.add(listener);
+    try {
+      listener(this.controllerSearchStatus);
+    } catch (error) {
+      console.error('[XRDevice] controller search listener error', error);
+    }
+    return () => {
+      this.controllerSearchListeners.delete(listener);
+    };
+  }
+
+  forceControllerSearchNow(): void {
+    this.webrtcStreamer?.forceSignalingReconnect();
   }
 
   private ensureDefaultWebRTCStreamer() {

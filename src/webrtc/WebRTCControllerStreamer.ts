@@ -5,7 +5,7 @@
  */
 
 import type { XRFrame } from '../frameloop/XRFrame.js';
-import { SIGCF } from './sigcf.js';
+import { SIGCF, type SIGCFStatusSnapshot } from './sigcf.js';
 import {
   parseControllerState,
   type ControllerState,
@@ -28,6 +28,8 @@ export interface WebRTCControllerStreamOptions {
   onConnectionChange?: (connected: boolean) => void;
   /** Called when an orientation-reset packet is received. */
   onOrientationReset?: () => void;
+  /** Called when the underlying SIGCF status updates. */
+  onSignalingStatus?: (status: SIGCFStatusSnapshot) => void;
 }
 
 const DEFAULT_SIGNALING_BASE = 'wss://cloudflare-signalling.portalvr.workers.dev';
@@ -40,6 +42,7 @@ export class WebRTCControllerStreamer {
   private readonly onControllerState?: (state: ControllerState) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
   private readonly onOrientationReset?: () => void;
+  private readonly onSignalingStatus?: (status: SIGCFStatusSnapshot) => void;
 
   private sigcf: SIGCF | null = null;
   private connected = false;
@@ -56,6 +59,7 @@ export class WebRTCControllerStreamer {
     this.onControllerState = options.onControllerState;
     this.onConnectionChange = options.onConnectionChange;
     this.onOrientationReset = options.onOrientationReset;
+    this.onSignalingStatus = options.onSignalingStatus;
 
     if (typeof window !== 'undefined') {
       window.addEventListener('beforeunload', this.handlePageUnload);
@@ -97,6 +101,10 @@ export class WebRTCControllerStreamer {
     this.connected = false;
   }
 
+  forceSignalingReconnect() {
+    this.sigcf?.forceReconnect();
+  }
+
   private ensureStarted() {
     if (this.sigcf || this.startPromise) {
       return;
@@ -105,6 +113,14 @@ export class WebRTCControllerStreamer {
       workerUrl: this.workerUrl,
       log: (m) => this.log(m),
     });
+
+    if (this.onSignalingStatus) {
+      this.cleanupHandlers.push(
+        this.sigcf.on('status', (status: any) => {
+          this.onSignalingStatus?.(status as SIGCFStatusSnapshot);
+        }),
+      );
+    }
 
     this.cleanupHandlers.push(
       this.sigcf.on('connected', () => {
