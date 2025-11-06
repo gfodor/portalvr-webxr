@@ -695,8 +695,11 @@ export class XRDevice {
           canvas.width = window.innerWidth;
         }
         canvas.height = window.innerHeight;
+
+        this.ensureFullscreenForImmersiveSession();
       },
       onSessionEnd: () => {
+        this.exitFullscreenForImmersiveSession();
         this[P_DEVICE].currentBaseLayer?.disposeStereoTargets();
         this[P_DEVICE].currentBaseLayer = null;
         this[P_DEVICE].stereoTargets = null;
@@ -1983,6 +1986,114 @@ export class XRDevice {
       } else {
         element.style.removeProperty('transform');
       }
+    }
+  }
+
+  private getActiveFullscreenElement(): Element | null {
+    if (typeof document === 'undefined') {
+      return null;
+    }
+    const doc = document as Document & {
+      webkitFullscreenElement?: Element | null;
+      mozFullScreenElement?: Element | null;
+      msFullscreenElement?: Element | null;
+    };
+    return (
+      doc.fullscreenElement ??
+      doc.webkitFullscreenElement ??
+      doc.mozFullScreenElement ??
+      doc.msFullscreenElement ??
+      null
+    );
+  }
+
+  private ensureFullscreenForImmersiveSession(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const session = this.activeSession;
+    if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    if (this.getActiveFullscreenElement() === container) {
+      return;
+    }
+
+    const anyContainer = container as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+      mozRequestFullScreen?: () => Promise<void>;
+      msRequestFullscreen?: () => Promise<void>;
+    };
+
+    const requestFullscreen =
+      anyContainer.requestFullscreen ??
+      anyContainer.webkitRequestFullscreen ??
+      anyContainer.mozRequestFullScreen ??
+      anyContainer.msRequestFullscreen;
+
+    if (!requestFullscreen) {
+      return;
+    }
+
+    try {
+      const result = requestFullscreen.call(anyContainer);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch((error) => {
+          console.warn(
+            '[XRDevice] Failed to enter fullscreen for immersive session',
+            error,
+          );
+        });
+      }
+    } catch (error) {
+      console.warn(
+        '[XRDevice] Failed to enter fullscreen for immersive session',
+        error,
+      );
+    }
+  }
+
+  private exitFullscreenForImmersiveSession(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    if (this.getActiveFullscreenElement() !== container) {
+      return;
+    }
+
+    const doc = document as Document & {
+      webkitExitFullscreen?: () => Promise<void>;
+      mozCancelFullScreen?: () => Promise<void>;
+      msExitFullscreen?: () => Promise<void>;
+    };
+
+    const exitFullscreen =
+      doc.exitFullscreen ??
+      doc.webkitExitFullscreen ??
+      doc.mozCancelFullScreen ??
+      doc.msExitFullscreen;
+
+    if (!exitFullscreen) {
+      return;
+    }
+
+    try {
+      const result = exitFullscreen.call(doc);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch((error) => {
+          console.warn(
+            '[XRDevice] Failed to exit fullscreen after immersive session',
+            error,
+          );
+        });
+      }
+    } catch (error) {
+      console.warn(
+        '[XRDevice] Failed to exit fullscreen after immersive session',
+        error,
+      );
     }
   }
 
