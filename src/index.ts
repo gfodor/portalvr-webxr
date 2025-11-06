@@ -9,6 +9,7 @@
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {
   PORTAL_CONFIG_STORAGE_KEY,
+  PORTAL_CONFIG_OVERRIDE_GLOBAL,
   getPortalEmulatorConfig,
   updatePortalEmulatorConfig,
 } from './device/PortalEmulatorConfig.js';

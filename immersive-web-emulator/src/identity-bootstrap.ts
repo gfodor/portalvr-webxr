@@ -1,5 +1,5 @@
 import {
-	PORTAL_CONFIG_STORAGE_KEY,
+	PORTAL_CONFIG_OVERRIDE_GLOBAL,
 	PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
 	type PortalEmulatorConfig,
 } from 'portalvr';
@@ -53,14 +53,9 @@ const DEFAULT_VERSION = 1;
 	}
 
 	try {
-		if (target.localStorage) {
-			target.localStorage.setItem(
-				PORTAL_CONFIG_STORAGE_KEY,
-				JSON.stringify(normalizedConfig),
-			);
-		}
+		target[PORTAL_CONFIG_OVERRIDE_GLOBAL] = normalizedConfig;
 	} catch {
-		// Swallow storage exceptions (e.g., quota exceeded, storage disabled).
+		// Ignore assignment failures if globals are locked down.
 	}
 
 	script.remove();

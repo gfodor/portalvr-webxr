@@ -8,10 +8,12 @@
  *  - settings.immersiveFullscreenEnabled (default true)
  *  - settings.connectToControllerViaLan (default true)
  *
- * All reads/writes are resilient to localStorage errors and missing window.
+ * All reads/writes stay inside the injected config override global so host pages are untouched.
  */
 
 export const PORTAL_CONFIG_STORAGE_KEY = '___portalvr_config';
+export const PORTAL_CONFIG_OVERRIDE_GLOBAL = '__PORTALVR_EMULATOR_CONFIG_OVERRIDE__';
+const CONFIG_EVENT_TYPE = 'portalvr:set-config';
 
 declare const chrome:
   | undefined
@@ -64,72 +66,78 @@ function createDefaultConfig(): PortalEmulatorConfig {
 
 let cachedConfig: PortalEmulatorConfig | null = null;
 
-function getLocalStorageSafe(): Storage | null {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      return window.localStorage;
+function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
+  let source = candidate;
+  if (typeof source === 'string') {
+    try {
+      source = JSON.parse(source) as unknown;
+    } catch {
+      return null;
     }
-  } catch {
-    // ignore
   }
-  return null;
-}
-
-function parseConfig(raw: string | null): PortalEmulatorConfig | null {
-  if (!raw) return null;
-  try {
-    const obj = JSON.parse(raw);
-    // Shallow normalization with defaults
-    const device = typeof obj.device === 'object' && obj.device ? obj.device : {};
-    const settings = typeof obj.settings === 'object' && obj.settings ? obj.settings : {};
-    return {
-      device: {
-        suffix: typeof device.suffix === 'string' ? device.suffix : DEFAULT_CONFIG.device.suffix,
-      },
-      settings: {
-        faceTrackingEnabled:
-          typeof settings.faceTrackingEnabled === 'boolean'
-            ? settings.faceTrackingEnabled
-            : DEFAULT_CONFIG.settings.faceTrackingEnabled,
-        stereoRenderingEnabled:
-          typeof settings.stereoRenderingEnabled === 'boolean'
-            ? settings.stereoRenderingEnabled
-            : DEFAULT_CONFIG.settings.stereoRenderingEnabled,
-        immersiveFullscreenEnabled:
-          typeof settings.immersiveFullscreenEnabled === 'boolean'
-            ? settings.immersiveFullscreenEnabled
-            : DEFAULT_CONFIG.settings.immersiveFullscreenEnabled,
-        connectToControllerViaLan:
-          typeof settings.connectToControllerViaLan === 'boolean'
-            ? settings.connectToControllerViaLan
-            : DEFAULT_CONFIG.settings.connectToControllerViaLan,
-      },
-      version: typeof obj.version === 'number' ? obj.version : DEFAULT_CONFIG.version,
-    };
-  } catch {
+  if (!source || typeof source !== 'object') {
     return null;
   }
+  const deviceCandidate =
+    typeof (source as { device?: unknown }).device === 'object' && (source as { device?: unknown }).device
+      ? ((source as { device: Record<string, unknown> }).device)
+      : {};
+  const settingsCandidate =
+    typeof (source as { settings?: unknown }).settings === 'object' && (source as { settings?: unknown }).settings
+      ? ((source as { settings: Record<string, unknown> }).settings)
+      : {};
+  const normalized: PortalEmulatorConfig = {
+    device: {
+      suffix:
+        typeof (deviceCandidate as { suffix?: unknown }).suffix === 'string'
+          ? ((deviceCandidate as { suffix: string }).suffix)
+          : DEFAULT_CONFIG.device.suffix,
+    },
+    settings: {
+      faceTrackingEnabled:
+        typeof (settingsCandidate as { faceTrackingEnabled?: unknown }).faceTrackingEnabled === 'boolean'
+          ? ((settingsCandidate as { faceTrackingEnabled: boolean }).faceTrackingEnabled)
+          : DEFAULT_CONFIG.settings.faceTrackingEnabled,
+      stereoRenderingEnabled:
+        typeof (settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled === 'boolean'
+          ? ((settingsCandidate as { stereoRenderingEnabled: boolean }).stereoRenderingEnabled)
+          : DEFAULT_CONFIG.settings.stereoRenderingEnabled,
+      immersiveFullscreenEnabled:
+        typeof (settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled === 'boolean'
+          ? ((settingsCandidate as { immersiveFullscreenEnabled: boolean }).immersiveFullscreenEnabled)
+          : DEFAULT_CONFIG.settings.immersiveFullscreenEnabled,
+      connectToControllerViaLan:
+        typeof (settingsCandidate as { connectToControllerViaLan?: unknown }).connectToControllerViaLan === 'boolean'
+          ? ((settingsCandidate as { connectToControllerViaLan: boolean }).connectToControllerViaLan)
+          : DEFAULT_CONFIG.settings.connectToControllerViaLan,
+    },
+    version:
+      typeof (source as { version?: unknown }).version === 'number'
+        ? ((source as { version: number }).version)
+        : DEFAULT_CONFIG.version,
+  };
+  return normalized;
 }
 
 function writeConfig(next: PortalEmulatorConfig): void {
-  const ls = getLocalStorageSafe();
   cachedConfig = next;
-  if (ls) {
-    try {
-      ls.setItem(PORTAL_CONFIG_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore storage failures
-    }
-  }
+  writeConfigOverride(next);
   notifyExtensionConfigUpdated(next);
 }
 
 export function getPortalEmulatorConfig(): PortalEmulatorConfig {
-  if (cachedConfig) return cachedConfig;
-  const ls = getLocalStorageSafe();
-  const parsed = parseConfig(ls?.getItem(PORTAL_CONFIG_STORAGE_KEY) || null) ?? createDefaultConfig();
-  cachedConfig = parsed;
-  return cachedConfig;
+  if (cachedConfig) {
+    return cachedConfig;
+  }
+  const overrideConfig = readConfigOverride();
+  if (overrideConfig) {
+    cachedConfig = overrideConfig;
+    return cachedConfig;
+  }
+  const fallback = createDefaultConfig();
+  cachedConfig = fallback;
+  writeConfigOverride(fallback);
+  return fallback;
 }
 
 /**
@@ -151,17 +159,50 @@ export function updatePortalEmulatorConfig(patch: PartialConfig): PortalEmulator
  * Subscribe to cross-tab config changes. Returns an unsubscribe.
  */
 export function onPortalEmulatorConfigChange(listener: (cfg: PortalEmulatorConfig) => void): () => void {
-  const handler = (e: StorageEvent) => {
-    if (e.key !== PORTAL_CONFIG_STORAGE_KEY) return;
-    // clear cache and re-read
-    cachedConfig = null;
-    listener(getPortalEmulatorConfig());
-  };
-  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-    window.addEventListener('storage', handler);
-    return () => window.removeEventListener('storage', handler);
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => {};
   }
-  return () => {};
+  const handler = (event: Event) => {
+    const candidate = (event as CustomEvent<PortalEmulatorConfig | null | undefined>).detail;
+    const normalized = candidate ? normalizeConfigShape(candidate) : null;
+    if (!normalized) {
+      return;
+    }
+    cachedConfig = normalized;
+    listener(normalized);
+  };
+  window.addEventListener(CONFIG_EVENT_TYPE, handler as EventListener);
+  return () => window.removeEventListener(CONFIG_EVENT_TYPE, handler as EventListener);
+}
+
+function readConfigOverride(): PortalEmulatorConfig | null {
+  try {
+    if (typeof window === 'undefined') {
+      return cachedConfig;
+    }
+    const globalWithOverride = window as typeof window & Record<string, unknown>;
+    const candidate = globalWithOverride[PORTAL_CONFIG_OVERRIDE_GLOBAL];
+    const normalized = candidate ? normalizeConfigShape(candidate) : null;
+    if (normalized) {
+      globalWithOverride[PORTAL_CONFIG_OVERRIDE_GLOBAL] = normalized;
+    }
+    return normalized;
+  } catch {
+    return cachedConfig;
+  }
+}
+
+function writeConfigOverride(config: PortalEmulatorConfig): boolean {
+  try {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    const globalWithOverride = window as typeof window & Record<string, unknown>;
+    globalWithOverride[PORTAL_CONFIG_OVERRIDE_GLOBAL] = config;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function notifyExtensionConfigUpdated(config: PortalEmulatorConfig): void {
@@ -170,7 +211,7 @@ function notifyExtensionConfigUpdated(config: PortalEmulatorConfig): void {
     if (typeof chrome !== 'undefined') {
       const runtime = chrome?.runtime;
       if (runtime?.id && typeof runtime.sendMessage === 'function') {
-        runtime.sendMessage({ type: 'portalvr:set-config', config });
+        runtime.sendMessage({ type: CONFIG_EVENT_TYPE, config });
         delivered = true;
       }
     }
@@ -184,7 +225,7 @@ function notifyExtensionConfigUpdated(config: PortalEmulatorConfig): void {
 
   try {
     if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-      window.dispatchEvent(new CustomEvent('portalvr:set-config', { detail: config }));
+      window.dispatchEvent(new CustomEvent(CONFIG_EVENT_TYPE, { detail: config }));
     }
   } catch {
     // ignore dispatch failures (non-browser contexts)

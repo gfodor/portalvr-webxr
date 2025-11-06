@@ -39,7 +39,7 @@ const ensureRuntimeInjected = async () => {
 	const identity = state?.identity ?? null;
 	const config = state?.config ?? null;
 	if (identity?.suffix) {
-		injectIdentityOverride(root, identity, config);
+		await injectIdentityOverride(root, identity, config);
 	}
 
 	injectRuntimeScript(root);
@@ -74,25 +74,31 @@ function injectIdentityOverride(
 	root: Element,
 	identity: PortalDeviceIdentity,
 	config: PortalEmulatorConfig | null,
-): void {
+): Promise<void> {
 	if (document.getElementById(IDENTITY_SCRIPT_ID)) {
-		return;
+		return Promise.resolve();
 	}
 
-	const script = document.createElement('script');
-	script.id = IDENTITY_SCRIPT_ID;
-	script.type = 'text/javascript';
-	script.src = chrome.runtime.getURL('build/identity-bootstrap.js');
-	script.dataset.identity = JSON.stringify(identity);
-	if (config) {
-		script.dataset.config = JSON.stringify(config);
-	}
-	const firstChild = root.firstChild;
-	if (firstChild) {
-		root.insertBefore(script, firstChild);
-	} else {
-		root.appendChild(script);
-	}
+	return new Promise((resolve) => {
+		const script = document.createElement('script');
+		script.id = IDENTITY_SCRIPT_ID;
+		script.type = 'text/javascript';
+		script.async = false;
+		script.src = chrome.runtime.getURL('build/identity-bootstrap.js');
+		script.dataset.identity = JSON.stringify(identity);
+		if (config) {
+			script.dataset.config = JSON.stringify(config);
+		}
+		const finalize = () => resolve();
+		script.addEventListener('load', finalize, { once: true });
+		script.addEventListener('error', finalize, { once: true });
+		const firstChild = root.firstChild;
+		if (firstChild) {
+			root.insertBefore(script, firstChild);
+		} else {
+			root.appendChild(script);
+		}
+	});
 }
 
 function requestPortalRuntimeState(): Promise<PortalRuntimeState | null> {

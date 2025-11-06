@@ -459,13 +459,6 @@ export class XRDevice {
   private lastImmersiveSessionForWebRTC: XRSession | null = null;
   private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
   private portalControllerRuntime: PortalControllerRuntime | null = null;
-  private readonly handleConfigEvent = (event: Event) => {
-    const detail = (event as CustomEvent<PortalEmulatorConfig | null | undefined>).detail;
-    if (!detail) {
-      return;
-    }
-    this.applyConfigSettings(detail);
-  };
   // Stereo config changes are persisted immediately but only applied once on startup to
   // avoid disturbing the active render pipeline mid-session.
   private hasAppliedInitialStereoConfig = false;
@@ -819,9 +812,6 @@ export class XRDevice {
 
     this.connectToControllerViaLan = configLanEnabled;
     this.applyConfigSettings(persistedConfig);
-    if (typeof window !== 'undefined') {
-      window.addEventListener('portalvr:set-config', this.handleConfigEvent);
-    }
     onPortalEmulatorConfigChange((config) => {
       this.applyConfigSettings(config);
     });
