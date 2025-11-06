@@ -38,7 +38,7 @@ const createRuntimeAlias = () =>
 export default [
 	{
 		input: 'lib/content-loader.js',
-		plugins: [nodeResolve(), commonjs()],
+		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],
 		output: {
 			file: 'build/content-loader.js',
 			format: 'iife',
@@ -70,6 +70,14 @@ export default [
 			inlineDynamicImports: true,
 			plugins: [terser()],
 			footer: 'IWE.injectRuntime();',
+		},
+	},
+	{
+		input: 'lib/identity-bootstrap.js',
+		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],
+		output: {
+			file: 'build/identity-bootstrap.js',
+			format: 'iife',
 		},
 	},
 	{

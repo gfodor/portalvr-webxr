@@ -4,6 +4,7 @@ const UI_SUFFIX_LENGTH = 4;
 const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
 export const PORTAL_DEVICE_STORAGE_KEY = '___portalvr_device_id';
+export const PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL = '__PORTALVR_DEVICE_IDENTITY_OVERRIDE__';
 
 let cachedSuffix: string | null = null;
 
@@ -27,6 +28,12 @@ function ensureSuffix(): string {
     return cachedSuffix;
   }
   const storage = getLocalStorage();
+  const injected = getInjectedSuffix();
+  if (injected) {
+    cachedSuffix = injected;
+    persistSuffix(storage, injected);
+    return injected;
+  }
   const storedRaw = storage?.getItem(PORTAL_DEVICE_STORAGE_KEY) ?? null;
   const normalized = normalizeSuffix(storedRaw);
   if (normalized) {
@@ -38,6 +45,38 @@ function ensureSuffix(): string {
   cachedSuffix = generated;
   persistSuffix(storage, generated);
   return generated;
+}
+
+function getInjectedSuffix(): string | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const globalWithOverride = window as typeof window & Record<string, unknown>;
+  const overrideCandidate = globalWithOverride[PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL];
+  if (!overrideCandidate) {
+    return null;
+  }
+  if (typeof overrideCandidate === 'string') {
+    return normalizeSuffix(overrideCandidate);
+  }
+  if (typeof overrideCandidate === 'function') {
+    try {
+      const result = overrideCandidate();
+      if (typeof result === 'string') {
+        return normalizeSuffix(result);
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  if (typeof overrideCandidate === 'object' && overrideCandidate !== null) {
+    const possibleSuffix = (overrideCandidate as { suffix?: unknown }).suffix;
+    if (typeof possibleSuffix === 'string') {
+      return normalizeSuffix(possibleSuffix);
+    }
+  }
+  return null;
 }
 
 function normalizeSuffix(candidate: string | null): string | null {

@@ -35,6 +35,7 @@
 		{
 			"resources": [
 				"build/iwe.min.js",
+				"build/identity-bootstrap.js",
 				"build/wasm/portal-pose/portal_pose.wasm"
 			],
 			"matches": ["<all_urls>"]

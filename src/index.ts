@@ -8,6 +8,10 @@
 // model
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {
+  PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
+  PORTAL_DEVICE_STORAGE_KEY,
+} from './device/PortalDeviceIdentity.js';
+export {
 	metaQuest2,
 	metaQuest3,
 	metaQuestPro,
