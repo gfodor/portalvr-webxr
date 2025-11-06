@@ -115,7 +115,7 @@ function resolveActiveWandState(mode: number): ActiveWandState {
 }
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
-const PORTAL_DEVICE_ID_PREFIX = 'PORTAL-';
+const PORTAL_DEVICE_ID_PREFIX = 'PORTALVR-';
 
 function buildPortalDeviceId(suffix: string): string {
   return `${PORTAL_DEVICE_ID_PREFIX}${suffix}`;
@@ -167,6 +167,8 @@ const FACE_TRACKING_RESOLUTIONS: Array<{ width: number; height: number }> = [
   { width: 1280, height: 720 },
   { width: 1920, height: 1080 },
 ];
+
+const WEBRTC_VISIBILITY_SUSPEND_DELAY_MS = 5000;
 
 function makeIdentityPortalPose(): PortalPose {
   return {
@@ -396,6 +398,8 @@ export class XRDevice {
     position: Vector3;
     quaternion: Quaternion;
     stereoEnabled: boolean;
+	/** New: user preference for face tracking */
+	faceTrackingEnabled: boolean;
     ipd: number;
     fovy: number;
     controllers: { [key in XRHandedness]?: XRController };
@@ -438,6 +442,9 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private webrtcVisibilitySuspendTimer: ReturnType<typeof setTimeout> | null = null;
+  private webrtcVisibilitySuspended = false;
+  private webrtcSuspendedForVisibility = false;
   private lastImmersiveSessionForWebRTC: XRSession | null = null;
   private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
   private portalControllerRuntime: PortalControllerRuntime | null = null;
@@ -565,6 +572,7 @@ export class XRDevice {
       quaternion:
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
       stereoEnabled: deviceOptions.stereoEnabled ?? DEFAULTS.stereoEnabled,
+		faceTrackingEnabled: true,
       ipd: FORCED_IPD_METERS,
       fovy: deviceOptions.fovy ?? DEFAULTS.fovy,
       controllers,
@@ -786,7 +794,9 @@ export class XRDevice {
         : DEFAULTS.fovy;
 
     if (typeof document !== 'undefined') {
-      this.faceTrackingVisibilitySuspended = document.visibilityState !== 'visible';
+      const isVisible = document.visibilityState === 'visible';
+      this.faceTrackingVisibilitySuspended = !isVisible;
+      this.webrtcVisibilitySuspended = !isVisible;
       document.addEventListener('visibilitychange', this.handleVisibilityChange);
     }
 
@@ -1049,6 +1059,32 @@ export class XRDevice {
     this[P_DEVICE].stereoEnabled = value;
   }
 
+	get faceTrackingEnabled(): boolean {
+	return this[P_DEVICE].faceTrackingEnabled;
+	}
+
+	set faceTrackingEnabled(value: boolean) {
+	const prev = this[P_DEVICE].faceTrackingEnabled;
+	this[P_DEVICE].faceTrackingEnabled = Boolean(value);
+	if (prev === this[P_DEVICE].faceTrackingEnabled) {
+		return;
+	}
+	const session = this.activeSession;
+	if (!session) {
+		// No active session; nothing to do. When session starts, it will use the flag.
+		return;
+	}
+	if (this[P_DEVICE].faceTrackingEnabled) {
+		// Best effort to start if appropriate
+		if (this.shouldRunFaceTrackingForSession(session)) {
+		this.ensureFaceTracking();
+		}
+	} else {
+		// Immediately stop if running
+		this.stopFaceTracking();
+	}
+	}
+
   get ipd() {
     return this[P_DEVICE].ipd;
   }
@@ -1260,21 +1296,25 @@ export class XRDevice {
       if (this.faceTracker || this.faceTrackingStartPromise) {
         this.faceTrackingSuspendedForVisibility = true;
       }
+      this.webrtcVisibilitySuspended = true;
+      this.scheduleWebRTCVisibilitySuspend();
       this.stopFaceTracking();
       return;
     }
 
+    this.cancelWebRTCVisibilitySuspendTimer();
+    this.webrtcVisibilitySuspended = false;
     const resumeNeeded = this.faceTrackingSuspendedForVisibility;
     this.faceTrackingVisibilitySuspended = false;
-    if (!resumeNeeded) {
-      return;
+    if (resumeNeeded) {
+      this.faceTrackingSuspendedForVisibility = false;
+      this.faceTrackingRecenterPending = true;
+      const session = this.activeSession;
+      if (session && this.shouldRunFaceTrackingForSession(session)) {
+        this.ensureFaceTracking();
+      }
     }
-    this.faceTrackingSuspendedForVisibility = false;
-    this.faceTrackingRecenterPending = true;
-    const session = this.activeSession;
-    if (session && this.shouldRunFaceTrackingForSession(session)) {
-      this.ensureFaceTracking();
-    }
+    this.resumeWebRTCStreamingAfterVisibility();
   };
 
   private ensurePortalControllerRuntime(): Promise<PortalControllerRuntime> {
@@ -2104,7 +2144,7 @@ export class XRDevice {
   }
 
   private shouldRunFaceTrackingForSession(session: XRSession): boolean {
-    return this.isImmersiveSession(session);
+	return this[P_DEVICE].faceTrackingEnabled && this.isImmersiveSession(session);
   }
 
   private isImmersiveSession(session: XRSession): boolean {
@@ -2112,7 +2152,57 @@ export class XRDevice {
     return mode === 'immersive-vr' || mode === 'immersive-ar';
   }
 
+  private cancelWebRTCVisibilitySuspendTimer(): void {
+    if (this.webrtcVisibilitySuspendTimer) {
+      clearTimeout(this.webrtcVisibilitySuspendTimer);
+      this.webrtcVisibilitySuspendTimer = null;
+    }
+  }
+
+  private scheduleWebRTCVisibilitySuspend(): void {
+    if (this.webrtcVisibilitySuspendTimer || !this.webrtcStreamer) {
+      return;
+    }
+    this.webrtcVisibilitySuspendTimer = setTimeout(() => {
+      this.webrtcVisibilitySuspendTimer = null;
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        return;
+      }
+      this.suspendWebRTCStreamingForVisibility();
+    }, WEBRTC_VISIBILITY_SUSPEND_DELAY_MS);
+  }
+
+  private suspendWebRTCStreamingForVisibility(): void {
+    if (!this.webrtcStreamer || this.webrtcSuspendedForVisibility) {
+      return;
+    }
+    this.webrtcSuspendedForVisibility = true;
+    this.webrtcStreamer.dispose();
+    this.webrtcStreamer = null;
+    this.lastImmersiveSessionForWebRTC = null;
+  }
+
+  private resumeWebRTCStreamingAfterVisibility(): void {
+    if (!this.webrtcSuspendedForVisibility) {
+      return;
+    }
+    this.webrtcSuspendedForVisibility = false;
+    if (this.webrtcStreamOptions) {
+      this.enableWebRTCControllerStreaming(this.webrtcStreamOptions);
+    } else {
+      this.ensureDefaultWebRTCStreamer();
+    }
+    const session = this.activeSession;
+    if (session) {
+      this.lastImmersiveSessionForWebRTC = null;
+      this.ensureDefaultWebRTCStreamerForSession(session);
+    }
+  }
+
   private ensureDefaultWebRTCStreamerForSession(session: XRSession): void {
+    if (this.webrtcVisibilitySuspended) {
+      return;
+    }
     if (!this.isImmersiveSession(session)) {
       return;
     }
@@ -2144,6 +2234,9 @@ export class XRDevice {
     if (this.faceTrackingVisibilitySuspended) {
       return;
     }
+	if (!this[P_DEVICE].faceTrackingEnabled) {
+		return;
+	}
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
       this.faceTrackingVisibilitySuspended = true;
       return;
@@ -2210,6 +2303,9 @@ export class XRDevice {
   }
 
   private async startFaceTracking(): Promise<void> {
+	if (!this[P_DEVICE].faceTrackingEnabled) {
+		return;
+	}
     if (this.faceTrackingVisibilitySuspended) {
       return;
     }
@@ -2471,6 +2567,8 @@ export class XRDevice {
   }
 
   disableWebRTCControllerStreaming() {
+    this.cancelWebRTCVisibilitySuspendTimer();
+    this.webrtcSuspendedForVisibility = false;
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
     this.handleControllerConnectionChange(false);

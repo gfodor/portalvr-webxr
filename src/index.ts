@@ -8,8 +8,13 @@
 // model
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {
+  PORTAL_CONFIG_STORAGE_KEY,
+  getPortalEmulatorConfig,
+  updatePortalEmulatorConfig,
+} from './device/PortalEmulatorConfig.js';
+export type { PortalEmulatorConfig } from './device/PortalEmulatorConfig.js';
+export {
   PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
-  PORTAL_DEVICE_STORAGE_KEY,
 } from './device/PortalDeviceIdentity.js';
 export {
 	metaQuest2,

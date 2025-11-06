@@ -1,9 +1,9 @@
+import { getPortalEmulatorConfig, updatePortalEmulatorConfig } from './PortalEmulatorConfig.js';
 const NAME_PREFIX = 'PORTAL-';
 const SUFFIX_LENGTH = 12;
 const UI_SUFFIX_LENGTH = 4;
 const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 
-export const PORTAL_DEVICE_STORAGE_KEY = '___portalvr_device_id';
 export const PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL = '__PORTALVR_DEVICE_IDENTITY_OVERRIDE__';
 
 let cachedSuffix: string | null = null;
@@ -27,23 +27,27 @@ function ensureSuffix(): string {
   if (cachedSuffix) {
     return cachedSuffix;
   }
-  const storage = getLocalStorage();
+
   const injected = getInjectedSuffix();
   if (injected) {
     cachedSuffix = injected;
-    persistSuffix(storage, injected);
+    persistSuffixToConfig(injected);
     return injected;
   }
-  const storedRaw = storage?.getItem(PORTAL_DEVICE_STORAGE_KEY) ?? null;
-  const normalized = normalizeSuffix(storedRaw);
-  if (normalized) {
-    cachedSuffix = normalized;
-    persistSuffix(storage, normalized);
-    return normalized;
+
+  // Read from new config blob
+  const configSuffix = normalizeSuffix(getPortalEmulatorConfig().device?.suffix ?? null);
+  if (configSuffix) {
+    cachedSuffix = configSuffix;
+    // Ensure normalized value is persisted if different
+    persistSuffixToConfig(configSuffix);
+    return configSuffix;
   }
+
+  // Generate and persist
   const generated = generateSuffix();
   cachedSuffix = generated;
-  persistSuffix(storage, generated);
+  persistSuffixToConfig(generated);
   return generated;
 }
 
@@ -133,26 +137,12 @@ function randomChar(): string {
   return ALPHANUM.charAt(fallback);
 }
 
-function persistSuffix(storage: Storage | null, suffix: string): void {
-  if (!storage) {
-    return;
-  }
+function persistSuffixToConfig(suffix: string): void {
   try {
-    storage.setItem(PORTAL_DEVICE_STORAGE_KEY, suffix);
+    updatePortalEmulatorConfig({ device: { suffix } });
   } catch {
-    // Swallow storage exceptions (e.g., quota exceeded, storage disabled).
+    // ignore persistence failures
   }
-}
-
-function getLocalStorage(): Storage | null {
-  try {
-    if (typeof window !== 'undefined' && window.localStorage) {
-      return window.localStorage;
-    }
-  } catch {
-    // Accessing localStorage can throw (e.g., privacy mode).
-  }
-  return null;
 }
 
 function getCrypto(): Crypto | null {

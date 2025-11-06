@@ -1,13 +1,25 @@
-export {};
+import type { PortalEmulatorConfig } from 'portalvr';
 
 const RUNTIME_SCRIPT_ID = '__iwe-runtime-injected__';
 const IDENTITY_SCRIPT_ID = '__iwe-portal-identity-injected__';
-const MESSAGE_TYPE_GET_IDENTITY = 'portalvr:get-portal-device-identity';
+const MESSAGE_TYPE_GET_STATE = 'portalvr:get-state';
+const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
+
+const DEFAULT_SETTINGS: PortalEmulatorConfig['settings'] = {
+	faceTrackingEnabled: true,
+	stereoRenderingEnabled: false,
+};
+const DEFAULT_VERSION = 1;
 
 interface PortalDeviceIdentity {
 	suffix: string;
 	fullName?: string;
 	uiCode?: string;
+}
+
+interface PortalRuntimeState {
+	identity: PortalDeviceIdentity | null;
+	config: PortalEmulatorConfig | null;
 }
 
 const ensureRuntimeInjected = async () => {
@@ -21,15 +33,17 @@ const ensureRuntimeInjected = async () => {
 		return;
 	}
 
-	const identity = await requestPortalDeviceIdentity();
+	const state = await requestPortalRuntimeState();
+	const identity = state?.identity ?? null;
+	const config = state?.config ?? null;
 	if (identity?.suffix) {
-		injectIdentityOverride(root, identity);
+		injectIdentityOverride(root, identity, config);
 	}
 
 	injectRuntimeScript(root);
 };
 
-function injectRuntimeScript(root: Element) {
+function injectRuntimeScript(root: Element): void {
 	if (document.getElementById(RUNTIME_SCRIPT_ID)) {
 		return;
 	}
@@ -54,7 +68,11 @@ function injectRuntimeScript(root: Element) {
 	}
 }
 
-function injectIdentityOverride(root: Element, identity: PortalDeviceIdentity) {
+function injectIdentityOverride(
+	root: Element,
+	identity: PortalDeviceIdentity,
+	config: PortalEmulatorConfig | null,
+): void {
 	if (document.getElementById(IDENTITY_SCRIPT_ID)) {
 		return;
 	}
@@ -64,6 +82,9 @@ function injectIdentityOverride(root: Element, identity: PortalDeviceIdentity) {
 	script.type = 'text/javascript';
 	script.src = chrome.runtime.getURL('build/identity-bootstrap.js');
 	script.dataset.identity = JSON.stringify(identity);
+	if (config) {
+		script.dataset.config = JSON.stringify(config);
+	}
 	const firstChild = root.firstChild;
 	if (firstChild) {
 		root.insertBefore(script, firstChild);
@@ -72,7 +93,7 @@ function injectIdentityOverride(root: Element, identity: PortalDeviceIdentity) {
 	}
 }
 
-function requestPortalDeviceIdentity(): Promise<PortalDeviceIdentity | null> {
+function requestPortalRuntimeState(): Promise<PortalRuntimeState | null> {
 	if (!chrome.runtime?.id) {
 		return Promise.resolve(null);
 	}
@@ -80,36 +101,20 @@ function requestPortalDeviceIdentity(): Promise<PortalDeviceIdentity | null> {
 	return new Promise((resolve) => {
 		try {
 			chrome.runtime.sendMessage(
-				{ type: MESSAGE_TYPE_GET_IDENTITY },
+				{ type: MESSAGE_TYPE_GET_STATE },
 				(response?: unknown) => {
 					if (chrome.runtime.lastError) {
 						resolve(null);
 						return;
 					}
 
-					if (
-						response &&
-						typeof response === 'object' &&
-						typeof (response as { suffix?: unknown }).suffix === 'string'
-					) {
-						const normalized: PortalDeviceIdentity = {
-							suffix: (response as { suffix: string }).suffix,
-							fullName:
-								typeof (response as { fullName?: unknown }).fullName === 'string'
-									?
-										(response as { fullName: string }).fullName
-									: undefined,
-							uiCode:
-								typeof (response as { uiCode?: unknown }).uiCode === 'string'
-									?
-										(response as { uiCode: string }).uiCode
-									: undefined,
-						};
-						resolve(normalized);
+					const identity = parseIdentity((response as { identity?: unknown })?.identity);
+					const config = parseConfig((response as { config?: unknown })?.config);
+					if (!identity && !config) {
+						resolve(null);
 						return;
 					}
-
-					resolve(null);
+					resolve({ identity, config });
 				},
 			);
 		} catch (_) {
@@ -118,4 +123,84 @@ function requestPortalDeviceIdentity(): Promise<PortalDeviceIdentity | null> {
 	});
 }
 
+function parseIdentity(candidate: unknown): PortalDeviceIdentity | null {
+	if (!candidate || typeof candidate !== 'object') {
+		return null;
+	}
+	const suffixValue = (candidate as { suffix?: unknown }).suffix;
+	if (typeof suffixValue !== 'string' || !suffixValue) {
+		return null;
+	}
+	return {
+		suffix: suffixValue,
+		fullName:
+			typeof (candidate as { fullName?: unknown }).fullName === 'string'
+			?
+				(candidate as { fullName: string }).fullName
+			: undefined,
+		uiCode:
+			typeof (candidate as { uiCode?: unknown }).uiCode === 'string'
+			?
+				(candidate as { uiCode: string }).uiCode
+			: undefined,
+	};
+}
+
+function parseConfig(candidate: unknown): PortalEmulatorConfig | null {
+	if (!candidate || typeof candidate !== 'object') {
+		return null;
+	}
+	const deviceCandidate = (candidate as { device?: unknown }).device;
+	const settingsCandidate = (candidate as { settings?: unknown }).settings;
+	const versionCandidate = (candidate as { version?: unknown }).version;
+	const suffixCandidate =
+		deviceCandidate && typeof deviceCandidate === 'object'
+			?
+				(deviceCandidate as { suffix?: unknown }).suffix
+			: undefined;
+	const faceCandidate =
+		settingsCandidate && typeof settingsCandidate === 'object'
+			?
+				(settingsCandidate as { faceTrackingEnabled?: unknown }).faceTrackingEnabled
+			: undefined;
+	const stereoCandidate =
+		settingsCandidate && typeof settingsCandidate === 'object'
+			?
+				(settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled
+			: undefined;
+	return {
+		device: { suffix: typeof suffixCandidate === 'string' ? suffixCandidate : '' },
+		settings: {
+			faceTrackingEnabled:
+				typeof faceCandidate === 'boolean'
+					? faceCandidate
+					: DEFAULT_SETTINGS.faceTrackingEnabled,
+			stereoRenderingEnabled:
+				typeof stereoCandidate === 'boolean'
+					? stereoCandidate
+					: DEFAULT_SETTINGS.stereoRenderingEnabled,
+		},
+		version: typeof versionCandidate === 'number' ? versionCandidate : DEFAULT_VERSION,
+	};
+}
+
+function bridgePageConfigUpdates(): void {
+	window.addEventListener(MESSAGE_TYPE_SET_CONFIG, (event: Event) => {
+		if (!chrome.runtime?.id) {
+			return;
+		}
+		const custom = event as CustomEvent<PortalEmulatorConfig | null>;
+		const config = custom.detail;
+		if (!config) {
+			return;
+		}
+		try {
+			chrome.runtime.sendMessage({ type: MESSAGE_TYPE_SET_CONFIG, config });
+		} catch {
+			// ignore send failures (extension might be unavailable)
+		}
+	});
+}
+
+bridgePageConfigUpdates();
 void ensureRuntimeInjected();

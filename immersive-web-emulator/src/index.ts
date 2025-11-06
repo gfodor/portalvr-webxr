@@ -24,3 +24,6 @@ export const injectRuntime = () => {
 
 	xrDevice.enablePortalPoseCamera({ wasmDataUrl: getPortalPoseWasmDataURL() });
 };
+
+// Re-export PortalVR public API for consumers (DevUI, extension bootstrap)
+export * from 'portalvr';
