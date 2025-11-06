@@ -60,8 +60,10 @@ const vec3 R_B_GREEN_MAGENTA = vec3(-0.0137, -0.0254, 0.0199);
 
 void main() {
   vec2 rightUv = v_uv - vec2(u_focalOffset, 0.0);
-  vec3 leftColor = toLinear(texture(u_left, v_uv).rgb);
-  vec3 rightColor = toLinear(texture(u_right, rightUv).rgb);
+  vec4 leftSample = texture(u_left, v_uv);
+  vec4 rightSample = texture(u_right, rightUv);
+  vec3 leftColor = toLinear(leftSample.rgb);
+  vec3 rightColor = toLinear(rightSample.rgb);
 
   vec3 c_left = vec3(
     dot(L_R_GREEN_MAGENTA, leftColor),
@@ -76,7 +78,8 @@ void main() {
   );
 
   vec3 color = fromLinear(c_left + c_right);
-  outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  float alpha = 1.0 - (1.0 - leftSample.a) * (1.0 - rightSample.a);
+  outColor = vec4(clamp(color, 0.0, 1.0), alpha);
 }
 `;
 
