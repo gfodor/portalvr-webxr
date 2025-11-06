@@ -1,27 +1,69 @@
 import WebXRPolyfill from 'webxr-polyfill';
 
-import { XRDevice } from './device/XRDevice.js';
+import {
+  XRDevice,
+  type DevUIConstructor,
+} from './device/XRDevice.js';
 import { metaQuest3 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
+import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
 
 const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
 
 type StandaloneState = {
   device: XRDevice;
+  devUIInstalled: boolean;
   initializedAt: number;
 };
 
-function storeState(device: XRDevice) {
-  (globalThis as Record<string, unknown>)[GLOBAL_STATE_KEY] = {
-    device,
-    initializedAt: Date.now(),
-  } satisfies StandaloneState;
+export interface StandaloneOptions {
+  /**
+   * Forces reinstallation even if a previous device is cached.
+   */
+  forceReinstall?: boolean;
+  /**
+   * Skips detection of native immersive support. Useful for testing browser overrides.
+   */
+  skipNativeImmersiveCheck?: boolean;
+  /**
+   * Controls whether installRuntime is called with enforce=true.
+   */
+  enforceRuntime?: boolean;
+  /**
+   * Provides an alternative DevUI implementation. Set to null to disable.
+   */
+  devUIConstructor?: DevUIConstructor | null;
+  /**
+   * Controls whether the DevUI should be installed. Defaults to true.
+   */
+  installDevUI?: boolean;
+  /**
+   * Controls whether the Portal Pose camera integration is enabled.
+   */
+  enablePortalPoseCamera?: boolean;
+  /**
+   * Optionally override the Portal Pose WASM URL.
+   */
+  wasmDataUrl?: string;
+  /**
+   * Forces the polyfill to instantiate even if navigator.xr exists.
+   */
+  forcePolyfill?: boolean;
 }
 
-function getState(): StandaloneState | null {
+function storeState(state: StandaloneState) {
+  (globalThis as Record<string, unknown>)[GLOBAL_STATE_KEY] = state;
+}
+
+export function getStandaloneState(): StandaloneState | null {
   const raw = (globalThis as Record<string, unknown>)[GLOBAL_STATE_KEY];
   if (raw && typeof raw === 'object' && 'device' in raw) {
-    return raw as StandaloneState;
+    const state = raw as Partial<StandaloneState>;
+    return {
+      device: state.device as XRDevice,
+      devUIInstalled: Boolean(state.devUIInstalled),
+      initializedAt: state.initializedAt ?? Date.now(),
+    };
   }
   return null;
 }
@@ -51,35 +93,79 @@ function ensurePolyfillInstalled(force = false) {
   }
 }
 
-async function installEmulator(): Promise<XRDevice | null> {
+function markCustomPolyfillFlag() {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore Assign global flag used by reference implementations.
+  window.CustomWebXRPolyfill = true;
+}
+
+function resolveDevUIConstructor(
+  options: StandaloneOptions,
+): DevUIConstructor | null {
+  if (options.installDevUI === false) {
+    return null;
+  }
+  if (options.devUIConstructor === null) {
+    return null;
+  }
+  if (options.devUIConstructor) {
+    return options.devUIConstructor;
+  }
+  return PortalVRDevUI as unknown as DevUIConstructor;
+}
+
+export async function bootstrapStandaloneEmulator(
+  options: StandaloneOptions = {},
+): Promise<XRDevice | null> {
   if (typeof window === 'undefined') {
     return null;
   }
-  const existing = getState();
-  if (existing) {
-    return existing.device;
+
+  if (!options.forceReinstall) {
+    const existing = getStandaloneState();
+    if (existing) {
+      return existing.device;
+    }
   }
 
-  const nativeImmersive = await detectImmersiveVRSupport();
-  if (nativeImmersive) {
-    return null;
+  if (!options.skipNativeImmersiveCheck) {
+    const nativeImmersive = await detectImmersiveVRSupport();
+    if (nativeImmersive) {
+      return null;
+    }
   }
 
-  ensurePolyfillInstalled(true);
+  ensurePolyfillInstalled(options.forcePolyfill ?? true);
+  markCustomPolyfillFlag();
 
   const device = new XRDevice(metaQuest3);
-  device.stereoEnabled = true;
   device.installRuntime({
-    enforce: true,
-  });
-  device.enablePortalPoseCamera({
-    wasmDataUrl: getPortalPoseWasmDataURL(),
+    enforce: options.enforceRuntime ?? true,
   });
 
-  storeState(device);
+  const devUIConstructor = resolveDevUIConstructor(options);
+  if (devUIConstructor) {
+    device.installDevUI(devUIConstructor);
+  }
+
+  if (options.enablePortalPoseCamera ?? true) {
+    device.enablePortalPoseCamera({
+      wasmDataUrl: options.wasmDataUrl ?? getPortalPoseWasmDataURL(),
+    });
+  }
+
+  storeState({
+    device,
+    devUIInstalled: Boolean(devUIConstructor),
+    initializedAt: Date.now(),
+  });
+
   return device;
 }
 
-void installEmulator().catch((error) => {
+void bootstrapStandaloneEmulator().catch((error) => {
   console.error('[PortalVR Standalone] Failed to install emulator', error);
 });

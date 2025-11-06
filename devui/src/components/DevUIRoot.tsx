@@ -47,6 +47,10 @@ export function DevUIRoot({
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
 		readSettings(),
 	);
+	const [initialStereoMode, setInitialStereoMode] = useState<boolean>(
+		() => xrDevice.stereoEnabled,
+	);
+	const [showStereoReloadNotice, setShowStereoReloadNotice] = useState(false);
 
 	const scrimRef = useRef<HTMLDivElement | null>(null);
 
@@ -69,9 +73,15 @@ export function DevUIRoot({
 	}, []);
 
 	const openSettings = useCallback(() => {
-		setSettings(readSettings());
+		const nextSettings = readSettings();
+		setSettings(nextSettings);
+		const runtimeStereo = xrDevice.stereoEnabled;
+		setInitialStereoMode(runtimeStereo);
+		setShowStereoReloadNotice(
+			nextSettings.stereoRenderingEnabled !== runtimeStereo,
+		);
 		setSettingsOpen(true);
-	}, []);
+	}, [xrDevice]);
 
 	const closeSettings = useCallback(() => {
 		setSettingsOpen(false);
@@ -104,15 +114,23 @@ export function DevUIRoot({
 		[xrDevice],
 	);
 
-	const selectMode = useCallback((enabled: boolean) => {
-		setSettings((prev) => ({
-			...prev,
-			stereoRenderingEnabled: enabled,
-		}));
-		updatePortalEmulatorConfig({
-			settings: { stereoRenderingEnabled: enabled },
-		});
-	}, []);
+	const selectMode = useCallback(
+		(enabled: boolean) => {
+			if (settings.stereoRenderingEnabled === enabled) {
+				setShowStereoReloadNotice(enabled !== initialStereoMode);
+				return;
+			}
+			setSettings((prev) => ({
+				...prev,
+				stereoRenderingEnabled: enabled,
+			}));
+			setShowStereoReloadNotice(enabled !== initialStereoMode);
+			updatePortalEmulatorConfig({
+				settings: { stereoRenderingEnabled: enabled },
+			});
+		},
+		[initialStereoMode, settings.stereoRenderingEnabled],
+	);
 
 	const toggleFullscreen = useCallback(
 		(event: ChangeEvent<HTMLInputElement>) => {
@@ -258,17 +276,18 @@ export function DevUIRoot({
 									<span>3D Glasses</span>
 								</button>
 							</div>
-							<p className="portal-reload-note">
-								To switch modes,{' '}
-								<button
-									type="button"
-									className="portal-link"
-									onClick={handleReload}
-								>
-									reload
-								</button>{' '}
-								the page.
-							</p>
+					{showStereoReloadNotice && (
+						<p className="portal-reload-note">
+							Changing this value requires a reload.{' '}
+							<button
+								type="button"
+								className="portal-link"
+								onClick={handleReload}
+							>
+								Reload now
+							</button>
+						</p>
+					)}
 							<p className="portal-mode-footer">
 								<a
 									className="portal-link"

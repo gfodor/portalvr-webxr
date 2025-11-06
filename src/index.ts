@@ -88,3 +88,10 @@ export { XRReferenceSpaceEvent } from './events/XRReferenceSpaceEvent.js';
 
 // Private Keys
 export * from './private.js';
+
+// Standalone bootstrap helpers
+export {
+  bootstrapStandaloneEmulator,
+  getStandaloneState,
+} from './standalone.js';
+export type { StandaloneOptions } from './standalone.js';

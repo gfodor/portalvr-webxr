@@ -82,6 +82,7 @@ export default [
 		output: {
 			file: 'build/identity-bootstrap.js',
 			format: 'iife',
+			inlineDynamicImports: true,
 		},
 	},
 	{
