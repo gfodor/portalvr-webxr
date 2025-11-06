@@ -13,6 +13,14 @@
 	"background": {
 		"service_worker": "build/service-worker.min.js"
 	},
+	"content_scripts": [
+		{
+			"matches": ["<all_urls>"],
+			"js": ["build/content-loader.js"],
+			"run_at": "document_start",
+			"all_frames": true
+		}
+	],
 	"permissions": ["storage", "scripting", "webNavigation"],
 	"host_permissions": ["http://*/*", "https://*/*"],
 	"action": {
@@ -26,6 +34,7 @@
 	"web_accessible_resources": [
 		{
 			"resources": [
+				"build/iwe.min.js",
 				"build/wasm/portal-pose/portal_pose.wasm"
 			],
 			"matches": ["<all_urls>"]

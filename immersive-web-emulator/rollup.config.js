@@ -37,6 +37,14 @@ const createRuntimeAlias = () =>
 
 export default [
 	{
+		input: 'lib/content-loader.js',
+		plugins: [nodeResolve(), commonjs()],
+		output: {
+			file: 'build/content-loader.js',
+			format: 'iife',
+		},
+	},
+	{
 		input: 'lib/index.js',
 		plugins: [
 			createRuntimeAlias(),

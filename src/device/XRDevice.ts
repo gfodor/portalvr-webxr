@@ -438,6 +438,7 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private lastImmersiveSessionForWebRTC: XRSession | null = null;
   private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
   private portalControllerRuntime: PortalControllerRuntime | null = null;
   private pendingOrientationReset = false;
@@ -732,10 +733,12 @@ export class XRDevice {
           this[P_DEVICE].canvasData = undefined;
           window.dispatchEvent(new Event('resize'));
         }
+        this.lastImmersiveSessionForWebRTC = null;
         this.stopFaceTracking();
       },
       onFrameStart: (frame: XRFrame) => {
         const session = frame.session;
+        this.ensureDefaultWebRTCStreamerForSession(session);
         this.portalPoseCamera?.update(frame);
         this.updateFaceTrackingForSession(session);
         this[P_DEVICE].updateViews();
@@ -992,7 +995,6 @@ export class XRDevice {
 		} else {
 			Promise.resolve().then(reinstall);
 		}
-		this.ensureDefaultWebRTCStreamer();
 	}
 
   installDevUI(devUIConstructor: DevUIConstructor) {
@@ -2102,8 +2104,27 @@ export class XRDevice {
   }
 
   private shouldRunFaceTrackingForSession(session: XRSession): boolean {
+    return this.isImmersiveSession(session);
+  }
+
+  private isImmersiveSession(session: XRSession): boolean {
     const mode = session[P_SESSION].mode;
     return mode === 'immersive-vr' || mode === 'immersive-ar';
+  }
+
+  private ensureDefaultWebRTCStreamerForSession(session: XRSession): void {
+    if (!this.isImmersiveSession(session)) {
+      return;
+    }
+    if (this.lastImmersiveSessionForWebRTC === session) {
+      return;
+    }
+    if (!this.webrtcStreamer) {
+      this.ensureDefaultWebRTCStreamer();
+    }
+    if (this.webrtcStreamer) {
+      this.lastImmersiveSessionForWebRTC = session;
+    }
   }
 
   private updateFaceTrackingForSession(session: XRSession): void {
