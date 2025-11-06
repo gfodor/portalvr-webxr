@@ -73,10 +73,10 @@ export default [
 		output: {
 			file: 'build/iwe.min.js',
 			format: 'umd',
-			name: 'IWE',
+			name: 'PORTAL',
 			inlineDynamicImports: true,
 			plugins: [terser()],
-			footer: 'IWE.injectRuntime();',
+			footer: 'PORTAL.injectRuntime();',
 			globals: { three: 'THREE' },
 		},
 	},

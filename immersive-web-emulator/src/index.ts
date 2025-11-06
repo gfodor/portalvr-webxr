@@ -15,7 +15,7 @@ export const injectRuntime = () => {
 		forcePolyfill: true,
 	});
 	promise.catch((error) => {
-		console.error('[PortalVR IWE] Failed to install emulator', error);
+		console.error('[PortalVR PORTAL] Failed to install emulator', error);
 	});
 	return promise;
 };
