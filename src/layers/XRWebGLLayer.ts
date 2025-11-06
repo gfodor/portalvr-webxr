@@ -161,21 +161,37 @@ export class XRWebGLLayer extends XRLayer {
 
     const halfWidth = Math.max(1, Math.floor(width / 2));
 
+    const isWebGL2 =
+      typeof WebGL2RenderingContext !== 'undefined' &&
+      gl instanceof WebGL2RenderingContext;
+    const gl2 = isWebGL2 ? (gl as WebGL2RenderingContext) : null;
+
+    const colorFormat = this._layerInit.alpha ? gl.RGBA : gl.RGB;
+    const colorInternalFormat = gl2
+      ? (this._layerInit.alpha ? gl2.RGBA8 : gl2.RGB8)
+      : colorFormat;
+    const colorType = gl.UNSIGNED_BYTE;
+    const baseFilter = this._layerInit.antialias ? gl.LINEAR : gl.NEAREST;
+
     const initializeTexture = (texture: WebGLTexture, texWidth: number) => {
       gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, baseFilter);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, baseFilter);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      if (isWebGL2) {
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_BASE_LEVEL, 0);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, 0);
+      }
       gl.texImage2D(
         gl.TEXTURE_2D,
         0,
-        gl.RGBA,
+        colorInternalFormat,
         texWidth,
         height,
         0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
+        colorFormat,
+        colorType,
         null,
       );
     };
@@ -198,17 +214,15 @@ export class XRWebGLLayer extends XRLayer {
       depthRenderbuffer = gl.createRenderbuffer();
       if (depthRenderbuffer) {
         gl.bindRenderbuffer(gl.RENDERBUFFER, depthRenderbuffer);
-        const isWebGL2 =
-          typeof WebGL2RenderingContext !== 'undefined' &&
-          gl instanceof WebGL2RenderingContext;
-
         let attachment = gl.DEPTH_ATTACHMENT;
-        let depthFormat: number = isWebGL2 ? gl.DEPTH_COMPONENT24 : gl.DEPTH_COMPONENT16;
+        let depthFormat: number = isWebGL2 && gl2 ? gl2.DEPTH_COMPONENT24 : gl.DEPTH_COMPONENT16;
 
         if (this._layerInit.stencil) {
           if (isWebGL2) {
-            depthFormat = gl.DEPTH24_STENCIL8;
-            attachment = gl.DEPTH_STENCIL_ATTACHMENT;
+            if (gl2) {
+              depthFormat = gl2.DEPTH24_STENCIL8;
+              attachment = gl.DEPTH_STENCIL_ATTACHMENT;
+            }
           } else {
             const depthStencilExt =
               gl.getExtension('WEBGL_depth_texture') ||
@@ -243,6 +257,15 @@ export class XRWebGLLayer extends XRLayer {
     gl.bindTexture(gl.TEXTURE_2D, prevTex0);
     gl.bindRenderbuffer(gl.RENDERBUFFER, prevRenderbuffer);
     gl.activeTexture(prevActiveTexture);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      console.warn(
+        `[XRWebGLLayer] Stereo framebuffer incomplete: 0x${status.toString(16)}`,
+      );
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, prevFramebuffer);
 
     this[P_WEBGL_LAYER].stereoTargets = {
       framebuffer,
