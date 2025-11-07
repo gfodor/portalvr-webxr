@@ -1141,8 +1141,12 @@ export class XRDevice {
       state.wonderland = isWonderland;
       state.suppressedFullscreenLogged = false;
       if (isWonderland) {
+        const stereoActive = this[P_DEVICE].stereoEnabled;
+        const suffix = stereoActive
+          ? 'will remain disabled while stereo/anaglyph rendering is enabled.'
+          : 'suppression is inactive because stereo/anaglyph rendering is disabled.';
         console.info(
-          '[XRDevice] Wonderland engine detected from requestSession stack; immersive fullscreen will remain disabled.',
+          `[XRDevice] Wonderland engine detected from requestSession stack; immersive fullscreen ${suffix}`,
         );
       }
     }
@@ -2182,15 +2186,20 @@ export class XRDevice {
     if (!session || session[P_SESSION].mode !== 'immersive-vr') {
       return;
     }
+    const stereoActive = this[P_DEVICE].stereoEnabled;
     const detection = this[P_DEVICE].engineDetection;
-    if (detection.wonderland) {
+    if (detection.wonderland && stereoActive) {
       if (!detection.suppressedFullscreenLogged) {
         console.info(
-          '[XRDevice] Skipping fullscreen for immersive session (Wonderland engine detected).',
+          '[XRDevice] Skipping fullscreen for immersive session (Wonderland engine detected with stereo/anaglyph rendering enabled).',
         );
         detection.suppressedFullscreenLogged = true;
       }
       return;
+    }
+
+    if (detection.suppressedFullscreenLogged && (!detection.wonderland || !stereoActive)) {
+      detection.suppressedFullscreenLogged = false;
     }
     if (!this[P_DEVICE].immersiveFullscreenEnabled) {
       return;
