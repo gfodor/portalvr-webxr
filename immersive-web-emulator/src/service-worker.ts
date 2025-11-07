@@ -14,12 +14,11 @@ const RUNTIME_SCRIPT_PATH = 'build/iwe.min.js';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
-const CONFIG_READY_RESOLVED_KEY = '__iweConfigReadyResolved__';
-const CONFIG_READY_PROMISE_KEY = '__iweConfigReadyPromise__';
-const CONFIG_READY_RESOLVER_KEY = '__iweConfigReadyResolver__';
+// Removed: CONFIG_READY_RESOLVED_KEY / CONFIG_READY_PROMISE_KEY / CONFIG_READY_RESOLVER_KEY
 const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'view-source:', 'chrome-extension:'];
 const inflightInjectionTasks = new Map<string, Promise<void>>();
-const DEBUG_LOGGING = true;
+// Silence debug output by default
+const DEBUG_LOGGING = false;
 
 function logDebug(...args: unknown[]): void {
 	if (!DEBUG_LOGGING) {
@@ -137,11 +136,13 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 	}
 	const task = (async () => {
 		const target: FrameTarget = { tabId, frameId };
+
+		// Detect runtime but DO NOT bail; we still inject the config override to avoid races.
 		const alreadyInstalled = await isRuntimeAlreadyInstalled(target);
 		if (alreadyInstalled) {
-			logDebug('runtime already installed', { tabId, frameId });
-			return;
+			logDebug('runtime already installed (will still inject config override)', { tabId, frameId });
 		}
+
 		const config = await getOrCreateRuntimeConfig();
 		logDebug('injecting config override', {
 			tabId,
@@ -324,9 +325,6 @@ async function injectConfigOverride(
 			func: (
 				configKey: string,
 				configValue: PortalEmulatorConfig,
-				configReadyResolvedKey: string,
-				configReadyPromiseKey: string,
-				configReadyResolverKey: string,
 				configEventType: string,
 			) => {
 				const globalTarget = window as typeof window & Record<string, unknown>;
@@ -342,32 +340,11 @@ async function injectConfigOverride(
 				} catch {
 					// ignore event dispatch failures
 				}
-				globalTarget[configReadyResolvedKey] = true;
-				try {
-					globalTarget[configReadyPromiseKey] = Promise.resolve();
-				} catch {
-					// ignore promise override failures
-				}
-				const resolver = globalTarget[configReadyResolverKey];
-				if (typeof resolver === 'function') {
-					try {
-						resolver();
-					} catch {
-						// ignore resolver errors
-					}
-				}
-				try {
-					globalTarget[configReadyResolverKey] = undefined;
-				} catch {
-					// ignore cleanup failures
-				}
+				// Removed: __iweConfigReady* globals/resolver; runtime now observes config via PortalConfigProvider.
 			},
 			args: [
 				PORTAL_CONFIG_OVERRIDE_GLOBAL,
 				config,
-				CONFIG_READY_RESOLVED_KEY,
-				CONFIG_READY_PROMISE_KEY,
-				CONFIG_READY_RESOLVER_KEY,
 				MESSAGE_TYPE_SET_CONFIG,
 			],
 		});

@@ -9,14 +9,10 @@ import {
 	bootstrapStandaloneEmulator,
 	ensureStandaloneSurfaceInitialized,
 	XRDevice,
-	getPortalEmulatorConfig,
 } from 'portalvr';
 
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
-const CONFIG_READY_RESOLVED_KEY = '__iweConfigReadyResolved__';
-const CONFIG_READY_PROMISE_KEY = '__iweConfigReadyPromise__';
-const CONFIG_READY_RESOLVER_KEY = '__iweConfigReadyResolver__';
 
 export const injectRuntime = () => {
 	ensureStandaloneSurfaceInitialized(true);
@@ -24,17 +20,12 @@ export const injectRuntime = () => {
 	if (existingPromise) {
 		return existingPromise;
 	}
-	const promise = waitForConfigReady()
-		.catch(() => undefined)
-		.then(() =>
-			bootstrapStandaloneEmulator({
-				skipNativeImmersiveCheck: true,
-				forceReinstall: true,
-				enforceRuntime: true,
-				forcePolyfill: true,
-			}),
-		)
-		.then((device) => {
+	const promise = bootstrapStandaloneEmulator({
+		skipNativeImmersiveCheck: true,
+		forceReinstall: true,
+		enforceRuntime: true,
+		forcePolyfill: true,
+	}).then((device) => {
 			markRuntimeInstalled();
 			return device;
 		});
@@ -96,45 +87,4 @@ function clearRuntimeInstallMarkers(): void {
 	} catch {
 		// ignore cleanup failures
 	}
-}
-
-function waitForConfigReady(): Promise<void> {
-	if (typeof window === 'undefined') {
-		return Promise.resolve();
-	}
-	const target = window as typeof window & Record<string, unknown>;
-	if (target[CONFIG_READY_RESOLVED_KEY]) {
-		return Promise.resolve();
-	}
-	const existing = target[CONFIG_READY_PROMISE_KEY];
-	if (existing) {
-		return existing as Promise<void>;
-	}
-	let resolveFn: (() => void) | null = null;
-	const readyPromise = new Promise<void>((resolve) => {
-		resolveFn = resolve;
-	});
-	const timeoutPromise = new Promise<void>((resolve) => {
-		setTimeout(resolve, 2000);
-	});
-	target[CONFIG_READY_PROMISE_KEY] = Promise.race([readyPromise, timeoutPromise]).then(() => {
-		if (!target[CONFIG_READY_RESOLVED_KEY]) {
-			const fallbackSuffix = getPortalEmulatorConfig().device?.suffix ?? '';
-			if (!fallbackSuffix) {
-				console.warn('[PortalVR] Config override still pending after timeout; proceeding with fallback.');
-			}
-			target[CONFIG_READY_RESOLVED_KEY] = true;
-		}
-		target[CONFIG_READY_RESOLVER_KEY] = undefined;
-	});
-	target[CONFIG_READY_RESOLVER_KEY] = () => {
-		if (!target[CONFIG_READY_RESOLVED_KEY]) {
-			target[CONFIG_READY_RESOLVED_KEY] = true;
-		}
-		if (resolveFn) {
-			resolveFn();
-			resolveFn = null;
-		}
-	};
-	return target[CONFIG_READY_PROMISE_KEY] as Promise<void>;
 }
