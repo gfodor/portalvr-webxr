@@ -684,6 +684,7 @@ export class DualRoomCoordinator {
   private _lastWakeTriggerMs = 0;
   private _mouseIdle = true;
   private _mouseIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  private _stopped = false;
 
   localCandidates: any[] = [];
   remoteCandidates: any[] = [];
@@ -779,6 +780,9 @@ export class DualRoomCoordinator {
   }
 
   private _handleWakeEvent(source: 'visibility' | 'mouse') {
+    if (this._stopped) {
+      return;
+    }
     const now = Date.now();
     if (now - this._lastWakeTriggerMs < BACKOFF_WAKE_DEBOUNCE_MS) {
       return;
@@ -796,6 +800,9 @@ export class DualRoomCoordinator {
   }
 
   private _resetBackoffForWake() {
+    if (this._stopped) {
+      return;
+    }
     this._backoffMs = 1000;
     this._attempt = 1;
     if (this._backoffInterrupt) {
@@ -809,6 +816,9 @@ export class DualRoomCoordinator {
 
   private async _waitWithInterrupt(delay: number): Promise<void> {
     if (delay <= 0) {
+      return;
+    }
+    if (this._stopped) {
       return;
     }
     this._backoffWaiting = true;
@@ -835,6 +845,9 @@ export class DualRoomCoordinator {
   }
 
   async start(): Promise<void> {
+    if (this._stopped) {
+      return;
+    }
     this.localCandidates = [];
     this.remoteCandidates = [];
     this.local2Candidates = [];
@@ -882,15 +895,23 @@ export class DualRoomCoordinator {
     startPromises.push(this.s2.start());
 
     const results = await Promise.allSettled(startPromises);
+    if (this._stopped) {
+      return;
+    }
     const allRejected = results.every((r) => r.status === 'rejected');
-    if (allRejected && !this.connected) {
+    if (allRejected && !this.connected && !this._stopped) {
       this.log(`both session starts failed; scheduling reconnect`);
       this._scheduleReconnect('startup-failed');
     }
-    this._tick();
+    if (!this._stopped) {
+      this._tick();
+    }
   }
 
   private _onConnected(which: 'local' | 'remote') {
+    if (this._stopped) {
+      return;
+    }
     const firstConnection = !this.connected;
     if (firstConnection) {
       this.connected = true;
@@ -932,6 +953,9 @@ export class DualRoomCoordinator {
   }
 
   private _onDown(which: 'local' | 'remote', reason: string) {
+    if (this._stopped) {
+      return;
+    }
     this.log(`DOWN detected on ${which}: ${reason}`);
     const active = this.winner;
     if (active && active !== which) {
@@ -986,6 +1010,7 @@ export class DualRoomCoordinator {
   }
 
   private _scheduleReconnect(reason: string) {
+    if (this._stopped) return;
     if (this._reconnectInFlight) return;
     this._reconnectInFlight = true;
     this.reconnecting = true;
@@ -1009,6 +1034,11 @@ export class DualRoomCoordinator {
       this.local2Candidates = [];
       this.remote2Candidates = [];
       this.winner = undefined;
+      if (this._stopped) {
+        this._reconnectInFlight = false;
+        this.reconnecting = false;
+        return;
+      }
       this._tick();
 
       const delay = Math.min(this._backoffMs, 30000);
@@ -1016,6 +1046,12 @@ export class DualRoomCoordinator {
       this.nextBackoffMs = delay;
       this._tick();
       await this._waitWithInterrupt(delay);
+      if (this._stopped) {
+        this._reconnectInFlight = false;
+        this.reconnecting = false;
+        this.nextBackoffMs = 0;
+        return;
+      }
       this.nextBackoffMs = 0;
       this._tick();
 
@@ -1023,8 +1059,16 @@ export class DualRoomCoordinator {
       try {
         await this.start();
       } catch (e: any) {
-        startError = e;
-        this.log(`reconnect start error: ${e.message}`);
+        if (!this._stopped) {
+          startError = e;
+          this.log(`reconnect start error: ${e.message}`);
+        }
+      }
+
+      if (this._stopped) {
+        this._reconnectInFlight = false;
+        this.reconnecting = false;
+        return;
       }
 
       if (startError) {
@@ -1035,6 +1079,11 @@ export class DualRoomCoordinator {
       }
 
       const connected = await this._waitForConnected(this._connectTimeoutMs);
+      if (this._stopped) {
+        this._reconnectInFlight = false;
+        this.reconnecting = false;
+        return;
+      }
       if (connected || this.connected) {
         this.log('reconnect successful');
         this.reconnecting = false;
@@ -1048,10 +1097,16 @@ export class DualRoomCoordinator {
       this.log(`reconnect attempt timed out after ${Math.ceil(this._connectTimeoutMs / 1000)}s`);
       this._backoffMs = Math.min(this._backoffMs * 2, 30000);
       this._reconnectInFlight = false;
-      this._scheduleReconnect('timeout');
-      return;
+      if (!this._stopped) {
+        this._scheduleReconnect('timeout');
+      }
     };
     loop().catch((e) => {
+      if (this._stopped) {
+        this._reconnectInFlight = false;
+        this.reconnecting = false;
+        return;
+      }
       this.log(`reconnect loop error: ${e.message}`);
       this._reconnectInFlight = false;
       this._tick();
@@ -1133,6 +1188,16 @@ export class DualRoomCoordinator {
 
   end() {
     this._teardownIdleWakeListeners();
+    if (this._stopped) {
+      return;
+    }
+    this._stopped = true;
+    this.connected = false;
+    this.reconnecting = false;
+    this._reconnectInFlight = false;
+    this._backoffWaiting = false;
+    this.nextBackoffMs = 0;
+    this._resolveConnectionWaiters(false);
     if (this._backoffInterrupt) {
       const interrupt = this._backoffInterrupt;
       this._backoffInterrupt = null;
@@ -1140,9 +1205,21 @@ export class DualRoomCoordinator {
     }
     this.s1?.end();
     this.s2?.end();
+    this.s1 = null;
+    this.s2 = null;
+    this.stats1 = null;
+    this.stats2 = null;
+    this.localCandidates = [];
+    this.remoteCandidates = [];
+    this.local2Candidates = [];
+    this.remote2Candidates = [];
+    this.winner = undefined;
   }
 
   triggerImmediateReconnect(reason = 'manual'): boolean {
+    if (this._stopped) {
+      return false;
+    }
     if (this.connected) {
       this.log(`manual reconnect ignored; already connected`);
       return false;
