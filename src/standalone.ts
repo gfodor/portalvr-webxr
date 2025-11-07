@@ -142,9 +142,17 @@ export async function bootstrapStandaloneEmulator(
   markCustomPolyfillFlag();
 
   const device = new XRDevice(metaQuest3);
-  device.installRuntime({
-    enforce: options.enforceRuntime ?? true,
-  });
+  try {
+    device.installRuntime({
+      enforce: options.enforceRuntime ?? true,
+    });
+  } catch (error) {
+    if (isNavigatorXRError(error)) {
+      console.warn('[PortalVR Standalone] navigator.xr override was already locked; continuing with existing runtime surface.');
+    } else {
+      throw error;
+    }
+  }
 
   const devUIConstructor = resolveDevUIConstructor(options);
   if (devUIConstructor) {
@@ -169,3 +177,14 @@ export async function bootstrapStandaloneEmulator(
 void bootstrapStandaloneEmulator().catch((error) => {
   console.error('[PortalVR Standalone] Failed to install emulator', error);
 });
+
+function isNavigatorXRError(error: unknown): boolean {
+  if (!error) {
+    return false;
+  }
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+  return message.includes("Cannot set property xr") || message.includes('only a getter');
+}

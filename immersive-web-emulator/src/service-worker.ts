@@ -4,11 +4,32 @@ declare const chrome: any;
 
 const MESSAGE_TYPE_GET_STATE = 'portalvr:get-state';
 const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
+const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
 const CONFIG_STORAGE_KEY = 'portalvrConfig';
 const NAME_PREFIX = 'PORTAL-';
 const SUFFIX_LENGTH = 12;
 const UI_SUFFIX_LENGTH = 4;
 const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+const PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL = '__PORTALVR_DEVICE_IDENTITY_OVERRIDE__';
+const PORTAL_CONFIG_OVERRIDE_GLOBAL = '__PORTALVR_EMULATOR_CONFIG_OVERRIDE__';
+const RUNTIME_SCRIPT_PATH = 'build/iwe.min.js';
+const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
+const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
+const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
+const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'view-source:', 'chrome-extension:'];
+const inflightInjectionTasks = new Map<string, Promise<void>>();
+const DEBUG_LOGGING = true;
+
+function logDebug(...args: unknown[]): void {
+	if (!DEBUG_LOGGING) {
+		return;
+	}
+	try {
+		console.info('[IWE bootstrap]', ...args);
+	} catch {
+		/* noop */
+	}
+}
 
 interface PortalDeviceIdentity {
 	suffix: string;
@@ -43,7 +64,9 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	version: 1,
 };
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender: unknown, sendResponse: (response?: unknown) => void) => {
+void ensureRuntimePreloadRegistered();
+
+chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: number }; frameId?: number; url?: string } | null, sendResponse: (response?: unknown) => void) => {
 	if (!isRuntimeMessage(message)) {
 		return;
 	}
@@ -62,11 +85,75 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender: unknown, sendRe
 		return true;
 	}
 
+	if (message.type === MESSAGE_TYPE_ENSURE_RUNTIME) {
+		const tabId = sender?.tab?.id;
+		if (typeof tabId !== 'number') {
+			logDebug('ensure-runtime rejected: missing tab id', { sender });
+			sendResponse({ ok: false, reason: 'missing-tab' });
+			return;
+		}
+		const frameId = typeof sender?.frameId === 'number' ? sender.frameId : 0;
+		logDebug('ensure-runtime message', { tabId, frameId, url: sender?.url });
+		ensureRuntimeInjected(tabId, frameId, sender?.url)
+			.then(() => {
+				logDebug('ensure-runtime completed', { tabId, frameId });
+				sendResponse({ ok: true });
+			})
+			.catch((error) => {
+				logDebug('ensure-runtime failed', { tabId, frameId, error });
+				sendResponse({ ok: false });
+			});
+		return true;
+	}
+
 	return;
+});
+
+chrome.webNavigation.onCommitted.addListener((details: { tabId: number; frameId: number; url?: string }) => {
+	if (!details || typeof details.tabId !== 'number') {
+		return;
+	}
+	logDebug('webNavigation.onCommitted', details);
+	void ensureRuntimeInjected(details.tabId, details.frameId, details.url).catch(() => undefined);
 });
 
 function isRuntimeMessage(message: unknown): message is { type: string } {
 	return !!message && typeof message === 'object' && 'type' in message;
+}
+
+async function ensureRuntimeInjected(tabId: number, frameId: number, url?: string): Promise<void> {
+	if (!Number.isInteger(tabId) || tabId < 0) {
+		logDebug('ensureRuntimeInjected skip: invalid tab', { tabId, frameId });
+		return;
+	}
+	if (shouldSkipInjection(url)) {
+		logDebug('ensureRuntimeInjected skip: blocked url', { tabId, frameId, url });
+		return;
+	}
+	const key = buildInjectionKey(tabId, frameId);
+	const existingTask = inflightInjectionTasks.get(key);
+	if (existingTask) {
+		logDebug('ensureRuntimeInjected dedupe', { tabId, frameId });
+		return existingTask;
+	}
+	const task = (async () => {
+		const target: FrameTarget = { tabId, frameId };
+		const alreadyInstalled = await isRuntimeAlreadyInstalled(target);
+		if (alreadyInstalled) {
+			logDebug('runtime already installed', { tabId, frameId });
+			return;
+		}
+		const state = await getOrCreateRuntimeState();
+		logDebug('injecting identity override', { tabId, frameId });
+		await injectIdentityOverride(target, state.identity, state.config);
+	})();
+	inflightInjectionTasks.set(key, task);
+	try {
+		await task;
+	} finally {
+		inflightInjectionTasks.delete(key);
+		logDebug('ensureRuntimeInjected finished', { tabId, frameId });
+	}
 }
 
 async function getOrCreateRuntimeState(): Promise<PortalRuntimeState> {
@@ -199,6 +286,85 @@ function buildIdentity(suffix: string): PortalDeviceIdentity {
 	};
 }
 
+async function isRuntimeAlreadyInstalled(target: FrameTarget): Promise<boolean> {
+	try {
+		const results = await chrome.scripting.executeScript({
+			target: createFrameTarget(target),
+			world: 'MAIN',
+			injectImmediately: true,
+			func: (flagName: string, promiseKey: string) => {
+				const globalTarget = window as typeof window & Record<string, unknown>;
+				return Boolean(globalTarget[flagName] || globalTarget[promiseKey]);
+			},
+			args: [RUNTIME_INSTALL_FLAG, RUNTIME_INSTALL_PROMISE_KEY],
+		});
+		return Boolean(results?.[0]?.result);
+	} catch (_error) {
+		return false;
+	}
+}
+
+async function injectIdentityOverride(
+	target: FrameTarget,
+	identity: PortalDeviceIdentity,
+	config: PortalEmulatorConfig,
+): Promise<void> {
+	try {
+		await chrome.scripting.executeScript({
+			target: createFrameTarget(target),
+			world: 'MAIN',
+			injectImmediately: true,
+			func: (
+				identityKey: string,
+				configKey: string,
+				identityValue: PortalDeviceIdentity,
+				configValue: PortalEmulatorConfig,
+			) => {
+				const globalTarget = window as typeof window & Record<string, unknown>;
+				try {
+					globalTarget[identityKey] = identityValue;
+				} catch {
+					// ignore assignment failure
+				}
+				try {
+					globalTarget[configKey] = configValue;
+				} catch {
+					// ignore assignment failure
+				}
+			},
+			args: [
+				PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
+				PORTAL_CONFIG_OVERRIDE_GLOBAL,
+				identity,
+				config,
+			],
+		});
+	} catch (_error) {
+		// ignore injection failures
+	}
+}
+
+type FrameTarget = { tabId: number; frameId: number };
+
+function createFrameTarget(target: FrameTarget) {
+	const frameIds = Number.isInteger(target.frameId)
+		? [target.frameId]
+		: undefined;
+	return frameIds ? { tabId: target.tabId, frameIds } : { tabId: target.tabId };
+}
+
+function buildInjectionKey(tabId: number, frameId: number): string {
+	return `${tabId}:${frameId}`;
+}
+
+function shouldSkipInjection(url?: string): boolean {
+	if (!url) {
+		return false;
+	}
+	const normalized = url.trim().toLowerCase();
+	return BLOCKED_PROTOCOL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
 function normalizeSuffix(candidate: string | null): string | null {
 	if (!candidate) {
 		return null;
@@ -291,4 +457,30 @@ function storageSet(items: Record<string, unknown>): Promise<void> {
 			reject(error);
 		}
 	});
+}
+
+async function ensureRuntimePreloadRegistered(): Promise<void> {
+	if (!chrome?.scripting?.registerContentScripts) {
+		return;
+	}
+	try {
+		const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [RUNTIME_CONTENT_SCRIPT_ID] }).catch(() => []);
+		if (existing && existing.length > 0) {
+			return;
+		}
+		await chrome.scripting.registerContentScripts([
+			{
+				id: RUNTIME_CONTENT_SCRIPT_ID,
+				js: [RUNTIME_SCRIPT_PATH],
+				matches: ['<all_urls>'],
+				allFrames: true,
+				runAt: 'document_start',
+				persistAcrossSessions: true,
+				world: 'MAIN',
+			},
+		]);
+		logDebug('registered runtime preload script');
+	} catch (error) {
+		logDebug('failed to register runtime preload script', { error });
+	}
 }
