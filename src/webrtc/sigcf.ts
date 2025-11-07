@@ -89,6 +89,7 @@ function safeDcSend(dc: RTCDataChannel | null | undefined, data: any): boolean {
 
 const BACKOFF_WAKE_DEBOUNCE_MS = 5000;
 const MOUSE_IDLE_THRESHOLD_MS = 15000;
+const CANDIDATE_TIMEOUT_MS = 4000;
 
 interface RoomSessionOpts {
   label: 'local' | 'remote';
@@ -108,6 +109,7 @@ interface RoomSessionOpts {
   pcConstraints?: any;
   sdpTransform?: (sdp: string) => string;
   onMsg?: (data: ArrayBuffer | string) => void;
+  onSignalingConnected?: () => void;
 }
 
 /**
@@ -131,6 +133,7 @@ export class RoomSession {
   onChat?: (msg: any) => void;
   onStateChange?: (stateObj: any) => void;
   trickle: boolean;
+  private _onSignalingConnected?: () => void;
 
   signaling: SignalingClient;
   pc: RTCPeerConnection;
@@ -168,6 +171,7 @@ export class RoomSession {
       pcConstraints,
       sdpTransform,
       onMsg,
+      onSignalingConnected,
     } = opts;
 
     this.label = label;
@@ -191,6 +195,7 @@ export class RoomSession {
     this.onChat = onChat;
     this.onStateChange = onStateChange;
     this.trickle = trickleCandidates;
+    this._onSignalingConnected = onSignalingConnected;
 
     this.signaling = new SignalingClient({ server, roomId, log: (m) => this.log(m), requestTurn });
     if (this.pcConstraints) {
@@ -325,6 +330,7 @@ export class RoomSession {
 
   async start(): Promise<void> {
     await this.signaling.connect();
+    this._onSignalingConnected?.();
     this._statsTimer = setInterval(async () => {
       if (this.closed) return;
       const stats = await gatherSelectedPair(this.pc).catch(() => null);
@@ -685,6 +691,7 @@ export class DualRoomCoordinator {
   private _mouseIdle = true;
   private _mouseIdleTimer: ReturnType<typeof setTimeout> | null = null;
   private _stopped = false;
+  private _candidateWatchTimer: ReturnType<typeof setTimeout> | null = null;
 
   localCandidates: any[] = [];
   remoteCandidates: any[] = [];
@@ -763,6 +770,56 @@ export class DualRoomCoordinator {
     }
     this._mouseIdle = false;
     this._scheduleMouseIdleReset();
+  }
+
+  private _handleSignalingJoin(label: 'local' | 'remote') {
+    if (this._stopped) {
+      return;
+    }
+    if (label !== 'remote') {
+      return;
+    }
+    this.log(
+      `signaling joined on ${label} path; awaiting remote ICE candidates for up to ${CANDIDATE_TIMEOUT_MS}ms`,
+    );
+    this._armCandidateWatchdog(label);
+  }
+
+  private _armCandidateWatchdog(label: 'local' | 'remote') {
+    if (this._stopped) {
+      return;
+    }
+    this._clearCandidateWatchdog();
+    this._candidateWatchTimer = setTimeout(() => {
+      this._candidateWatchTimer = null;
+      const hasRemoteCandidates = this._hasRemoteCandidates();
+      if (this._stopped || this.connected || hasRemoteCandidates) {
+        return;
+      }
+      this.log(
+        `no remote ICE candidates observed within ${CANDIDATE_TIMEOUT_MS}ms of signaling join (path=${label}); forcing reconnect`,
+      );
+      this._scheduleReconnect('candidate-timeout');
+    }, CANDIDATE_TIMEOUT_MS);
+  }
+
+  private _clearCandidateWatchdog() {
+    if (this._candidateWatchTimer) {
+      clearTimeout(this._candidateWatchTimer);
+      this._candidateWatchTimer = null;
+    }
+  }
+
+  private _handleRemoteCandidateObserved(label: 'local' | 'remote') {
+    if (!this._candidateWatchTimer) {
+      return;
+    }
+    this.log(`remote ICE candidate observed via ${label}; clearing candidate watchdog`);
+    this._clearCandidateWatchdog();
+  }
+
+  private _hasRemoteCandidates(): boolean {
+    return this.remoteCandidates.length > 0 || this.remote2Candidates.length > 0;
   }
 
   private _scheduleMouseIdleReset() {
@@ -848,6 +905,7 @@ export class DualRoomCoordinator {
     if (this._stopped) {
       return;
     }
+    this._clearCandidateWatchdog();
     this.localCandidates = [];
     this.remoteCandidates = [];
     this.local2Candidates = [];
@@ -912,6 +970,7 @@ export class DualRoomCoordinator {
     if (this._stopped) {
       return;
     }
+    this._clearCandidateWatchdog();
     const firstConnection = !this.connected;
     if (firstConnection) {
       this.connected = true;
@@ -956,6 +1015,7 @@ export class DualRoomCoordinator {
     if (this._stopped) {
       return;
     }
+    this._clearCandidateWatchdog();
     this.log(`DOWN detected on ${which}: ${reason}`);
     const active = this.winner;
     if (active && active !== which) {
@@ -978,6 +1038,9 @@ export class DualRoomCoordinator {
       } else {
         if (c.dir === 'local') this.local2Candidates.push(c);
         else this.remote2Candidates.push(c);
+      }
+      if (c.dir === 'remote') {
+        this._handleRemoteCandidateObserved(label);
       }
       this._tick();
     };
@@ -1006,10 +1069,12 @@ export class DualRoomCoordinator {
       pcConstraints: this._pcConstraints,
       sdpTransform: this._sdpTransform,
       onMsg: (data) => this._emitMsg(label, data),
+      onSignalingConnected: () => this._handleSignalingJoin(label),
     });
   }
 
   private _scheduleReconnect(reason: string) {
+    this._clearCandidateWatchdog();
     if (this._stopped) return;
     if (this._reconnectInFlight) return;
     this._reconnectInFlight = true;
@@ -1188,6 +1253,7 @@ export class DualRoomCoordinator {
 
   end() {
     this._teardownIdleWakeListeners();
+    this._clearCandidateWatchdog();
     if (this._stopped) {
       return;
     }
