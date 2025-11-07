@@ -4,7 +4,7 @@ import {
   XRDevice,
   type DevUIConstructor,
 } from './device/XRDevice.js';
-import { metaQuest3 } from './device/configs/headset/meta.js';
+import { oculusQuest1 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
 
@@ -141,7 +141,7 @@ export async function bootstrapStandaloneEmulator(
   ensurePolyfillInstalled(options.forcePolyfill ?? true);
   markCustomPolyfillFlag();
 
-  const device = new XRDevice(metaQuest3);
+  const device = new XRDevice(oculusQuest1);
   try {
     device.installRuntime({
       enforce: options.enforceRuntime ?? true,
