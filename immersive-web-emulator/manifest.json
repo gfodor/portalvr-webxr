@@ -1,14 +1,17 @@
 {
-	"name": "Immersive Web Emulator",
-	"short_name": "IWE",
-	"version": "2.0.0",
+	"name": "PortalVR for WebXR",
+	"short_name": "PortalVR WebXR",
+	"version": "1.0.0",
 	"minimum_chrome_version": "96",
-	"description": "WebXR Emulator for Meta Quest devices",
-	"author": "Felix Zhang (fe1ix@meta.com)",
+	"description": "Play WebXR experiences on your laptop using your phone as a fully tracked controller—no headset required.",
+	"author": "Portal VR, Inc. (support@portalvr.io)",
+	"homepage_url": "https://portalvr.io/",
 	"icons": {
-		"16": "icons/default16.png",
-		"48": "icons/default48.png",
-		"128": "icons/default128.png"
+		"16": "icons/portalvr16.png",
+		"32": "icons/portalvr32.png",
+		"48": "icons/portalvr48.png",
+		"128": "icons/portalvr128.png",
+		"512": "icons/portalvr512.png"
 	},
 	"background": {
 		"service_worker": "build/service-worker.min.js"
@@ -24,10 +27,12 @@
 	"permissions": ["storage", "scripting", "webNavigation"],
 	"host_permissions": ["http://*/*", "https://*/*"],
 	"action": {
+		"default_title": "PortalVR for WebXR",
 		"default_icon": {
-			"16": "icons/default16.png",
-			"48": "icons/default48.png",
-			"128": "icons/default128.png"
+			"16": "icons/portalvr16.png",
+			"32": "icons/portalvr32.png",
+			"48": "icons/portalvr48.png",
+			"128": "icons/portalvr128.png"
 		}
 	},
 	"manifest_version": 3,
