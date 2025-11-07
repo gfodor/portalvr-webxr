@@ -168,9 +168,7 @@ export function DevUIRoot({
 		setSettings(nextSettings);
 		const runtimeStereo = xrDevice.stereoEnabled;
 		setInitialStereoMode(runtimeStereo);
-		setShowStereoReloadNotice(
-			nextSettings.stereoRenderingEnabled !== runtimeStereo,
-		);
+		setShowStereoReloadNotice(false);
 		setSettingsOpen(true);
 	}, [xrDevice]);
 

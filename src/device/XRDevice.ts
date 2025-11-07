@@ -465,7 +465,6 @@ export class XRDevice {
   private readonly configPromise: Promise<PortalEmulatorConfig>;
   // Stereo config changes are persisted immediately but only applied once on startup to
   // avoid disturbing the active render pipeline mid-session.
-  private hasAppliedInitialStereoConfig = false;
   private pendingOrientationReset = false;
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
@@ -2301,11 +2300,8 @@ export class XRDevice {
 
   private applyConfigSettings(config: PortalEmulatorConfig): void {
     const nextStereoEnabled = Boolean(config.settings?.stereoRenderingEnabled);
-    if (!this.hasAppliedInitialStereoConfig) {
-      this.hasAppliedInitialStereoConfig = true;
-      if (nextStereoEnabled !== this[P_DEVICE].stereoEnabled) {
-        this.stereoEnabled = nextStereoEnabled;
-      }
+    if (nextStereoEnabled !== this[P_DEVICE].stereoEnabled) {
+      this.stereoEnabled = nextStereoEnabled;
     }
     // Subsequent stereo config changes are left pending for the next page load.
     const nextFaceTrackingEnabled = config.settings?.faceTrackingEnabled !== false;
