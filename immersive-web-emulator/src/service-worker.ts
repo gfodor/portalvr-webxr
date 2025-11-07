@@ -4,6 +4,7 @@ declare const chrome: any;
 
 const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
 const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
+const MESSAGE_TYPE_GET_CONFIG = 'portalvr:get-config';
 const CONFIG_STORAGE_KEY = 'portalvrConfig';
 const SUFFIX_LENGTH = 12;
 const UI_SUFFIX_LENGTH = 4;
@@ -63,6 +64,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: n
 
 	if (message.type === MESSAGE_TYPE_SET_CONFIG) {
 		setRuntimeConfig((message as { config?: unknown }).config)
+			.then((config) => sendResponse({ ok: true, config }))
+			.catch(() => sendResponse({ ok: false }));
+		return true;
+	}
+
+	if (message.type === MESSAGE_TYPE_GET_CONFIG) {
+		getOrCreateRuntimeConfig()
 			.then((config) => sendResponse({ ok: true, config }))
 			.catch(() => sendResponse({ ok: false }));
 		return true;
