@@ -22,6 +22,8 @@
 
 import type { FaceLandmarker, FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 
+import { resolveRuntimeAssetUrl } from '../runtime/RuntimeAssetResolver.js';
+
 export type Vec3 = { x: number; y: number; z: number };
 export type Quat = { x: number; y: number; z: number; w: number };
 
@@ -181,6 +183,17 @@ const DEFAULTS = {
   DISTANCE_BASE: 0.99,
 };
 
+function resolveDefaultWasmPath(): string {
+  return resolveRuntimeAssetUrl('runtime/mediapipe/tasks-vision/wasm') ?? DEFAULTS.WASM_PATH;
+}
+
+function resolveDefaultModelPath(): string {
+  return (
+    resolveRuntimeAssetUrl('runtime/mediapipe/models/face_landmarker/face_landmarker.task') ??
+    DEFAULTS.MODEL_PATH
+  );
+}
+
 function focalLengthPixels(imageWidthPx: number, hFovDeg: number) {
   const a = (hFovDeg * Math.PI) / 180;
   return imageWidthPx / (2 * Math.tan(a / 2));
@@ -250,8 +263,8 @@ export class FaceTracker {
   constructor(config: FaceTrackerConfig = {}) {
     this.cfg = {
       hfovDeg: config.hfovDeg ?? DEFAULTS.FOV_DEG,
-      wasmPath: config.wasmPath ?? DEFAULTS.WASM_PATH,
-      modelAssetPath: config.modelAssetPath ?? DEFAULTS.MODEL_PATH,
+      wasmPath: config.wasmPath ?? resolveDefaultWasmPath(),
+      modelAssetPath: config.modelAssetPath ?? resolveDefaultModelPath(),
       numFaces: config.numFaces ?? 1,
       smooth: config.smooth ?? { minCutoff: 5, beta: 75, dCutoff: 5 },
       distanceSmoothingBase: config.distanceSmoothingBase ?? DEFAULTS.DISTANCE_BASE,
@@ -510,4 +523,5 @@ export class FaceTracker {
 
     this.rafId = requestAnimationFrame(this.loop);
   };
+
 }

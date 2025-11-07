@@ -5,6 +5,15 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import './runtime/RuntimeAssetResolver.js';
+
+// runtime helpers
+export {
+  getRuntimeAssetBaseUrl,
+  resolveRuntimeAssetUrl,
+  setRuntimeAssetBaseUrl,
+} from './runtime/RuntimeAssetResolver.js';
+
 // model
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {

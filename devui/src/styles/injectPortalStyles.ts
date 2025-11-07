@@ -1,3 +1,5 @@
+import { resolveRuntimeAssetUrl } from 'portalvr';
+
 const STYLE_ID = 'portalvr-devui-styles';
 
 export function ensurePortalStyles(): void {
@@ -16,8 +18,11 @@ export function ensurePortalStyles(): void {
 }
 
 // Injected CSS derived from ui-package/css/portal-ui.css with only the required selectors.
-const portalCss = `
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+const portalCss = buildPortalCss();
+
+function buildPortalCss(): string {
+	return `
+${buildFontFaceDeclaration()}
 :root,
 .portal-reset-boundary {
   --portal-color-scrim: rgba(0, 0, 0, 0.4);
@@ -44,7 +49,7 @@ const portalCss = `
   inset: 0;
   pointer-events: none;
   z-index: 1;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'PortalInter', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: 1.5;
   color: var(--portal-color-text-primary);
@@ -102,7 +107,7 @@ const portalCss = `
   inset: 0;
   pointer-events: none;
   z-index: 10000;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: 'PortalInter', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--portal-color-text-primary);
 }
 
@@ -402,3 +407,20 @@ canvas.portal-qr-pill__canvas {
   }
 }
 `;
+}
+
+function buildFontFaceDeclaration(): string {
+	const localFontUrl = resolveRuntimeAssetUrl('runtime/fonts/inter/Inter-Latin-Variable.woff2');
+	if (localFontUrl) {
+		return `
+@font-face {
+  font-family: 'PortalInter';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('${localFontUrl}') format('woff2');
+}
+`;
+	}
+	return "@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');";
+}

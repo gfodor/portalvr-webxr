@@ -11,6 +11,8 @@ const UI_SUFFIX_LENGTH = 4;
 const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const PORTAL_CONFIG_OVERRIDE_GLOBAL = '__PORTALVR_EMULATOR_CONFIG_OVERRIDE__';
 const RUNTIME_SCRIPT_PATH = 'build/iwe.min.js';
+const RUNTIME_ASSET_BASE_GLOBAL = '__PORTALVR_RUNTIME_BASE_URL__';
+const RUNTIME_ASSET_BASE_SETTER = '__PORTALVR_SET_ASSET_BASE__';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
@@ -136,6 +138,8 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 	}
 	const task = (async () => {
 		const target: FrameTarget = { tabId, frameId };
+
+		await injectRuntimeAssetBase(target).catch(() => undefined);
 
 		// Detect runtime but DO NOT bail; we still inject the config override to avoid races.
 		const alreadyInstalled = await isRuntimeAlreadyInstalled(target);
@@ -350,6 +354,54 @@ async function injectConfigOverride(
 		});
 	} catch (_error) {
 		// ignore injection failures
+	}
+}
+
+function getExtensionRuntimeAssetBase(): string | null {
+	try {
+		if (!chrome?.runtime?.getURL) {
+			return null;
+		}
+		return chrome.runtime.getURL('build/');
+	} catch {
+		return null;
+	}
+}
+
+async function injectRuntimeAssetBase(target: FrameTarget): Promise<void> {
+	if (!chrome?.scripting?.executeScript) {
+		return;
+	}
+	const baseUrl = getExtensionRuntimeAssetBase();
+	if (!baseUrl) {
+		return;
+	}
+	const normalized = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+	try {
+		await chrome.scripting.executeScript({
+			target: createFrameTarget(target),
+			world: 'MAIN',
+			injectImmediately: true,
+			func: (globalKey: string, setterKey: string, base: string) => {
+				const globalTarget = window as typeof window & Record<string, unknown>;
+				try {
+					globalTarget[globalKey] = base;
+					const setter = globalTarget[setterKey];
+					if (typeof setter === 'function') {
+						try {
+							setter(base);
+						} catch {
+							/* ignore setter failures */
+						}
+					}
+				} catch {
+					// ignore assignment failures
+				}
+			},
+			args: [RUNTIME_ASSET_BASE_GLOBAL, RUNTIME_ASSET_BASE_SETTER, normalized],
+		});
+	} catch (error) {
+		logDebug('failed to inject runtime asset base', { error });
 	}
 }
 

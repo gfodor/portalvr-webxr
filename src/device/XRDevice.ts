@@ -82,6 +82,7 @@ import {
 import type { PortalEmulatorConfig } from './PortalEmulatorConfig.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
 import { portalConfigProvider } from '../config/PortalConfigProvider.js';
+import { resolveRuntimeAssetUrl } from '../runtime/RuntimeAssetResolver.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -149,10 +150,21 @@ const FACE_TRACKER_SMOOTH_DEFAULT = {
 } as const;
 const FACE_TRACKER_DISTANCE_BASE = 0.99;
 const FACE_TRACKER_HFOV_DEG = 60;
-const FACE_TRACKER_WASM_PATH =
+const FALLBACK_FACE_TRACKER_WASM_PATH =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm';
-const FACE_TRACKER_MODEL_PATH =
+const FALLBACK_FACE_TRACKER_MODEL_PATH =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
+function getFaceTrackerWasmPath(): string {
+  return resolveRuntimeAssetUrl('runtime/mediapipe/tasks-vision/wasm') ?? FALLBACK_FACE_TRACKER_WASM_PATH;
+}
+
+function getFaceTrackerModelPath(): string {
+  return (
+    resolveRuntimeAssetUrl('runtime/mediapipe/models/face_landmarker/face_landmarker.task') ??
+    FALLBACK_FACE_TRACKER_MODEL_PATH
+  );
+}
 
 type EngineDetectionState = {
   wonderland: boolean;
@@ -2584,8 +2596,8 @@ export class XRDevice {
 
     const tracker = new FaceTracker({
       hfovDeg: FACE_TRACKER_HFOV_DEG,
-      wasmPath: FACE_TRACKER_WASM_PATH,
-      modelAssetPath: FACE_TRACKER_MODEL_PATH,
+      wasmPath: getFaceTrackerWasmPath(),
+      modelAssetPath: getFaceTrackerModelPath(),
       smooth: { ...FACE_TRACKER_SMOOTH_DEFAULT },
       distanceSmoothingBase: FACE_TRACKER_DISTANCE_BASE,
     });

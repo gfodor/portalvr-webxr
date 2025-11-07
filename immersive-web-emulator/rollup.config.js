@@ -18,7 +18,7 @@ const stripConsolePlugin = shouldStripConsole
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const ROOT_DIR = resolvePath(__dirname, '..');
-const RUNTIME_MODULE_PATH = resolvePath(ROOT_DIR, 'build', 'portalvr.module.js');
+const RUNTIME_MODULE_PATH = resolvePath(ROOT_DIR, 'build', 'portalvr.module.min.js');
 const DEVUI_LIB_DIR = resolvePath(ROOT_DIR, 'devui', 'lib');
 const PORTAL_POSE_EMBED_PATH = resolvePath(
 	ROOT_DIR,
