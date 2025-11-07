@@ -79,13 +79,9 @@ import {
   PortalControllerRuntime,
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
-import {
-  getPortalEmulatorConfig,
-  onPortalEmulatorConfigChange,
-  type PortalEmulatorConfig,
-} from './PortalEmulatorConfig.js';
+import type { PortalEmulatorConfig } from './PortalEmulatorConfig.js';
 import { degreesToRadians } from '../wasm/PortalPoseLoader.js';
-import { getPersistentPortalDeviceIdentity } from './PortalDeviceIdentity.js';
+import { portalConfigProvider } from '../config/PortalConfigProvider.js';
 
 export type WebXRFeature =
   | 'viewer'
@@ -215,6 +211,13 @@ const DEFAULTS = {
   headsetPosition: new Vector3(0, 1.6, 0),
   headsetQuaternion: new Quaternion(),
   stereoEnabled: false,
+};
+
+const DEFAULT_CONFIG_SETTINGS = {
+	faceTrackingEnabled: true,
+	stereoRenderingEnabled: false,
+	immersiveFullscreenEnabled: true,
+	connectToControllerViaLan: true,
 };
 
 export interface DevUIConstructor {
@@ -459,6 +462,7 @@ export class XRDevice {
   private lastImmersiveSessionForWebRTC: XRSession | null = null;
   private portalControllerRuntimePromise: Promise<PortalControllerRuntime> | null = null;
   private portalControllerRuntime: PortalControllerRuntime | null = null;
+  private readonly configPromise: Promise<PortalEmulatorConfig>;
   // Stereo config changes are persisted immediately but only applied once on startup to
   // avoid disturbing the active render pipeline mid-session.
   private hasAppliedInitialStereoConfig = false;
@@ -500,15 +504,8 @@ export class XRDevice {
     deviceConfig: XRDeviceConfig,
     deviceOptions: Partial<XRDeviceOptions> = {},
   ) {
-    const portalIdentity = getPersistentPortalDeviceIdentity();
-    const persistedConfig = getPortalEmulatorConfig();
-    const configStereoEnabled = Boolean(persistedConfig.settings.stereoRenderingEnabled);
-    const configFaceTrackingEnabled = persistedConfig.settings.faceTrackingEnabled !== false;
-    const configImmersiveFullscreenEnabled =
-      persistedConfig.settings.immersiveFullscreenEnabled !== false;
-    const configLanEnabled = persistedConfig.settings.connectToControllerViaLan !== false;
     const initialStereoEnabled =
-      deviceOptions.stereoEnabled ?? configStereoEnabled;
+      deviceOptions.stereoEnabled ?? DEFAULT_CONFIG_SETTINGS.stereoRenderingEnabled;
     const globalSpace = new GlobalSpace();
     const viewerSpace = new XRReferenceSpace(
       XRReferenceSpaceType.Viewer,
@@ -561,8 +558,6 @@ export class XRDevice {
     canvasContainer.style.overflow = 'hidden';
     canvasContainer.style.zIndex = '999';
 
-    const portalDeviceId = buildPortalDeviceId(portalIdentity.suffix);
-
     this[P_DEVICE] = {
       name: deviceConfig.name,
       supportedSessionModes: deviceConfig.supportedSessionModes,
@@ -573,18 +568,18 @@ export class XRDevice {
       environmentBlendModes: deviceConfig.environmentBlendModes,
       interactionMode: deviceConfig.interactionMode,
       userAgent: deviceConfig.userAgent,
-      portalDeviceSuffix: portalIdentity.suffix,
-      portalDeviceName: portalIdentity.fullName,
-      portalDeviceUiCode: portalIdentity.uiCode,
-      portalDeviceId,
+      portalDeviceSuffix: '',
+      portalDeviceName: '',
+      portalDeviceUiCode: '',
+      portalDeviceId: '',
 
       position:
         deviceOptions.headsetPosition ?? DEFAULTS.headsetPosition.clone(),
       quaternion:
         deviceOptions.headsetQuaternion ?? DEFAULTS.headsetQuaternion.clone(),
       stereoEnabled: initialStereoEnabled,
-      faceTrackingEnabled: configFaceTrackingEnabled,
-      immersiveFullscreenEnabled: configImmersiveFullscreenEnabled,
+      faceTrackingEnabled: DEFAULT_CONFIG_SETTINGS.faceTrackingEnabled,
+      immersiveFullscreenEnabled: DEFAULT_CONFIG_SETTINGS.immersiveFullscreenEnabled,
       engineDetection: {
         wonderland: false,
         lastStack: null,
@@ -810,11 +805,17 @@ export class XRDevice {
         ? this[P_DEVICE].fovy
         : DEFAULTS.fovy;
 
-    this.connectToControllerViaLan = configLanEnabled;
-    this.applyConfigSettings(persistedConfig);
-    onPortalEmulatorConfigChange((config) => {
-      this.applyConfigSettings(config);
-    });
+    this.connectToControllerViaLan = DEFAULT_CONFIG_SETTINGS.connectToControllerViaLan;
+
+	this.configPromise = portalConfigProvider.waitForConfig({ requireSuffix: false });
+	this.configPromise
+		.then((config) => {
+			this.handleConfigUpdate(config);
+		})
+		.catch(() => undefined);
+	portalConfigProvider.subscribe((config) => {
+		this.handleConfigUpdate(config);
+	}, false);
 
     if (typeof document !== 'undefined') {
       const isVisible = document.visibilityState === 'visible';
@@ -2321,6 +2322,38 @@ export class XRDevice {
     }
   }
 
+	private handleConfigUpdate(config: PortalEmulatorConfig): void {
+		this.applyConfigSettings(config);
+		this.updatePortalDeviceIdentityFromConfig(config);
+	}
+
+	private updatePortalDeviceIdentityFromConfig(config: PortalEmulatorConfig): void {
+		const suffix = (config.device?.suffix ?? '').trim().toUpperCase();
+		if (!suffix) {
+			return;
+		}
+		const name = buildPortalDeviceId(suffix);
+		this[P_DEVICE].portalDeviceSuffix = suffix;
+		this[P_DEVICE].portalDeviceName = name;
+		this[P_DEVICE].portalDeviceUiCode = suffix.substring(0, Math.min(4, suffix.length));
+		this[P_DEVICE].portalDeviceId = name;
+	}
+
+	private waitForConfig(requireSuffix = false): Promise<PortalEmulatorConfig> {
+		if (requireSuffix) {
+			return portalConfigProvider.waitForConfig({ requireSuffix: true });
+		}
+		return this.configPromise;
+	}
+
+	private getRoomIdFromConfig(config: PortalEmulatorConfig): string | null {
+		const suffix = (config.device?.suffix ?? '').trim().toUpperCase();
+		if (!suffix) {
+			return null;
+		}
+		return buildPortalDeviceId(suffix);
+	}
+
   private cancelWebRTCVisibilitySuspendTimer(): void {
     if (this.webrtcVisibilitySuspendTimer) {
       clearTimeout(this.webrtcVisibilitySuspendTimer);
@@ -2722,43 +2755,49 @@ export class XRDevice {
   }
 
   enableWebRTCControllerStreaming(options?: WebRTCControllerStreamOptions) {
-    const nextOptions = {
-      ...(options ?? this.webrtcStreamOptions ?? {}),
-    } as WebRTCControllerStreamOptions;
-    if (typeof nextOptions.enableLocalPath !== 'boolean') {
-      nextOptions.enableLocalPath = this.connectToControllerViaLan;
-    }
-    if (!nextOptions.roomId) {
-      nextOptions.roomId = this.portalDeviceId;
-    }
-    this.webrtcStreamOptions = nextOptions;
-    this.handleControllerConnectionChange(false);
-    this.webrtcStreamer?.dispose();
-    const userOnState = nextOptions.onControllerState;
-    const userOnConnection = nextOptions.onConnectionChange;
-    const userOnOrientationReset = nextOptions.onOrientationReset;
-    const userOnSignalingStatus = nextOptions.onSignalingStatus;
-    this.emitControllerSearchStatus(null);
-    this.webrtcStreamer = new WebRTCControllerStreamer({
-      ...nextOptions,
-      onControllerState: (state) => {
-        void this.handleControllerState(state);
-        userOnState?.(state);
-      },
-      onConnectionChange: (connected) => {
-        this.handleControllerConnectionChange(connected);
-        userOnConnection?.(connected);
-      },
-      onOrientationReset: () => {
-        this.handleOrientationReset();
-        userOnOrientationReset?.();
-      },
-      onSignalingStatus: (status) => {
-        this.emitControllerSearchStatus(status);
-        userOnSignalingStatus?.(status);
-      },
-    });
+		void this.configureWebRTCControllerStreaming(options);
   }
+
+	private async configureWebRTCControllerStreaming(options?: WebRTCControllerStreamOptions): Promise<void> {
+		const config = await this.waitForConfig(true);
+		this.updatePortalDeviceIdentityFromConfig(config);
+		const nextOptions = {
+			...(options ?? this.webrtcStreamOptions ?? {}),
+		} as WebRTCControllerStreamOptions;
+		if (typeof nextOptions.enableLocalPath !== 'boolean') {
+			nextOptions.enableLocalPath = this.connectToControllerViaLan;
+		}
+		if (!nextOptions.roomId) {
+			nextOptions.roomId = this.getRoomIdFromConfig(config) ?? this.portalDeviceId;
+		}
+		this.webrtcStreamOptions = nextOptions;
+		this.handleControllerConnectionChange(false);
+		this.webrtcStreamer?.dispose();
+		const userOnState = nextOptions.onControllerState;
+		const userOnConnection = nextOptions.onConnectionChange;
+		const userOnOrientationReset = nextOptions.onOrientationReset;
+		const userOnSignalingStatus = nextOptions.onSignalingStatus;
+		this.emitControllerSearchStatus(null);
+		this.webrtcStreamer = new WebRTCControllerStreamer({
+			...nextOptions,
+			onControllerState: (state) => {
+				void this.handleControllerState(state);
+				userOnState?.(state);
+			},
+			onConnectionChange: (connected) => {
+				this.handleControllerConnectionChange(connected);
+				userOnConnection?.(connected);
+			},
+			onOrientationReset: () => {
+				this.handleOrientationReset();
+				userOnOrientationReset?.();
+			},
+			onSignalingStatus: (status) => {
+				this.emitControllerSearchStatus(status);
+				userOnSignalingStatus?.(status);
+			},
+		});
+	}
 
   disableWebRTCControllerStreaming() {
     this.cancelWebRTCVisibilitySuspendTimer();

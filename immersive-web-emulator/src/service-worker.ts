@@ -2,20 +2,20 @@ export {};
 
 declare const chrome: any;
 
-const MESSAGE_TYPE_GET_STATE = 'portalvr:get-state';
 const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
 const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
 const CONFIG_STORAGE_KEY = 'portalvrConfig';
-const NAME_PREFIX = 'PORTAL-';
 const SUFFIX_LENGTH = 12;
 const UI_SUFFIX_LENGTH = 4;
 const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-const PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL = '__PORTALVR_DEVICE_IDENTITY_OVERRIDE__';
 const PORTAL_CONFIG_OVERRIDE_GLOBAL = '__PORTALVR_EMULATOR_CONFIG_OVERRIDE__';
 const RUNTIME_SCRIPT_PATH = 'build/iwe.min.js';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
+const CONFIG_READY_RESOLVED_KEY = '__iweConfigReadyResolved__';
+const CONFIG_READY_PROMISE_KEY = '__iweConfigReadyPromise__';
+const CONFIG_READY_RESOLVER_KEY = '__iweConfigReadyResolver__';
 const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'view-source:', 'chrome-extension:'];
 const inflightInjectionTasks = new Map<string, Promise<void>>();
 const DEBUG_LOGGING = true;
@@ -31,12 +31,6 @@ function logDebug(...args: unknown[]): void {
 	}
 }
 
-interface PortalDeviceIdentity {
-	suffix: string;
-	fullName: string;
-	uiCode: string;
-}
-
 interface PortalEmulatorConfig {
 	device: {
 		suffix: string;
@@ -45,21 +39,17 @@ interface PortalEmulatorConfig {
 		faceTrackingEnabled: boolean;
 		stereoRenderingEnabled: boolean;
 		immersiveFullscreenEnabled: boolean;
+		connectToControllerViaLan: boolean;
 	};
 	version?: number;
 }
-
-interface PortalRuntimeState {
-	identity: PortalDeviceIdentity;
-	config: PortalEmulatorConfig;
-}
-
 const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	device: { suffix: '' },
 	settings: {
 		faceTrackingEnabled: true,
 		stereoRenderingEnabled: false,
 		immersiveFullscreenEnabled: true,
+		connectToControllerViaLan: true,
 	},
 	version: 1,
 };
@@ -71,16 +61,9 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: n
 		return;
 	}
 
-	if (message.type === MESSAGE_TYPE_GET_STATE) {
-		getOrCreateRuntimeState()
-			.then((state) => sendResponse(state))
-			.catch(() => sendResponse(null));
-		return true;
-	}
-
 	if (message.type === MESSAGE_TYPE_SET_CONFIG) {
 		setRuntimeConfig((message as { config?: unknown }).config)
-			.then((state) => sendResponse({ ok: true, state }))
+			.then((config) => sendResponse({ ok: true, config }))
 			.catch(() => sendResponse({ ok: false }));
 		return true;
 	}
@@ -117,6 +100,14 @@ chrome.webNavigation.onCommitted.addListener((details: { tabId: number; frameId:
 	void ensureRuntimeInjected(details.tabId, details.frameId, details.url).catch(() => undefined);
 });
 
+chrome.webNavigation.onBeforeNavigate.addListener((details: { tabId: number; frameId: number; url?: string }) => {
+	if (!details || typeof details.tabId !== 'number') {
+		return;
+	}
+	logDebug('webNavigation.onBeforeNavigate', details);
+	void ensureRuntimeInjected(details.tabId, details.frameId, details.url).catch(() => undefined);
+});
+
 function isRuntimeMessage(message: unknown): message is { type: string } {
 	return !!message && typeof message === 'object' && 'type' in message;
 }
@@ -143,9 +134,16 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 			logDebug('runtime already installed', { tabId, frameId });
 			return;
 		}
-		const state = await getOrCreateRuntimeState();
-		logDebug('injecting identity override', { tabId, frameId });
-		await injectIdentityOverride(target, state.identity, state.config);
+		const config = await getOrCreateRuntimeConfig();
+		logDebug('injecting config override', {
+			tabId,
+			frameId,
+			deviceSuffix: config.device.suffix,
+			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
+			stereoRenderingEnabled: config.settings.stereoRenderingEnabled,
+			connectToControllerViaLan: config.settings.connectToControllerViaLan,
+		});
+		await injectConfigOverride(target, config);
 	})();
 	inflightInjectionTasks.set(key, task);
 	try {
@@ -156,36 +154,34 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 	}
 }
 
-async function getOrCreateRuntimeState(): Promise<PortalRuntimeState> {
+async function getOrCreateRuntimeConfig(): Promise<PortalEmulatorConfig> {
 	const storedConfig = await readStoredConfig();
 	if (storedConfig) {
-		const normalizedConfig = ensureConfigDefaults(storedConfig);
-		const identity = buildIdentity(normalizedConfig.device.suffix);
-		return { identity, config: normalizedConfig };
+		return storedConfig;
 	}
 
-	const freshSuffix = generateSuffix();
-	const config = ensureConfigDefaults(
+	const base = ensureConfigDefaults(
 		normalizeConfig(
 			{
-				device: { suffix: freshSuffix },
+				device: { suffix: '' },
 				settings: DEFAULT_CONFIG.settings,
 				version: DEFAULT_CONFIG.version,
 			},
 			null,
 		),
 	);
-	await persistState({ config });
-	const identity = buildIdentity(config.device.suffix);
-	return { identity, config };
+	const configWithSuffix = ensureConfigSuffix(base);
+	await persistState({ config: configWithSuffix });
+	return configWithSuffix;
 }
 
-async function setRuntimeConfig(candidate: unknown): Promise<PortalRuntimeState> {
-	const current = await getOrCreateRuntimeState();
-	const normalizedConfig = ensureConfigDefaults(normalizeConfig(candidate, current.config));
+async function setRuntimeConfig(candidate: unknown): Promise<PortalEmulatorConfig> {
+	const current = await getOrCreateRuntimeConfig();
+	const normalizedConfig = ensureConfigSuffix(
+		ensureConfigDefaults(normalizeConfig(candidate, current)),
+	);
 	await persistState({ config: normalizedConfig });
-	const identity = buildIdentity(normalizedConfig.device.suffix);
-	return { identity, config: normalizedConfig };
+	return normalizedConfig;
 }
 
 async function readStoredConfig(): Promise<PortalEmulatorConfig | null> {
@@ -194,10 +190,9 @@ async function readStoredConfig(): Promise<PortalEmulatorConfig | null> {
 	if (!candidate) {
 		return null;
 	}
-	const normalized = ensureConfigDefaults(normalizeConfig(candidate, null));
-	if (!normalized.device.suffix) {
-		return null;
-	}
+	const normalized = ensureConfigSuffix(
+		ensureConfigDefaults(normalizeConfig(candidate, null)),
+	);
 	return normalized;
 }
 
@@ -209,9 +204,18 @@ function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfi
 			faceTrackingEnabled: config.settings.faceTrackingEnabled,
 			stereoRenderingEnabled: config.settings.stereoRenderingEnabled,
 			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
+			connectToControllerViaLan: config.settings.connectToControllerViaLan,
 		},
 		version:
 			typeof config.version === 'number' ? config.version : DEFAULT_CONFIG.version,
+	};
+}
+
+function ensureConfigSuffix(config: PortalEmulatorConfig): PortalEmulatorConfig {
+	const normalizedSuffix = normalizeSuffix(config.device.suffix) ?? generateSuffix();
+	return {
+		...config,
+		device: { ...config.device, suffix: normalizedSuffix },
 	};
 }
 
@@ -226,6 +230,7 @@ function normalizeConfig(
 			faceTrackingEnabled: base.settings.faceTrackingEnabled,
 			stereoRenderingEnabled: base.settings.stereoRenderingEnabled,
 			immersiveFullscreenEnabled: base.settings.immersiveFullscreenEnabled,
+			connectToControllerViaLan: base.settings.connectToControllerViaLan,
 		},
 		version:
 			typeof base.version === 'number' ? base.version : DEFAULT_CONFIG.version,
@@ -261,6 +266,10 @@ function normalizeConfig(
 		if (typeof fullscreenCandidate === 'boolean') {
 			result.settings.immersiveFullscreenEnabled = fullscreenCandidate;
 		}
+		const lanCandidate = (settingsCandidate as { connectToControllerViaLan?: unknown }).connectToControllerViaLan;
+		if (typeof lanCandidate === 'boolean') {
+			result.settings.connectToControllerViaLan = lanCandidate;
+		}
 	}
 
 	const versionCandidate = (candidate as { version?: unknown }).version;
@@ -275,15 +284,6 @@ async function persistState(state: { config: PortalEmulatorConfig }): Promise<vo
 	await storageSet({
 		[CONFIG_STORAGE_KEY]: state.config,
 	});
-}
-
-function buildIdentity(suffix: string): PortalDeviceIdentity {
-	const normalizedSuffix = normalizeSuffix(suffix) ?? generateSuffix();
-	return {
-		suffix: normalizedSuffix,
-		fullName: `${NAME_PREFIX}${normalizedSuffix}`,
-		uiCode: normalizedSuffix.substring(0, UI_SUFFIX_LENGTH),
-	};
 }
 
 async function isRuntimeAlreadyInstalled(target: FrameTarget): Promise<boolean> {
@@ -304,9 +304,8 @@ async function isRuntimeAlreadyInstalled(target: FrameTarget): Promise<boolean> 
 	}
 }
 
-async function injectIdentityOverride(
+async function injectConfigOverride(
 	target: FrameTarget,
-	identity: PortalDeviceIdentity,
 	config: PortalEmulatorConfig,
 ): Promise<void> {
 	try {
@@ -315,28 +314,53 @@ async function injectIdentityOverride(
 			world: 'MAIN',
 			injectImmediately: true,
 			func: (
-				identityKey: string,
 				configKey: string,
-				identityValue: PortalDeviceIdentity,
 				configValue: PortalEmulatorConfig,
+				configReadyResolvedKey: string,
+				configReadyPromiseKey: string,
+				configReadyResolverKey: string,
+				configEventType: string,
 			) => {
 				const globalTarget = window as typeof window & Record<string, unknown>;
-				try {
-					globalTarget[identityKey] = identityValue;
-				} catch {
-					// ignore assignment failure
-				}
 				try {
 					globalTarget[configKey] = configValue;
 				} catch {
 					// ignore assignment failure
 				}
+				try {
+					window.dispatchEvent(
+						new CustomEvent(configEventType, { detail: configValue }),
+					);
+				} catch {
+					// ignore event dispatch failures
+				}
+				globalTarget[configReadyResolvedKey] = true;
+				try {
+					globalTarget[configReadyPromiseKey] = Promise.resolve();
+				} catch {
+					// ignore promise override failures
+				}
+				const resolver = globalTarget[configReadyResolverKey];
+				if (typeof resolver === 'function') {
+					try {
+						resolver();
+					} catch {
+						// ignore resolver errors
+					}
+				}
+				try {
+					globalTarget[configReadyResolverKey] = undefined;
+				} catch {
+					// ignore cleanup failures
+				}
 			},
 			args: [
-				PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
 				PORTAL_CONFIG_OVERRIDE_GLOBAL,
-				identity,
 				config,
+				CONFIG_READY_RESOLVED_KEY,
+				CONFIG_READY_PROMISE_KEY,
+				CONFIG_READY_RESOLVER_KEY,
+				MESSAGE_TYPE_SET_CONFIG,
 			],
 		});
 	} catch (_error) {

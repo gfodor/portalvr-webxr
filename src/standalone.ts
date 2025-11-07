@@ -178,6 +178,11 @@ void bootstrapStandaloneEmulator().catch((error) => {
   console.error('[PortalVR Standalone] Failed to install emulator', error);
 });
 
+export function ensureStandaloneSurfaceInitialized(forcePolyfill = true): void {
+  ensurePolyfillInstalled(forcePolyfill);
+  markCustomPolyfillFlag();
+}
+
 function isNavigatorXRError(error: unknown): boolean {
   if (!error) {
     return false;

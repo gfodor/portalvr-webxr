@@ -7,9 +7,10 @@ import {
 	useRef,
 	useState,
 } from 'react';
-import { XRDevice } from 'portalvr';
 import {
-	getPortalEmulatorConfig,
+	XRDevice,
+	portalConfigProvider,
+	type PortalEmulatorConfig,
 	updatePortalEmulatorConfig,
 } from 'portalvr';
 
@@ -46,7 +47,10 @@ export function DevUIRoot({
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
 	const [isHelpOpen, setHelpOpen] = useState(false);
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
-		readSettings(),
+		readSettings(portalConfigProvider.getConfigSync()),
+	);
+	const [deviceLabel, setDeviceLabel] = useState<DeviceLabel>(() =>
+		buildDeviceLabelFromXRDevice(xrDevice),
 	);
 	const [initialStereoMode, setInitialStereoMode] = useState<boolean>(
 		() => xrDevice.stereoEnabled,
@@ -61,6 +65,35 @@ export function DevUIRoot({
 
 	useEffect(() => {
 		ensurePortalStyles();
+	}, []);
+
+	useEffect(() => {
+		let isMounted = true;
+		const applyConfig = (config: PortalEmulatorConfig | null) => {
+			if (!isMounted || !config) {
+				return;
+			}
+			setSettings(readSettings(config));
+			setDeviceLabel(buildDeviceLabelFromConfig(config));
+		};
+		const snapshot = portalConfigProvider.getConfigSync();
+		if (snapshot) {
+			applyConfig(snapshot);
+		} else {
+			portalConfigProvider
+				.waitForConfig({ requireSuffix: false })
+				.then((config) => {
+					applyConfig(config);
+				})
+				.catch(() => undefined);
+		}
+		const unsubscribe = portalConfigProvider.subscribe((config) => {
+			applyConfig(config);
+		}, false);
+		return () => {
+			isMounted = false;
+			unsubscribe();
+		};
 	}, []);
 
 	useEffect(() => {
@@ -131,7 +164,7 @@ export function DevUIRoot({
 	}, [nextSearchAttemptAtMs]);
 
 	const openSettings = useCallback(() => {
-		const nextSettings = readSettings();
+		const nextSettings = readSettings(portalConfigProvider.getConfigSync());
 		setSettings(nextSettings);
 		const runtimeStereo = xrDevice.stereoEnabled;
 		setInitialStereoMode(runtimeStereo);
@@ -233,9 +266,9 @@ export function DevUIRoot({
 		[],
 	);
 
-	const deviceName = xrDevice.portalDeviceName ?? xrDevice.name ?? 'PortalVR';
-	const deviceUiCode = xrDevice.portalDeviceUiCode ?? '0000';
-	const deviceId = xrDevice.portalDeviceId ?? 'PORTALVR-0000';
+	const deviceName = deviceLabel.name;
+	const deviceUiCode = deviceLabel.uiCode;
+	const deviceId = deviceLabel.id;
 
 	const pairingUrl = useMemo(
 		() => buildSigcfPairingUrl(deviceId),
@@ -474,15 +507,46 @@ export function DevUIRoot({
 	);
 }
 
-function readSettings(): EmulatorSettingsState {
-	const config = getPortalEmulatorConfig();
+type DeviceLabel = {
+	name: string;
+	id: string;
+	uiCode: string;
+};
+
+function readSettings(config?: PortalEmulatorConfig | null): EmulatorSettingsState {
+	const source = config ?? portalConfigProvider.getConfigSync();
 	return {
-		faceTrackingEnabled: config.settings?.faceTrackingEnabled !== false,
-		stereoRenderingEnabled: Boolean(config.settings?.stereoRenderingEnabled),
+		faceTrackingEnabled: source?.settings?.faceTrackingEnabled !== false,
+		stereoRenderingEnabled: Boolean(source?.settings?.stereoRenderingEnabled),
 		immersiveFullscreenEnabled:
-			config.settings?.immersiveFullscreenEnabled !== false,
+			source?.settings?.immersiveFullscreenEnabled !== false,
 		connectToControllerViaLan:
-			config.settings?.connectToControllerViaLan !== false,
+			source?.settings?.connectToControllerViaLan !== false,
+	};
+}
+
+function buildDeviceLabelFromXRDevice(xrDevice: XRDevice): DeviceLabel {
+	return {
+		name: xrDevice.portalDeviceName ?? xrDevice.name ?? 'PortalVR',
+		id: xrDevice.portalDeviceId ?? 'PORTALVR-0000',
+		uiCode: xrDevice.portalDeviceUiCode ?? '0000',
+	};
+}
+
+function buildDeviceLabelFromConfig(config: PortalEmulatorConfig): DeviceLabel {
+	const suffix = (config.device?.suffix ?? '').trim().toUpperCase();
+	if (!suffix) {
+		return {
+			name: 'PortalVR',
+			id: 'PORTALVR-0000',
+			uiCode: '0000',
+		};
+	}
+	const name = `PORTALVR-${suffix}`;
+	return {
+		name,
+		id: name,
+		uiCode: suffix.substring(0, Math.min(4, suffix.length)),
 	};
 }
 

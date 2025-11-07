@@ -15,9 +15,6 @@ export {
 } from './device/PortalEmulatorConfig.js';
 export type { PortalEmulatorConfig } from './device/PortalEmulatorConfig.js';
 export {
-  PORTAL_DEVICE_IDENTITY_OVERRIDE_GLOBAL,
-} from './device/PortalDeviceIdentity.js';
-export {
 	metaQuest2,
 	metaQuest3,
 	metaQuestPro,
@@ -94,6 +91,8 @@ export * from './private.js';
 // Standalone bootstrap helpers
 export {
   bootstrapStandaloneEmulator,
+  ensureStandaloneSurfaceInitialized,
   getStandaloneState,
 } from './standalone.js';
 export type { StandaloneOptions } from './standalone.js';
+export { portalConfigProvider } from './config/PortalConfigProvider.js';
