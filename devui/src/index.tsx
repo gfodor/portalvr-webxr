@@ -43,14 +43,23 @@ export class DevUI {
 			this.devUIContainer.style.zIndex = '10000';
 		});
 
+		const resetWrapper = document.createElement('div');
+		resetWrapper.dataset.portalvrDevui = 'reset-boundary';
+		resetWrapper.className = 'portal-reset-boundary';
+		resetWrapper.style.position = 'fixed';
+		resetWrapper.style.inset = '0';
+		resetWrapper.style.pointerEvents = 'none';
+		resetWrapper.style.zIndex = '1';
+
 		const reactHost = document.createElement('div');
-		reactHost.style.position = 'fixed';
+		reactHost.style.position = 'absolute';
 		reactHost.style.inset = '0';
 		reactHost.style.pointerEvents = 'none';
 		reactHost.style.zIndex = '1';
 		reactHost.dataset.portalvrDevui = 'root';
 
-		this.devUIContainer.appendChild(reactHost);
+		resetWrapper.appendChild(reactHost);
+		this.devUIContainer.appendChild(resetWrapper);
 
 		this.reactRoot = createRoot(reactHost);
 		this.renderReact();

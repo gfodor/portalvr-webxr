@@ -18,7 +18,8 @@ export function ensurePortalStyles(): void {
 // Injected CSS derived from ui-package/css/portal-ui.css with only the required selectors.
 const portalCss = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-:root {
+:root,
+.portal-reset-boundary {
   --portal-color-scrim: rgba(0, 0, 0, 0.4);
   --portal-color-card: #061139;
   --portal-color-primary: #4c63b6;
@@ -36,6 +37,64 @@ const portalCss = `
   --portal-radius-pill: 20px;
   --portal-settings-icon-size: 40px;
   --portal-mode-icon-size: 72px;
+}
+
+.portal-reset-boundary {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--portal-color-text-primary);
+}
+
+:where(.portal-reset-boundary *),
+:where(.portal-reset-boundary *::before),
+:where(.portal-reset-boundary *::after) {
+  box-sizing: border-box;
+}
+
+:where(.portal-reset-boundary *) {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+:where(.portal-reset-boundary a) {
+  color: inherit;
+  text-decoration: none;
+}
+
+:where(.portal-reset-boundary ul),
+:where(.portal-reset-boundary ol) {
+  list-style: none;
+}
+
+:where(.portal-reset-boundary button,
+.portal-reset-boundary input,
+.portal-reset-boundary textarea,
+.portal-reset-boundary select) {
+  font: inherit;
+  color: inherit;
+  border: 0;
+  background: none;
+}
+
+:where(.portal-reset-boundary img),
+:where(.portal-reset-boundary svg),
+:where(.portal-reset-boundary picture) {
+  max-width: 100%;
+  display: block;
+}
+
+:where(.portal-reset-boundary canvas) {
+  display: block;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .portal-overlay-root {
@@ -286,9 +345,19 @@ const portalCss = `
   opacity: 0.8;
 }
 
-.portal-qr-pill__canvas {
+.portal-qr-pill__canvas,
+canvas.portal-qr-pill__canvas {
   width: 4cm;
   height: 4cm;
+  position: static;
+  inset: auto;
+  left: auto;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  margin: 0;
+  touch-action: auto;
   image-rendering: pixelated;
 }
 
