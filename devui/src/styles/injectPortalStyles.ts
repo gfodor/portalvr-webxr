@@ -363,11 +363,16 @@ canvas.portal-qr-pill__canvas {
 
 .portal-link {
   color: var(--portal-color-text-secondary);
-  text-decoration: none;
+  text-decoration: underline;
   font-weight: 600;
 }
 
 .portal-link:hover {
+  text-decoration: underline;
+}
+
+.portal-settings-card a,
+.portal-help-dialog a {
   text-decoration: underline;
 }
 

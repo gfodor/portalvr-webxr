@@ -488,8 +488,7 @@ export function DevUIRoot({
 					<div className="portal-help-dialog" role="dialog" aria-modal="true">
 						<h2>PortalVR Help</h2>
 						<p className="portal-help-text">
-							Help content coming soon. Reach out to the Portal team if you need
-							assistance.
+							More content here soon, in the meantime, see the <a href="https://portalvr.io/docs" target="_blank" rel="noreferrer">PortalVR Documentation</a>.
 						</p>
 						<button
 							type="button"
