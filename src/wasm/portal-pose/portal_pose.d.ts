@@ -59,6 +59,7 @@ export interface PortalPoseModuleInstance {
     armScaling: number,
     torsoProportion: number,
   ): void;
+  _portal_wasm_set_drag_button_active(active: number): void;
   _portal_wasm_get_camera_fov_deg(statePtr: number): number;
   _portal_wasm_update(inputsPtr: number, statePtr: number, resultPtr: number): void;
   _portal_wasm_compute_display_delta(

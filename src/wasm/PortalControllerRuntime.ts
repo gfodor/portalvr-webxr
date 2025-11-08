@@ -155,6 +155,8 @@ export class PortalControllerRuntime {
   private readonly I32: Int32Array;
   private readonly F64: Float64Array;
   private dragHandle: PortalCameraDragHandle | null = null;
+  private dragButtonSetter: ((active: boolean) => void) | null = null;
+  private dragButtonActive = false;
 
   private readonly poseSmoother: PoseSmoother;
   private lastSmoothedPose: PoseArray | null = null;
@@ -213,6 +215,12 @@ export class PortalControllerRuntime {
     this.I32 = Module.HEAP32;
     this.F64 = Module.HEAPF64;
 
+    if (typeof Module._portal_wasm_set_drag_button_active === 'function') {
+      this.dragButtonSetter = (active: boolean): void => {
+        Module._portal_wasm_set_drag_button_active(active ? 1 : 0);
+      };
+    }
+
     const stateSize = Module._portal_wasm_state_size();
     const stateAlign = Module._portal_wasm_state_alignment();
     this.stateBasePtr = Module._malloc(stateSize + stateAlign);
@@ -261,6 +269,7 @@ export class PortalControllerRuntime {
   }
 
   destroy(): void {
+    this.requestDragButtonActive(false);
     this.Module._free(this.stateBasePtr);
     this.Module._free(this.inputsPtr);
     this.Module._free(this.resultPtr);
@@ -420,6 +429,7 @@ export class PortalControllerRuntime {
     this.buttonDragRequested = false;
     this.aimDragRequested = false;
     this.lastUnblendedPose = null;
+    this.requestDragButtonActive(false);
   }
 
   hasRecentPacket(nowMs: number): boolean {
@@ -574,8 +584,25 @@ export class PortalControllerRuntime {
     }
   }
 
+  private requestDragButtonActive(active: boolean): void {
+    if (!this.dragButtonSetter) {
+      return;
+    }
+    if (this.dragButtonActive === active) {
+      return;
+    }
+    try {
+      this.dragButtonSetter(active);
+      this.dragButtonActive = active;
+    } catch {
+      this.dragButtonSetter = null;
+      this.dragButtonActive = false;
+    }
+  }
+
   private computeCameraDrag(nowNs: number, headPose: HeadPoseInput, unblendedPose: PortalPose, aimWeight: number): CameraDragIncrements | undefined {
     if (!this.dragHandle) {
+      this.requestDragButtonActive(false);
       return undefined;
     }
 
@@ -620,6 +647,8 @@ export class PortalControllerRuntime {
         }
       }
     }
+
+    this.requestDragButtonActive(this.activeDragMode === 'button');
 
     if (this.activeDragMode === 'none') {
       return undefined;
