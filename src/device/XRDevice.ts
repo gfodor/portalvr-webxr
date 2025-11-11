@@ -444,6 +444,8 @@ export class XRDevice {
       width: number;
       height: number;
       zIndex: string;
+      styleWidth: string;
+      styleHeight: string;
     };
     canvasContainer: HTMLDivElement;
     currentBaseLayer: XRWebGLLayer | null;
@@ -510,6 +512,8 @@ export class XRDevice {
   private lastCanvasZoomScale = 1;
 	private isControllerConnected = false;
 	private hasSeenOrientationResetOnce = false;
+  private canvasContainerWasFullscreen = false;
+  private pendingImmersiveFullscreenMount = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -715,18 +719,16 @@ export class XRDevice {
             width: canvas.width,
             height: canvas.height,
             zIndex: canvas.style.zIndex,
+            styleWidth: canvas.style.width,
+            styleHeight: canvas.style.height,
           };
           canvas.style.zIndex = Z_INDEX_APP_CANVAS.toString();
           this[P_DEVICE].canvasContainer.appendChild(canvas);
-          document.body.appendChild(this[P_DEVICE].canvasContainer);
+          this.appendCanvasContainerToDocument();
         }
 
-        if (this[P_DEVICE].stereoEnabled) {
-          canvas.width = window.innerWidth * 2;
-        } else {
-          canvas.width = window.innerWidth;
-        }
-        canvas.height = window.innerHeight;
+        this.activateCanvasContainerForSession();
+        this.updateCanvasViewportFromWindow();
 
         this.ensureFullscreenForImmersiveSession();
       },
@@ -741,11 +743,13 @@ export class XRDevice {
         }
         if (this[P_DEVICE].canvasData) {
           this.resetCanvasZoomTransform();
-          const { canvas, parent, width, height, zIndex } =
+          const { canvas, parent, width, height, zIndex, styleWidth, styleHeight } =
             this[P_DEVICE].canvasData;
           canvas.width = width;
           canvas.height = height;
           canvas.style.zIndex = zIndex;
+          canvas.style.width = styleWidth;
+          canvas.style.height = styleHeight;
           if (parent) {
             parent.appendChild(canvas);
           } else {
@@ -760,10 +764,17 @@ export class XRDevice {
           if (sem) {
             this[P_DEVICE].canvasContainer.removeChild(sem.environmentCanvas);
           }
-          document.body.removeChild(this[P_DEVICE].canvasContainer);
+          if (this[P_DEVICE].canvasContainer.parentElement) {
+            this[P_DEVICE].canvasContainer.parentElement.removeChild(
+              this[P_DEVICE].canvasContainer,
+            );
+          }
           this[P_DEVICE].canvasData = undefined;
-          window.dispatchEvent(new Event('resize'));
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('resize'));
+          }
         }
+        this.cleanupPendingFullscreenPreparation();
         this.lastImmersiveSessionForWebRTC = null;
         this.stopFaceTracking();
       },
@@ -834,6 +845,12 @@ export class XRDevice {
       this.webrtcVisibilitySuspended = !isVisible;
       document.addEventListener('visibilitychange', this.handleVisibilityChange);
     }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', this.handleWindowResize, { passive: true });
+    }
+
+    this.registerFullscreenListeners();
 
     this.enablePortalPoseCamera();
     this[P_DEVICE].updateViews();
@@ -1162,6 +1179,28 @@ export class XRDevice {
       }
     }
     state.lastStack = stack;
+  }
+
+  handleSessionRequestStart(mode: XRSessionMode): void {
+    if (!this.shouldRequestFullscreenForMode(mode)) {
+      return;
+    }
+    if (this.isImmersiveSessionActive()) {
+      return;
+    }
+    if (this.isFullscreenSuppressedByDetection()) {
+      return;
+    }
+    this.prepareCanvasContainerForFullscreenRequest();
+    this.tryRequestCanvasContainerFullscreen('request');
+  }
+
+  handleSessionRequestFailed(mode: XRSessionMode): void {
+    if (!this.isImmersiveMode(mode)) {
+      return;
+    }
+    this.exitFullscreenForImmersiveSession();
+    this.cleanupPendingFullscreenPreparation();
   }
 
   get ipd() {
@@ -2171,6 +2210,206 @@ export class XRDevice {
     }
   }
 
+  private updateCanvasViewportFromWindow(): void {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const canvasData = this[P_DEVICE].canvasData;
+    if (!canvasData) {
+      return;
+    }
+    const canvas = canvasData.canvas;
+    const docWidth = typeof document !== 'undefined' ? document.documentElement?.clientWidth ?? 0 : 0;
+    const docHeight = typeof document !== 'undefined' ? document.documentElement?.clientHeight ?? 0 : 0;
+    const viewportWidth = Math.max(
+      1,
+      Math.floor(window.innerWidth || docWidth || canvas.clientWidth || 1),
+    );
+    const viewportHeight = Math.max(
+      1,
+      Math.floor(window.innerHeight || docHeight || canvas.clientHeight || 1),
+    );
+    const cssWidth = viewportWidth;
+    const cssHeight = viewportHeight;
+    const targetWidth = this[P_DEVICE].stereoEnabled
+      ? cssWidth * 2
+      : cssWidth;
+    const targetHeight = cssHeight;
+    if (canvas.width !== targetWidth) {
+      canvas.width = targetWidth;
+    }
+    if (canvas.height !== targetHeight) {
+      canvas.height = targetHeight;
+    }
+    const cssWidthValue = `${cssWidth}px`;
+    if (canvas.style.width !== cssWidthValue) {
+      canvas.style.width = cssWidthValue;
+    }
+    const cssHeightValue = `${cssHeight}px`;
+    if (canvas.style.height !== cssHeightValue) {
+      canvas.style.height = cssHeightValue;
+    }
+  }
+
+  private dispatchResizeForCanvasViewport(): void {
+    this.updateCanvasViewportFromWindow();
+    if (this.shouldEmitResizeEvents()) {
+      window.dispatchEvent(new Event('resize'));
+    }
+  }
+
+  private readonly handleWindowResize = (): void => {
+    this.updateCanvasViewportFromWindow();
+  };
+
+  private shouldEmitResizeEvents(): boolean {
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    const session = this.activeSession;
+    if (!session) {
+      return true;
+    }
+    return !this.isImmersiveSession(session);
+  }
+
+  private registerFullscreenListeners(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const handler = this.handleFullscreenChange;
+    document.addEventListener('fullscreenchange', handler);
+    document.addEventListener('webkitfullscreenchange', handler as EventListener);
+    document.addEventListener('mozfullscreenchange', handler as EventListener);
+    document.addEventListener('MSFullscreenChange', handler as EventListener);
+  }
+
+  private readonly handleFullscreenChange = (_event?: Event): void => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    const activeElement = this.getActiveFullscreenElement();
+    const isFullscreen = activeElement === container;
+    if (isFullscreen === this.canvasContainerWasFullscreen) {
+      return;
+    }
+    this.canvasContainerWasFullscreen = isFullscreen;
+    if (typeof window === 'undefined') {
+      this.dispatchResizeForCanvasViewport();
+      return;
+    }
+    window.setTimeout(() => {
+      this.dispatchResizeForCanvasViewport();
+    }, 0);
+  };
+
+  private prepareCanvasContainerForFullscreenRequest(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    if (this.pendingImmersiveFullscreenMount) {
+      return;
+    }
+    this.appendCanvasContainerToDocument();
+    const container = this[P_DEVICE].canvasContainer;
+    container.style.opacity = '0';
+    container.style.pointerEvents = 'none';
+    this.pendingImmersiveFullscreenMount = true;
+  }
+
+  private activateCanvasContainerForSession(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    this.appendCanvasContainerToDocument();
+    const container = this[P_DEVICE].canvasContainer;
+    container.style.opacity = '';
+    container.style.pointerEvents = '';
+    this.pendingImmersiveFullscreenMount = false;
+  }
+
+  private cleanupPendingFullscreenPreparation(): void {
+    const container = this[P_DEVICE].canvasContainer;
+    this.pendingImmersiveFullscreenMount = false;
+    container.style.opacity = '';
+    container.style.pointerEvents = '';
+    if (typeof document !== 'undefined' && container.parentElement && !this[P_DEVICE].canvasData) {
+      container.parentElement.removeChild(container);
+    }
+  }
+
+  private appendCanvasContainerToDocument(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    if (container.isConnected) {
+      return;
+    }
+    const parent = document.body ?? document.documentElement;
+    if (parent) {
+      parent.appendChild(container);
+    }
+  }
+
+  private tryRequestCanvasContainerFullscreen(context: 'request' | 'session'): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    if (this.getActiveFullscreenElement() === container) {
+      return;
+    }
+
+    const anyContainer = container as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void>;
+      mozRequestFullScreen?: () => Promise<void>;
+      msRequestFullscreen?: () => Promise<void>;
+    };
+
+    const requestFullscreen =
+      anyContainer.requestFullscreen ??
+      anyContainer.webkitRequestFullscreen ??
+      anyContainer.mozRequestFullScreen ??
+      anyContainer.msRequestFullscreen;
+
+    if (!requestFullscreen) {
+      return;
+    }
+
+    const logFailure = (error: unknown) => {
+      console.warn(
+        context === 'request'
+          ? '[XRDevice] Failed to enter fullscreen while preparing immersive session'
+          : '[XRDevice] Failed to enter fullscreen for immersive session',
+        error,
+      );
+    };
+
+    try {
+      const result = requestFullscreen.call(anyContainer);
+      if (result && typeof (result as Promise<void>).catch === 'function') {
+        (result as Promise<void>).catch(logFailure);
+      }
+    } catch (error) {
+      logFailure(error);
+    }
+  }
+
+  private isImmersiveMode(mode: XRSessionMode): boolean {
+    return mode === 'immersive-vr' || mode === 'immersive-ar';
+  }
+
+  private shouldRequestFullscreenForMode(mode: XRSessionMode): boolean {
+    return this.isImmersiveMode(mode) && this[P_DEVICE].immersiveFullscreenEnabled;
+  }
+
+  private isFullscreenSuppressedByDetection(): boolean {
+    const detection = this[P_DEVICE].engineDetection;
+    return detection.wonderland && this[P_DEVICE].stereoEnabled;
+  }
+
   private getActiveFullscreenElement(): Element | null {
     if (typeof document === 'undefined') {
       return null;
@@ -2199,7 +2438,10 @@ export class XRDevice {
     }
     const stereoActive = this[P_DEVICE].stereoEnabled;
     const detection = this[P_DEVICE].engineDetection;
-    if (detection.wonderland && stereoActive) {
+    if (!this.shouldRequestFullscreenForMode(session[P_SESSION].mode)) {
+      return;
+    }
+    if (this.isFullscreenSuppressedByDetection()) {
       if (!detection.suppressedFullscreenLogged) {
         console.info(
           '[XRDevice] Skipping fullscreen for immersive session (Wonderland engine detected with stereo/anaglyph rendering enabled).',
@@ -2208,50 +2450,12 @@ export class XRDevice {
       }
       return;
     }
-
     if (detection.suppressedFullscreenLogged && (!detection.wonderland || !stereoActive)) {
       detection.suppressedFullscreenLogged = false;
     }
-    if (!this[P_DEVICE].immersiveFullscreenEnabled) {
-      return;
-    }
-    const container = this[P_DEVICE].canvasContainer;
-    if (this.getActiveFullscreenElement() === container) {
-      return;
-    }
 
-    const anyContainer = container as HTMLElement & {
-      webkitRequestFullscreen?: () => Promise<void>;
-      mozRequestFullScreen?: () => Promise<void>;
-      msRequestFullscreen?: () => Promise<void>;
-    };
-
-    const requestFullscreen =
-      anyContainer.requestFullscreen ??
-      anyContainer.webkitRequestFullscreen ??
-      anyContainer.mozRequestFullScreen ??
-      anyContainer.msRequestFullscreen;
-
-    if (!requestFullscreen) {
-      return;
-    }
-
-    try {
-      const result = requestFullscreen.call(anyContainer);
-      if (result && typeof (result as Promise<void>).catch === 'function') {
-        (result as Promise<void>).catch((error) => {
-          console.warn(
-            '[XRDevice] Failed to enter fullscreen for immersive session',
-            error,
-          );
-        });
-      }
-    } catch (error) {
-      console.warn(
-        '[XRDevice] Failed to enter fullscreen for immersive session',
-        error,
-      );
-    }
+    this.activateCanvasContainerForSession();
+    this.tryRequestCanvasContainerFullscreen('session');
   }
 
   private exitFullscreenForImmersiveSession(): void {
@@ -2308,6 +2512,11 @@ export class XRDevice {
   private isImmersiveSession(session: XRSession): boolean {
     const mode = session[P_SESSION].mode;
     return mode === 'immersive-vr' || mode === 'immersive-ar';
+  }
+
+  private isImmersiveSessionActive(): boolean {
+    const session = this.activeSession;
+    return Boolean(session && this.isImmersiveSession(session));
   }
 
   private applyConfigSettings(config: PortalEmulatorConfig): void {

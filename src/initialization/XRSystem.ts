@@ -117,28 +117,42 @@ export class XRSystem extends EventTarget {
         console.log('[PortalVR] requestSession stack trace:', stack);
         this[P_SYSTEM].device.updateEngineDetectionFromStack(stack);
       }
-      this.isSessionSupported(mode)
-        .then((isSupported) => {
-          if (!isSupported) {
-            reject(
-              new DOMException(
-                'The requested XRSession mode is not supported.',
-                'NotSupportedError',
-              ),
-            );
-            return;
-          }
+      try {
+        const supported =
+          mode === 'inline'
+            ? true
+            : this[P_SYSTEM].device.supportedSessionModes.includes(mode);
+        if (!supported) {
+          reject(
+            new DOMException(
+              'The requested XRSession mode is not supported.',
+              'NotSupportedError',
+            ),
+          );
+          return;
+        }
 
-          const sessionGrantConfig = {
-            resolve,
-            reject,
-            mode,
-            options,
-          };
+        this[P_SYSTEM].device.handleSessionRequestStart(mode);
 
+        const sessionGrantConfig = {
+          resolve,
+          reject: (reason?: any) => {
+            this[P_SYSTEM].device.handleSessionRequestFailed(mode);
+            reject(reason);
+          },
+          mode,
+          options,
+        };
+
+        try {
           this[P_SYSTEM].grantSession(sessionGrantConfig);
-        })
-        .catch(reject);
+        } catch (error) {
+          this[P_SYSTEM].device.handleSessionRequestFailed(mode);
+          throw error;
+        }
+      } catch (error) {
+        reject(error);
+      }
     });
   }
 
