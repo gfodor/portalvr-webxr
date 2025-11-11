@@ -7,8 +7,11 @@ import {
 import { oculusQuest1 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
+import { setEmbeddedAssetFallbackEnabled } from './runtime/RuntimeAssetResolver.js';
 
 const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
+
+setEmbeddedAssetFallbackEnabled(true);
 
 type StandaloneState = {
   device: XRDevice;

@@ -19,6 +19,13 @@ declare module '@mediapipe/tasks-vision' {
     facialTransformationMatrixes?: Array<{ data: Float32Array | number[] }>;
   };
 
+  export type WasmFileset = {
+    wasmLoaderPath: string;
+    wasmBinaryPath: string;
+    assetLoaderPath?: string;
+    assetBinaryPath?: string;
+  };
+
   export interface FaceLandmarker {
     detectForVideo(video: HTMLVideoElement, timestamp: number): FaceLandmarkerResult;
     close?: () => void;
@@ -30,12 +37,13 @@ declare module '@mediapipe/tasks-vision' {
 
   export const FaceLandmarker: {
     createFromOptions(
-      vision: unknown,
+      vision: WasmFileset,
       options: FaceLandmarkerOptions,
     ): Promise<FaceLandmarkerWithAsync>;
   };
 
   export const FilesetResolver: {
-    forVisionTasks(wasmPath: string): Promise<unknown>;
+    forVisionTasks(wasmPath?: string): Promise<WasmFileset>;
+    isSimdSupported(): Promise<boolean>;
   };
 }

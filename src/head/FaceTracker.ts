@@ -22,6 +22,11 @@
 
 import type { FaceLandmarker, FaceLandmarkerResult } from '@mediapipe/tasks-vision';
 
+import {
+  getEmbeddedFaceLandmarkerModelUrl,
+  getEmbeddedVisionWasmFileset,
+  type EmbeddedWasmFileset,
+} from '../runtime/EmbeddedRuntimeAssets.js';
 import { resolveRuntimeAssetUrl } from '../runtime/RuntimeAssetResolver.js';
 
 export type Vec3 = { x: number; y: number; z: number };
@@ -40,7 +45,7 @@ export type FaceTrackerConfig = {
   /** Webcam horizontal FOV in degrees. Defaults to 60 if not provided. */
   hfovDeg?: number;
   /** MediaPipe wasm path. Defaults to CDN if not provided. */
-  wasmPath?: string;
+  wasmPath?: string | WasmFileset;
   /** MediaPipe face landmarker model path. Defaults to latest float16 if not provided. */
   modelAssetPath?: string;
   /** Number of faces (we use 1). */
@@ -183,15 +188,58 @@ const DEFAULTS = {
   DISTANCE_BASE: 0.99,
 };
 
-function resolveDefaultWasmPath(): string {
-  return resolveRuntimeAssetUrl('runtime/mediapipe/tasks-vision/wasm') ?? DEFAULTS.WASM_PATH;
+type WasmFileset = EmbeddedWasmFileset;
+
+function isWasmFileset(candidate: unknown): candidate is WasmFileset {
+  if (!candidate || typeof candidate !== 'object') {
+    return false;
+  }
+  const typed = candidate as Partial<WasmFileset>;
+  return typeof typed.wasmLoaderPath === 'string' && typeof typed.wasmBinaryPath === 'string';
 }
+
+type InternalFaceTrackerConfig = {
+  hfovDeg: number;
+  wasmPath?: string | WasmFileset;
+  modelAssetPath: string;
+  numFaces: number;
+  smooth: OneEuroParams;
+  distanceSmoothingBase: number;
+};
 
 function resolveDefaultModelPath(): string {
   return (
     resolveRuntimeAssetUrl('runtime/mediapipe/models/face_landmarker/face_landmarker.task') ??
+    getEmbeddedFaceLandmarkerModelUrl() ??
     DEFAULTS.MODEL_PATH
   );
+}
+
+type VisionFilesetResolver = {
+  forVisionTasks: (basePath?: string) => Promise<WasmFileset>;
+  isSimdSupported: () => Promise<boolean>;
+};
+
+async function ensureVisionFileset(
+  resolver: VisionFilesetResolver,
+  wasmSource: string | WasmFileset | undefined,
+): Promise<WasmFileset> {
+  if (isWasmFileset(wasmSource)) {
+    return wasmSource;
+  }
+  if (typeof wasmSource === 'string' && wasmSource.length > 0) {
+    return resolver.forVisionTasks(wasmSource);
+  }
+  const simdSupported = await resolver.isSimdSupported().catch(() => true);
+  const embedded = getEmbeddedVisionWasmFileset(simdSupported ? 'simd' : 'nosimd');
+  if (embedded) {
+    return embedded;
+  }
+  const runtimeBase = resolveRuntimeAssetUrl('runtime/mediapipe/tasks-vision/wasm');
+  if (runtimeBase) {
+    return resolver.forVisionTasks(runtimeBase);
+  }
+  return resolver.forVisionTasks(DEFAULTS.WASM_PATH);
 }
 
 function focalLengthPixels(imageWidthPx: number, hFovDeg: number) {
@@ -238,7 +286,7 @@ function irisPosition(
 // --------------- Public class ------------------
 
 export class FaceTracker {
-  private cfg: Required<FaceTrackerConfig>;
+  private cfg: InternalFaceTrackerConfig;
   private detector: FaceLandmarker | null = null;
   private detectorReady = false;
   private detectionInFlight = false;
@@ -263,7 +311,7 @@ export class FaceTracker {
   constructor(config: FaceTrackerConfig = {}) {
     this.cfg = {
       hfovDeg: config.hfovDeg ?? DEFAULTS.FOV_DEG,
-      wasmPath: config.wasmPath ?? resolveDefaultWasmPath(),
+      wasmPath: config.wasmPath,
       modelAssetPath: config.modelAssetPath ?? resolveDefaultModelPath(),
       numFaces: config.numFaces ?? 1,
       smooth: config.smooth ?? { minCutoff: 5, beta: 75, dCutoff: 5 },
@@ -345,7 +393,7 @@ export class FaceTracker {
   private initDetector = async () => {
     const mp = await import('@mediapipe/tasks-vision');
     const { FilesetResolver, FaceLandmarker } = mp;
-    const vision = await FilesetResolver.forVisionTasks(this.cfg.wasmPath);
+    const vision = await ensureVisionFileset(FilesetResolver, this.cfg.wasmPath);
     const baseOptions = { modelAssetPath: this.cfg.modelAssetPath, delegate: 'GPU' as const };
     const options = {
       baseOptions,

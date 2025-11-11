@@ -1,12 +1,19 @@
+import { resolveEmbeddedRuntimeAssetDataUrl } from './EmbeddedRuntimeAssets.js';
+
 const RUNTIME_BASE_GLOBAL = '__PORTALVR_RUNTIME_BASE_URL__';
 const RUNTIME_SETTER_GLOBAL = '__PORTALVR_SET_ASSET_BASE__';
+const EMBEDDED_OVERRIDE_GLOBAL = '__PORTALVR_FORCE_EMBEDDED_ASSETS__';
 
 type RuntimeGlobal = typeof globalThis & {
   [RUNTIME_BASE_GLOBAL]?: string;
   [RUNTIME_SETTER_GLOBAL]?: (baseUrl: string | null) => void;
+  [EMBEDDED_OVERRIDE_GLOBAL]?: boolean;
 };
 
 const globalTarget = globalThis as RuntimeGlobal;
+if ((globalTarget as Record<string, unknown>)[EMBEDDED_OVERRIDE_GLOBAL]) {
+  globalTarget[EMBEDDED_OVERRIDE_GLOBAL] = true;
+}
 
 function ensureTrailingSlash(candidate: string): string {
   if (candidate.endsWith('/')) {
@@ -62,21 +69,60 @@ export function setRuntimeAssetBaseUrl(baseUrl: string | null): void {
   delete globalTarget[RUNTIME_BASE_GLOBAL];
 }
 
+export function setEmbeddedAssetFallbackEnabled(enable: boolean): void {
+  if (enable) {
+    globalTarget[EMBEDDED_OVERRIDE_GLOBAL] = true;
+    return;
+  }
+  delete globalTarget[EMBEDDED_OVERRIDE_GLOBAL];
+}
+
+function shouldPreferEmbeddedAssets(): boolean {
+  return Boolean(globalTarget[EMBEDDED_OVERRIDE_GLOBAL]);
+}
+
+export function areEmbeddedAssetsPreferred(): boolean {
+  return shouldPreferEmbeddedAssets();
+}
+
 export function resolveRuntimeAssetUrl(relativePath: string): string | null {
   if (typeof relativePath !== 'string' || relativePath.length === 0) {
     return null;
   }
+  const normalizedPath = relativePath.startsWith('/')
+    ? relativePath.slice(1)
+    : relativePath;
+  const preferEmbedded = shouldPreferEmbeddedAssets();
+
+  const tryEmbedded = (): string | null => {
+    if (!normalizedPath.includes('.')) {
+      return null;
+    }
+    return resolveEmbeddedRuntimeAssetDataUrl(normalizedPath);
+  };
+
   const baseUrl = getRuntimeAssetBaseUrl();
   if (!baseUrl) {
+    const embedded = tryEmbedded();
+    if (embedded) {
+      return embedded;
+    }
     return null;
   }
+  if (preferEmbedded) {
+    const embedded = tryEmbedded();
+    if (embedded) {
+      return embedded;
+    }
+  }
   try {
-    const normalizedPath = relativePath.startsWith('/')
-      ? relativePath.slice(1)
-      : relativePath;
     // Force resolution relative to the base directory rather than the origin root.
     return new URL(`./${normalizedPath}`, baseUrl).toString();
   } catch {
+    const embedded = tryEmbedded();
+    if (embedded) {
+      return embedded;
+    }
     return null;
   }
 }
