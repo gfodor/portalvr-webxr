@@ -185,6 +185,9 @@ function makeIdentityPortalPose(): PortalPose {
 
 // Matches the native Android driver threshold (fabs(axis) > 0.0001f).
 const THUMBSTICK_TOUCH_EPSILON = 1e-4;
+const POINTER_LOOK_YAW_RAD_PER_PIXEL = 0.0025;
+const POINTER_LOOK_PITCH_RAD_PER_PIXEL = 0.0020;
+const POINTER_LOOK_MAX_STEP_RAD = Math.PI / 3; // clamp spikes to 60 degrees per frame
 
 export interface XRDeviceConfig {
   name: string;
@@ -509,6 +512,9 @@ export class XRDevice {
 	private hasSeenOrientationResetOnce = false;
   private canvasContainerWasFullscreen = false;
   private pendingImmersiveFullscreenMount = false;
+  private pointerLookListenersAttached = false;
+  private pointerLockActive = false;
+  private pointerLookMoveListenerAttached = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -724,11 +730,13 @@ export class XRDevice {
 
         this.activateCanvasContainerForSession();
         this.updateCanvasViewportFromWindow();
+        this.enablePointerLookControlsForSession();
 
         this.ensureFullscreenForImmersiveSession();
       },
       onSessionEnd: () => {
         this.exitFullscreenForImmersiveSession();
+        this.disablePointerLookControlsForSession();
         this[P_DEVICE].currentBaseLayer?.disposeStereoTargets();
         this[P_DEVICE].currentBaseLayer = null;
         this[P_DEVICE].stereoTargets = null;
@@ -1439,6 +1447,58 @@ export class XRDevice {
       }
     }
     this.resumeWebRTCStreamingAfterVisibility();
+  };
+
+  private readonly handlePointerLookMouseMove = (event: MouseEvent) => {
+    if (!this.pointerLockActive) {
+      return;
+    }
+    const session = this.activeSession;
+    if (!session || session[P_SESSION].mode !== 'immersive-vr' || !this.portalPoseCamera) {
+      return;
+    }
+    const movementX = Number.isFinite(event.movementX) ? event.movementX : 0;
+    const movementY = Number.isFinite(event.movementY) ? event.movementY : 0;
+    if (movementX === 0 && movementY === 0) {
+      return;
+    }
+    const incYaw = this.clampPointerLookDelta(movementX * POINTER_LOOK_YAW_RAD_PER_PIXEL);
+    const incPitch = this.clampPointerLookDelta(-movementY * POINTER_LOOK_PITCH_RAD_PER_PIXEL);
+    if (Math.abs(incYaw) < 1e-6 && Math.abs(incPitch) < 1e-6) {
+      return;
+    }
+    this.portalPoseCamera.applyCameraDragIncrements({
+      incYaw,
+      incPitch,
+      incX: 0,
+      incY: 0,
+      incZ: 0,
+    });
+  };
+
+  private readonly handlePointerLockChange = () => {
+    this.syncPointerLockState();
+  };
+
+  private readonly handlePointerLockError = () => {
+    this.pointerLockActive = false;
+    this.detachPointerLookMoveListener();
+  };
+
+  private readonly handlePointerLookActivation = (event: PointerEvent) => {
+    if (!this.pointerLookListenersAttached || this.pointerLockActive) {
+      return;
+    }
+    if (event.pointerType && event.pointerType !== 'mouse') {
+      return;
+    }
+    if (typeof event.button === 'number' && event.button !== 0) {
+      return;
+    }
+    if (event.isPrimary === false) {
+      return;
+    }
+    this.requestPointerLockForCanvas();
   };
 
 	private isTrackingStableFromState(state: ControllerState | null): boolean {
@@ -2428,7 +2488,7 @@ export class XRDevice {
       return;
     }
     const session = this.activeSession;
-    if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+    if (!session || session[P_SESSION].mode !== 'immersive-vr' || !this.portalPoseCamera) {
       return;
     }
     const stereoActive = this[P_DEVICE].stereoEnabled;
@@ -2494,6 +2554,184 @@ export class XRDevice {
         error,
       );
     }
+  }
+
+  private enablePointerLookControlsForSession(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const session = this.activeSession;
+    if (!session || session[P_SESSION].mode !== 'immersive-vr' || !this.portalPoseCamera) {
+      return;
+    }
+    if (this.pointerLookListenersAttached) {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer;
+    if (!container.hasAttribute('tabindex')) {
+      container.tabIndex = -1;
+    }
+    container.addEventListener('pointerdown', this.handlePointerLookActivation, { passive: true });
+    document.addEventListener('pointerlockchange', this.handlePointerLockChange);
+    document.addEventListener('pointerlockerror', this.handlePointerLockError);
+    this.pointerLookListenersAttached = true;
+    this.requestPointerLockForCanvas();
+  }
+
+  private disablePointerLookControlsForSession(): void {
+    if (!this.pointerLookListenersAttached) {
+      return;
+    }
+    this.pointerLookListenersAttached = false;
+    const container = this[P_DEVICE].canvasContainer;
+    container.removeEventListener('pointerdown', this.handlePointerLookActivation);
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
+      document.removeEventListener('pointerlockerror', this.handlePointerLockError);
+    }
+    this.detachPointerLookMoveListener();
+    this.pointerLockActive = false;
+    this.exitPointerLockIfOwned();
+  }
+
+  private requestPointerLockForCanvas(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const session = this.activeSession;
+    if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+      return;
+    }
+    const container = this[P_DEVICE].canvasContainer as HTMLElement & {
+      mozRequestPointerLock?: () => void;
+      webkitRequestPointerLock?: () => void;
+      msRequestPointerLock?: () => void;
+    };
+    if (this.getPointerLockElement() === container) {
+      return;
+    }
+    const standardRequest = container.requestPointerLock as unknown as
+      | ((options?: { unadjustedMovement?: boolean }) => Promise<void> | void)
+      | undefined;
+    if (standardRequest) {
+      try {
+        const maybePromise = standardRequest.call(container, {
+          unadjustedMovement: true,
+        });
+        if (maybePromise && typeof maybePromise === 'object' && typeof (maybePromise as Promise<void>).catch === 'function') {
+          (maybePromise as Promise<void>).catch(() => undefined);
+        }
+        return;
+      } catch {
+        try {
+          standardRequest.call(container);
+          return;
+        } catch {
+          // fall through to legacy path
+        }
+      }
+    }
+
+    const legacyRequest =
+      container.mozRequestPointerLock ??
+      container.webkitRequestPointerLock ??
+      container.msRequestPointerLock;
+    try {
+      legacyRequest?.call(container);
+    } catch {
+      // ignore legacy failures
+    }
+  }
+
+  private syncPointerLockState(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const lockedElement = this.getPointerLockElement();
+    const isLocked = lockedElement === this[P_DEVICE].canvasContainer;
+    if (isLocked === this.pointerLockActive) {
+      return;
+    }
+    this.pointerLockActive = isLocked;
+    if (isLocked) {
+      this.attachPointerLookMoveListener();
+    } else {
+      this.detachPointerLookMoveListener();
+    }
+  }
+
+  private attachPointerLookMoveListener(): void {
+    if (this.pointerLookMoveListenerAttached || typeof document === 'undefined') {
+      return;
+    }
+    document.addEventListener('mousemove', this.handlePointerLookMouseMove, { passive: true });
+    this.pointerLookMoveListenerAttached = true;
+  }
+
+  private detachPointerLookMoveListener(): void {
+    if (!this.pointerLookMoveListenerAttached || typeof document === 'undefined') {
+      return;
+    }
+    document.removeEventListener('mousemove', this.handlePointerLookMouseMove);
+    this.pointerLookMoveListenerAttached = false;
+  }
+
+  private getPointerLockElement(): Element | null {
+    if (typeof document === 'undefined') {
+      return null;
+    }
+    const doc = document as Document & {
+      mozPointerLockElement?: Element | null;
+      webkitPointerLockElement?: Element | null;
+      msPointerLockElement?: Element | null;
+    };
+    return (
+      doc.pointerLockElement ??
+      doc.mozPointerLockElement ??
+      doc.webkitPointerLockElement ??
+      doc.msPointerLockElement ??
+      null
+    );
+  }
+
+  private exitPointerLockIfOwned(): void {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const lockedElement = this.getPointerLockElement();
+    if (lockedElement !== this[P_DEVICE].canvasContainer) {
+      return;
+    }
+    const doc = document as Document & {
+      mozExitPointerLock?: () => void;
+      webkitExitPointerLock?: () => void;
+      msExitPointerLock?: () => void;
+    };
+    const exitPointerLock =
+      doc.exitPointerLock ??
+      doc.mozExitPointerLock ??
+      doc.webkitExitPointerLock ??
+      doc.msExitPointerLock;
+    if (typeof exitPointerLock === 'function') {
+      try {
+        exitPointerLock.call(doc);
+      } catch {
+        // ignore exit failures
+      }
+    }
+  }
+
+  private clampPointerLookDelta(value: number): number {
+    if (!Number.isFinite(value)) {
+      return 0;
+    }
+    if (value > POINTER_LOOK_MAX_STEP_RAD) {
+      return POINTER_LOOK_MAX_STEP_RAD;
+    }
+    if (value < -POINTER_LOOK_MAX_STEP_RAD) {
+      return -POINTER_LOOK_MAX_STEP_RAD;
+    }
+    return value;
   }
 
   private resetCanvasZoomTransform(): void {
@@ -2968,11 +3206,16 @@ export class XRDevice {
     this.portalPoseCameraOptions = nextOptions;
     this.portalPoseCamera?.dispose();
     this.portalPoseCamera = new PortalPoseCameraController(this, nextOptions);
+    const session = this.activeSession;
+    if (session && session[P_SESSION].mode === 'immersive-vr') {
+      this.enablePointerLookControlsForSession();
+    }
   }
 
   disablePortalPoseCamera() {
     this.portalPoseCamera?.dispose();
     this.portalPoseCamera = null;
+    this.disablePointerLookControlsForSession();
   }
 
   enableWebRTCControllerStreaming(options?: WebRTCControllerStreamOptions) {

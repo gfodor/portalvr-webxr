@@ -71,4 +71,24 @@ const standaloneConfig = {
 	],
 };
 
-export default [libraryConfig, standaloneConfig];
+const contextConfig = {
+	input: 'lib/context/frame.js',
+	plugins: basePlugins,
+	output: [
+		{
+			file: 'build/portalvr-context.js',
+			format: 'iife',
+			name: 'PortalVRContextFrame',
+			inlineDynamicImports: true,
+		},
+		{
+			file: 'build/portalvr-context.min.js',
+			format: 'iife',
+			name: 'PortalVRContextFrame',
+			inlineDynamicImports: true,
+			plugins: [terser()],
+		},
+	],
+};
+
+export default [libraryConfig, standaloneConfig, contextConfig];

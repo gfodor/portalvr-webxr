@@ -1,7 +1,8 @@
 import type { PortalEmulatorConfig } from 'portalvr';
-
-const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
-const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
+import {
+	MESSAGE_TYPE_ENSURE_RUNTIME,
+	MESSAGE_TYPE_SET_CONFIG,
+} from 'portalvr/context/constants.js';
 
 function bridgePageConfigUpdates(): void {
 	window.addEventListener(MESSAGE_TYPE_SET_CONFIG, (event: Event) => {
