@@ -15,6 +15,53 @@ const basePlugins = [
 	commonjs(),
 ];
 
+const contextHtmlPlugin = () => {
+	let emitted = false;
+	return {
+		name: 'portalvr-context-html',
+		generateBundle(options, bundle) {
+			if (emitted || !options.file.endsWith('context.js')) {
+				return;
+			}
+
+			const contextChunk = Object.values(bundle).find(
+				(output) => output.type === 'chunk' && typeof output.code === 'string'
+			);
+
+			if (!contextChunk) {
+				this.error('Unable to inline PortalVR context chunk.');
+			}
+
+			const script = contextChunk.code.replace(/^/gm, '    ');
+			const html = [
+				'<!doctype html>',
+				'<html lang="en">',
+				'<head>',
+				'  <meta charset="utf-8" />',
+				'  <meta name="viewport" content="width=device-width, initial-scale=1" />',
+				'  <title>PortalVR Context</title>',
+				'  <meta name="robots" content="noindex,nofollow" />',
+				'  <style>html,body{background:transparent;margin:0;padding:0;}</style>',
+				'</head>',
+				'<body>',
+				'  <script>',
+				script,
+				'  </script>',
+				'</body>',
+				'</html>',
+			].join('\n');
+
+			this.emitFile({
+				type: 'asset',
+				fileName: 'context.html',
+				source: html,
+			});
+
+			emitted = true;
+		},
+	};
+};
+
 const libraryConfig = {
 	input: 'lib/index.js',
 	external: ['@mediapipe/tasks-vision'],
@@ -71,4 +118,24 @@ const standaloneConfig = {
 	],
 };
 
-export default [libraryConfig, standaloneConfig];
+const contextConfig = {
+	input: 'lib/context/iframe.js',
+	plugins: [...basePlugins, contextHtmlPlugin()],
+	output: [
+		{
+			file: 'build/context.js',
+			format: 'iife',
+			name: 'PortalVRContext',
+			inlineDynamicImports: true,
+		},
+		{
+			file: 'build/context.min.js',
+			format: 'iife',
+			name: 'PortalVRContext',
+			inlineDynamicImports: true,
+			plugins: [terser()],
+		},
+	],
+};
+
+export default [libraryConfig, standaloneConfig, contextConfig];

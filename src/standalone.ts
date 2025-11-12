@@ -4,6 +4,8 @@ import {
   XRDevice,
   type DevUIConstructor,
 } from './device/XRDevice.js';
+import { updatePortalEmulatorConfig, type PortalEmulatorConfig } from './device/PortalEmulatorConfig.js';
+
 import { oculusQuest1 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
@@ -120,6 +122,131 @@ function resolveDevUIConstructor(
   return PortalVRDevUI as unknown as DevUIConstructor;
 }
 
+const CONTEXT_URL = 'https://portalvr.run/context';
+const CONTEXT_ORIGIN = (() => {
+  try { return new URL(CONTEXT_URL).origin; } catch { return 'https://portalvr.run'; }
+})();
+const CONTEXT_IFRAME_ID = '__portalvr_context_iframe__';
+
+type ContextBridgeMessage =
+  | { scope: 'portalvr'; type: 'portalvr:context-ready' }
+  | { scope: 'portalvr'; type: 'portalvr:config'; id?: string; config: PortalEmulatorConfig };
+
+let contextIframe: HTMLIFrameElement | null = null;
+let contextWindow: Window | null = null;
+const ignoreReplyIds = new Set<string>(); // IDs for which config replies should be ignored (echo from our forwarded set-config)
+let initialRequestId: string | null = null;
+let contextReady = false;
+
+function generateRequestId(): string {
+  // Quick random ID, fine for message correlation.
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function ensureContextIframeInstalled(): void {
+  if (typeof document === 'undefined') return;
+  if (contextIframe && contextWindow) return;
+
+  const iframe = document.createElement('iframe');
+  iframe.id = CONTEXT_IFRAME_ID;
+  iframe.src = CONTEXT_URL;
+  iframe.style.position = 'fixed';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.opacity = '0';
+  iframe.style.pointerEvents = 'none';
+  iframe.style.visibility = 'hidden';
+  iframe.setAttribute('aria-hidden', 'true');
+  // Attach ASAP
+  (document.body || document.documentElement).appendChild(iframe);
+
+  contextIframe = iframe;
+  contextWindow = iframe.contentWindow ?? null;
+}
+
+function postToContext(message: unknown): void {
+  try {
+    if (contextWindow) {
+      contextWindow.postMessage(message, CONTEXT_ORIGIN);
+    }
+  } catch {
+    // ignore post failures
+  }
+}
+
+function requestInitialConfig(): void {
+  initialRequestId = generateRequestId();
+  postToContext({ scope: 'portalvr', type: 'portalvr:get-config', id: initialRequestId });
+}
+
+function forwardDomConfigEventsToContext(): void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  window.addEventListener('portalvr:set-config', (evt: Event) => {
+    const custom = evt as CustomEvent<PortalEmulatorConfig | null>;
+    const cfg = custom.detail;
+    if (!cfg) return;
+    const id = generateRequestId();
+    ignoreReplyIds.add(id);
+    postToContext({ scope: 'portalvr', type: 'portalvr:set-config', id, config: cfg });
+  });
+}
+
+function applyConfigToRuntime(config: PortalEmulatorConfig): void {
+  try {
+    updatePortalEmulatorConfig(config);
+  } catch {
+    // ignore runtime config failures in hardened pages
+  }
+}
+
+function onContextMessage(event: MessageEvent) {
+  if (event.origin !== CONTEXT_ORIGIN) return;
+  const data = event.data as ContextBridgeMessage | null | undefined;
+  if (!data || typeof data !== 'object' || (data as { scope?: string }).scope !== 'portalvr') return;
+
+  if (data.type === 'portalvr:context-ready') {
+    contextReady = true;
+    requestInitialConfig();
+    return;
+  }
+
+  if (data.type === 'portalvr:config') {
+    const id = (data as { id?: string }).id;
+    if (id && ignoreReplyIds.has(id)) {
+      // This is an echo from our forwarded set-config; do not apply again.
+      ignoreReplyIds.delete(id);
+      return;
+    }
+    // Apply on initial fetch or unsolicited updates from the context.
+    applyConfigToRuntime((data as { config: PortalEmulatorConfig }).config);
+    return;
+  }
+}
+
+function installPortalVRContextBridge(): void {
+  if (typeof window === 'undefined') return;
+
+  const doInstall = () => {
+    ensureContextIframeInstalled();
+    forwardDomConfigEventsToContext();
+    window.addEventListener('message', onContextMessage);
+    // If the iframe loaded before we registered listeners, ask for config anyway after a short tick.
+    setTimeout(() => {
+      if (!contextReady) {
+        // Poke the iframe by sending a "hello" (optional) or just ask for config.
+        requestInitialConfig();
+      }
+    }, 0);
+  };
+
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    doInstall();
+  } else {
+    window.addEventListener('DOMContentLoaded', doInstall, { once: true });
+  }
+}
+
 export async function bootstrapStandaloneEmulator(
   options: StandaloneOptions = {},
 ): Promise<XRDevice | null> {
@@ -176,6 +303,9 @@ export async function bootstrapStandaloneEmulator(
 
   return device;
 }
+
+// Install the iframe context bridge BEFORE attempting to bootstrap, so the initial config is ready ASAP.
+installPortalVRContextBridge();
 
 void bootstrapStandaloneEmulator().catch((error) => {
   console.error('[PortalVR Standalone] Failed to install emulator', error);
