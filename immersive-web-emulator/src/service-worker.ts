@@ -5,6 +5,11 @@ declare const chrome: any;
 const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
 const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
 const MESSAGE_TYPE_GET_CONFIG = 'portalvr:get-config';
+const WS_OPEN  = 'portalvr:ws-open';
+const WS_SEND  = 'portalvr:ws-send';
+const WS_CLOSE = 'portalvr:ws-close';
+const WS_EVENT = 'portalvr:ws-event';
+
 const CONFIG_STORAGE_KEY = 'portalvrConfig';
 const SUFFIX_LENGTH = 12;
 const UI_SUFFIX_LENGTH = 4;
@@ -34,6 +39,82 @@ function logDebug(...args: unknown[]): void {
 	}
 }
 
+type SocketRecord = {
+	id: string;
+	tabId: number;
+	frameId?: number;
+	url: string;
+	ws: WebSocket | null;
+};
+const socketsById = new Map<string, SocketRecord>();
+const socketsByTab = new Map<number, Set<string>>();
+
+function ensureTabIndex(tabId: number): Set<string> {
+	const set = socketsByTab.get(tabId);
+	if (set) return set;
+	const created = new Set<string>();
+	socketsByTab.set(tabId, created);
+	return created;
+}
+
+function sendToTab(tabId: number, payload: any): void {
+	try {
+		chrome.tabs.sendMessage(tabId, payload, () => {
+			void chrome.runtime?.lastError;
+		});
+	} catch { /* ignore */ }
+}
+
+function handleSocketOpen(tabId: number, id: string, url: string): void {
+	try {
+		const prevId = id;
+		const existing = socketsById.get(prevId);
+		try { existing?.ws?.close(4001, 'reopen'); } catch { /* ignore */ }
+	} catch { /* ignore */ }
+
+	let ws: WebSocket | null = null;
+	try {
+		ws = new WebSocket(url);
+	} catch (e) {
+		sendToTab(tabId, { type: WS_EVENT, id, event: 'error', error: 'ws-open-error' });
+		return;
+	}
+	const rec: SocketRecord = { id, tabId, url, ws };
+	socketsById.set(id, rec);
+	ensureTabIndex(tabId).add(id);
+
+	ws.onopen = () => sendToTab(tabId, { type: WS_EVENT, id, event: 'open' });
+
+	ws.onmessage = (ev: MessageEvent) => {
+		const text = typeof ev.data === 'string' ? ev.data : (() => {
+			try { return String(ev.data); } catch { return ''; }
+		})();
+		sendToTab(tabId, { type: WS_EVENT, id, event: 'message', data: text });
+	};
+
+	ws.onerror = () => sendToTab(tabId, { type: WS_EVENT, id, event: 'error', error: 'ws-error' });
+
+	ws.onclose = (ev: CloseEvent) => {
+		sendToTab(tabId, { type: WS_EVENT, id, event: 'close', code: ev.code, reason: ev.reason });
+		try { socketsById.delete(id); } catch {}
+		try {
+			const set = socketsByTab.get(tabId);
+			if (set) { set.delete(id); if (set.size === 0) socketsByTab.delete(tabId); }
+		} catch {}
+	};
+}
+
+function handleSocketSend(_tabId: number, id: string, data: string): void {
+	const rec = socketsById.get(id);
+	try { rec?.ws?.send(data); } catch { /* ignore */ }
+}
+
+function handleSocketClose(_tabId: number, id: string, code?: number, reason?: string): void {
+	const rec = socketsById.get(id);
+	try { rec?.ws?.close(code ?? 1000, reason ?? 'client-close'); } catch { /* ignore */ }
+	try { socketsById.delete(id); } catch {}
+}
+
 interface PortalEmulatorConfig {
 	device: {
 		suffix: string;
@@ -57,11 +138,51 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	version: 1,
 };
 
+try {
+	chrome.tabs.onRemoved.addListener((tabId: number) => {
+		const set = socketsByTab.get(tabId);
+		if (!set) return;
+		for (const id of Array.from(set)) {
+			try {
+				const rec = socketsById.get(id);
+				try { rec?.ws?.close(1001, 'tab-removed'); } catch {}
+			} catch { /* ignore */ }
+			try { socketsById.delete(id); } catch {}
+		}
+		try { socketsByTab.delete(tabId); } catch {}
+	});
+} catch { /* ignore */ }
+
 void ensureRuntimePreloadRegistered();
 
 chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: number }; frameId?: number; url?: string } | null, sendResponse: (response?: unknown) => void) => {
 	if (!isRuntimeMessage(message)) {
 		return;
+	}
+
+	if ((message as any).type === WS_OPEN) {
+		const tabId = sender?.tab?.id;
+		if (typeof tabId !== 'number') { sendResponse({ ok: false, reason: 'missing-tab' }); return true; }
+		const { id, url } = message as any;
+		handleSocketOpen(tabId, id, url);
+		sendResponse({ ok: true });
+		return true;
+	}
+	if ((message as any).type === WS_SEND) {
+		const tabId = sender?.tab?.id;
+		if (typeof tabId !== 'number') { sendResponse({ ok: false, reason: 'missing-tab' }); return true; }
+		const { id, data } = message as any;
+		handleSocketSend(tabId, id, data);
+		sendResponse({ ok: true });
+		return true;
+	}
+	if ((message as any).type === WS_CLOSE) {
+		const tabId = sender?.tab?.id;
+		if (typeof tabId !== 'number') { sendResponse({ ok: false, reason: 'missing-tab' }); return true; }
+		const { id, code, reason } = message as any;
+		handleSocketClose(tabId, id, code, reason);
+		sendResponse({ ok: true });
+		return true;
 	}
 
 	if (message.type === MESSAGE_TYPE_SET_CONFIG) {

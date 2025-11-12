@@ -9,6 +9,11 @@ export const MESSAGE_TYPE_CONFIG = 'portalvr:config';
 export const MESSAGE_TYPE_HELLO = 'portalvr:hello';
 export const MESSAGE_TYPE_READY = 'portalvr:context-ready';
 
+export const MESSAGE_TYPE_WS_OPEN  = 'portalvr:ws-open';
+export const MESSAGE_TYPE_WS_SEND  = 'portalvr:ws-send';
+export const MESSAGE_TYPE_WS_CLOSE = 'portalvr:ws-close';
+export const MESSAGE_TYPE_WS_EVENT = 'portalvr:ws-event';
+
 export const CONTEXT_SCOPE = 'portalvr';
 export const CONFIG_STORAGE_KEY = 'portalvrConfig';
 

@@ -4,6 +4,12 @@ import {
   XRDevice,
   type DevUIConstructor,
 } from './device/XRDevice.js';
+import type { XRSystem as PortalXRSystem } from './initialization/XRSystem.js';
+import type {
+  XRSession,
+  XRSessionInit,
+  XRSessionMode,
+} from './session/XRSession.js';
 import { updatePortalEmulatorConfig, type PortalEmulatorConfig } from './device/PortalEmulatorConfig.js';
 
 import { oculusQuest1 } from './device/configs/headset/meta.js';
@@ -64,6 +70,215 @@ export interface StandaloneOptions {
   forcePolyfill?: boolean;
 }
 
+type DeferredPromise<T> = {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+};
+
+function createDeferred<T>(): DeferredPromise<T> {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+type XRSystemDeviceChangeHandler = ((this: PortalXRSystem, ev: Event) => unknown) | null;
+
+function setDeviceChangeHandler(target: PortalXRSystem, handler: XRSystemDeviceChangeHandler): void {
+  const maybeTarget = target as unknown as Record<string, unknown> & {
+    ondevicechange?: XRSystemDeviceChangeHandler;
+  };
+  if ('ondevicechange' in maybeTarget) {
+    maybeTarget.ondevicechange = handler;
+  }
+}
+
+function getDeviceChangeHandler(target: PortalXRSystem): XRSystemDeviceChangeHandler {
+  const maybeTarget = target as unknown as Record<string, unknown> & {
+    ondevicechange?: XRSystemDeviceChangeHandler;
+  };
+  if ('ondevicechange' in maybeTarget) {
+    return maybeTarget.ondevicechange ?? null;
+  }
+  return null;
+}
+
+class DeferredXRSystem extends EventTarget {
+  private resolvedTarget: PortalXRSystem | null = null;
+  private pendingDeviceChangeHandler: XRSystemDeviceChangeHandler = null;
+
+  constructor(private readonly targetPromise: Promise<PortalXRSystem>) {
+    super();
+    this.targetPromise
+      .then((target) => {
+        this.resolvedTarget = target;
+      })
+      .catch(() => undefined);
+  }
+
+  private forwardCall<T>(fn: (target: PortalXRSystem) => Promise<T>): Promise<T>;
+  private forwardCall<T>(fn: (target: PortalXRSystem) => T): Promise<T>;
+  private forwardCall<T>(fn: (target: PortalXRSystem) => T | Promise<T>): Promise<T> {
+    return this.targetPromise.then((target) => fn(target));
+  }
+
+  isSessionSupported(mode: XRSessionMode): Promise<boolean> {
+    return this.forwardCall((target) => target.isSessionSupported(mode));
+  }
+
+  requestSession(
+    mode: XRSessionMode,
+    options: XRSessionInit = {},
+  ): Promise<XRSession> {
+    return this.forwardCall((target) => target.requestSession(mode, options));
+  }
+
+  offerSession(
+    mode: XRSessionMode,
+    options: XRSessionInit = {},
+  ): Promise<XRSession> {
+    return this.forwardCall((target) => target.offerSession(mode, options));
+  }
+
+  addEventListener(
+    type: Parameters<EventTarget['addEventListener']>[0],
+    listener: Parameters<EventTarget['addEventListener']>[1],
+    options?: Parameters<EventTarget['addEventListener']>[2],
+  ): void {
+    void this.forwardCall((target) => {
+      target.addEventListener(type, listener, options);
+    });
+  }
+
+  removeEventListener(
+    type: Parameters<EventTarget['removeEventListener']>[0],
+    listener: Parameters<EventTarget['removeEventListener']>[1],
+    options?: Parameters<EventTarget['removeEventListener']>[2],
+  ): void {
+    void this.forwardCall((target) => {
+      target.removeEventListener(type, listener, options);
+    });
+  }
+
+  dispatchEvent(event: Event): boolean {
+    if (this.resolvedTarget) {
+      return this.resolvedTarget.dispatchEvent(event);
+    }
+    void this.forwardCall((target) => {
+      target.dispatchEvent(event);
+    });
+    return true;
+  }
+
+  get ondevicechange(): XRSystemDeviceChangeHandler {
+    if (this.resolvedTarget) {
+      return getDeviceChangeHandler(this.resolvedTarget);
+    }
+    return this.pendingDeviceChangeHandler;
+  }
+
+  set ondevicechange(handler: XRSystemDeviceChangeHandler) {
+    this.pendingDeviceChangeHandler = handler ?? null;
+    void this.forwardCall((target) => {
+      setDeviceChangeHandler(target, handler ?? null);
+    });
+  }
+
+  get [Symbol.toStringTag](): string {
+    return 'XRSystem';
+  }
+}
+
+type NavigatorXRProxyState = {
+  nativeXR: PortalXRSystem;
+  resolveNative: () => void;
+  resolvePortal: (portalXR: PortalXRSystem) => void;
+};
+
+let navigatorXRProxyState: NavigatorXRProxyState | null = null;
+let navigatorXRProxyFinalized = false;
+
+function getNavigatorXR(): PortalXRSystem | null {
+  if (typeof navigator === 'undefined') {
+    return null;
+  }
+  return ((navigator as Navigator & { xr?: PortalXRSystem }).xr ?? null) as PortalXRSystem | null;
+}
+
+function ensureNavigatorXRProxy(): NavigatorXRProxyState | null {
+  if (navigatorXRProxyState || navigatorXRProxyFinalized) {
+    return navigatorXRProxyState;
+  }
+  const nativeXR = getNavigatorXR();
+  if (!nativeXR) {
+    navigatorXRProxyFinalized = true;
+    return null;
+  }
+
+  const deferred = createDeferred<PortalXRSystem>();
+  const proxy = new DeferredXRSystem(deferred.promise);
+
+  try {
+    Object.defineProperty(navigator, 'xr', {
+      configurable: true,
+      enumerable: false,
+      get: () => proxy,
+    });
+  } catch (error) {
+    console.warn('[PortalVR Standalone] Failed to intercept navigator.xr', error);
+    navigatorXRProxyFinalized = true;
+    return null;
+  }
+
+  let settled = false;
+  const cleanup = () => {
+    navigatorXRProxyState = null;
+    navigatorXRProxyFinalized = true;
+  };
+
+  const resolveNative = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    deferred.resolve(nativeXR);
+    try {
+      Reflect.deleteProperty(navigator, 'xr');
+    } catch {
+      try {
+        Object.defineProperty(navigator, 'xr', {
+          configurable: false,
+          enumerable: false,
+          get: () => nativeXR,
+        });
+      } catch {
+        (navigator as unknown as Record<string, PortalXRSystem>).xr = nativeXR;
+      }
+    }
+    cleanup();
+  };
+
+  const resolvePortal = (portalXR: PortalXRSystem) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    deferred.resolve(portalXR);
+    cleanup();
+  };
+
+  navigatorXRProxyState = {
+    nativeXR,
+    resolveNative,
+    resolvePortal,
+  };
+  return navigatorXRProxyState;
+}
+
 function storeState(state: StandaloneState) {
   (globalThis as Record<string, unknown>)[GLOBAL_STATE_KEY] = state;
 }
@@ -81,14 +296,17 @@ export function getStandaloneState(): StandaloneState | null {
   return null;
 }
 
-async function detectImmersiveVRSupport(): Promise<boolean> {
-  if (typeof navigator === 'undefined' || !navigator.xr) {
+async function detectImmersiveVRSupport(
+  xrSystemOverride?: PortalXRSystem | null,
+): Promise<boolean | null> {
+  const xrSystem = xrSystemOverride ?? getNavigatorXR();
+  if (!xrSystem) {
     return false;
   }
   try {
-    return await navigator.xr.isSessionSupported('immersive-vr');
+    return await xrSystem.isSessionSupported('immersive-vr');
   } catch (_err) {
-    return false;
+    return null;
   }
 }
 
@@ -142,7 +360,8 @@ const CONTEXT_IFRAME_ID = '__portalvr_context_iframe__';
 
 type ContextBridgeMessage =
   | { scope: 'portalvr'; type: 'portalvr:context-ready' }
-  | { scope: 'portalvr'; type: 'portalvr:config'; id?: string; config: PortalEmulatorConfig };
+  | { scope: 'portalvr'; type: 'portalvr:config'; id?: string; config: PortalEmulatorConfig }
+  | { scope: 'portalvr'; type: 'portalvr:ws-event'; id: string; event: 'open'|'message'|'close'|'error'; data?: string; code?: number; reason?: string; error?: string };
 
 let contextIframe: HTMLIFrameElement | null = null;
 let contextWindow: Window | null = null;
@@ -298,6 +517,28 @@ function applyConfigToRuntime(config: PortalEmulatorConfig): void {
   }
 }
 
+function forwardDomSignalingEventsToContext(): void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+
+  window.addEventListener('portalvr:ws-open', (evt: Event) => {
+    const { id, url } = (evt as CustomEvent<{ id: string; url: string }>).detail || {};
+    if (!id || !url) return;
+    postToContext({ scope: 'portalvr', type: 'portalvr:ws-open', id, url });
+  });
+
+  window.addEventListener('portalvr:ws-send', (evt: Event) => {
+    const { id, data } = (evt as CustomEvent<{ id: string; data: string }>).detail || {};
+    if (!id || typeof data !== 'string') return;
+    postToContext({ scope: 'portalvr', type: 'portalvr:ws-send', id, data });
+  });
+
+  window.addEventListener('portalvr:ws-close', (evt: Event) => {
+    const { id, code, reason } = (evt as CustomEvent<{ id: string; code?: number; reason?: string }>).detail || {};
+    if (!id) return;
+    postToContext({ scope: 'portalvr', type: 'portalvr:ws-close', id, code, reason });
+  });
+}
+
 function onContextMessage(event: MessageEvent) {
   if (event.origin !== CONTEXT_ORIGIN) return;
   const data = event.data as ContextBridgeMessage | null | undefined;
@@ -320,6 +561,14 @@ function onContextMessage(event: MessageEvent) {
     applyConfigToRuntime((data as { config: PortalEmulatorConfig }).config);
     return;
   }
+
+  if (data.type === 'portalvr:ws-event') {
+    try {
+      const detail = { id: (data as any).id, event: (data as any).event, data: (data as any).data, code: (data as any).code, reason: (data as any).reason, error: (data as any).error };
+      window.dispatchEvent(new CustomEvent('portalvr:ws-event', { detail }));
+    } catch { /* ignore */ }
+    return;
+  }
 }
 
 function installPortalVRContextBridge(): void {
@@ -331,6 +580,7 @@ function installPortalVRContextBridge(): void {
   const doInstall = () => {
     ensureContextIframeInstalled();
     forwardDomConfigEventsToContext();
+    forwardDomSignalingEventsToContext();
     window.addEventListener('message', onContextMessage);
     // If the iframe loaded before we registered listeners, ask for config anyway after a short tick.
     setTimeout(() => {
@@ -366,54 +616,93 @@ export async function bootstrapStandaloneEmulator(
     return null;
   }
 
-  if (!options.forceReinstall) {
-    const existing = getStandaloneState();
-    if (existing) {
-      return existing.device;
-    }
+  const existingState = getStandaloneState();
+  const portalAlreadyActive = Boolean(existingState);
+
+  if (existingState && !options.forceReinstall) {
+    return existingState.device;
   }
 
-  if (!options.skipNativeImmersiveCheck) {
-    const nativeImmersive = await detectImmersiveVRSupport();
-    if (nativeImmersive) {
+  const shouldInterceptNativeXR =
+    !portalAlreadyActive &&
+    typeof navigator !== 'undefined' &&
+    Boolean((navigator as Navigator & { xr?: PortalXRSystem }).xr);
+  const proxyState = shouldInterceptNativeXR ? ensureNavigatorXRProxy() : null;
+  const detectionTarget = portalAlreadyActive
+    ? null
+    : proxyState?.nativeXR ?? getNavigatorXR();
+
+  let shouldInstallPortal = portalAlreadyActive || !detectionTarget;
+  if (options.skipNativeImmersiveCheck) {
+    shouldInstallPortal = true;
+  }
+
+  if (!shouldInstallPortal && detectionTarget) {
+    const supportResult = await detectImmersiveVRSupport(detectionTarget);
+    if (supportResult === true || supportResult === null) {
+      proxyState?.resolveNative();
       return null;
     }
+    shouldInstallPortal = true;
   }
 
-  ensurePolyfillInstalled(options.forcePolyfill ?? true);
-  markCustomPolyfillFlag();
+  if (!shouldInstallPortal) {
+    proxyState?.resolveNative();
+    return null;
+  }
 
-  const device = new XRDevice(oculusQuest1);
+  let proxyResolvedToPortal = false;
   try {
-    device.installRuntime({
-      enforce: options.enforceRuntime ?? true,
-    });
-  } catch (error) {
-    if (isNavigatorXRError(error)) {
-      console.warn('[PortalVR Standalone] navigator.xr override was already locked; continuing with existing runtime surface.');
-    } else {
-      throw error;
+    ensurePolyfillInstalled(options.forcePolyfill ?? true);
+    markCustomPolyfillFlag();
+
+    const device = new XRDevice(oculusQuest1);
+    try {
+      device.installRuntime({
+        enforce: options.enforceRuntime ?? true,
+      });
+    } catch (error) {
+      if (isNavigatorXRError(error)) {
+        console.warn('[PortalVR Standalone] navigator.xr override was already locked; continuing with existing runtime surface.');
+      } else {
+        throw error;
+      }
     }
-  }
 
-  const devUIConstructor = resolveDevUIConstructor(options);
-  if (devUIConstructor) {
-    device.installDevUI(devUIConstructor);
-  }
+    const devUIConstructor = resolveDevUIConstructor(options);
+    if (devUIConstructor) {
+      device.installDevUI(devUIConstructor);
+    }
 
-  if (options.enablePortalPoseCamera ?? true) {
-    device.enablePortalPoseCamera({
-      wasmDataUrl: options.wasmDataUrl ?? getPortalPoseWasmDataURL(),
+    if (options.enablePortalPoseCamera ?? true) {
+      device.enablePortalPoseCamera({
+        wasmDataUrl: options.wasmDataUrl ?? getPortalPoseWasmDataURL(),
+      });
+    }
+
+    storeState({
+      device,
+      devUIInstalled: Boolean(devUIConstructor),
+      initializedAt: Date.now(),
     });
+
+    if (proxyState) {
+      const portalXRSystem = getNavigatorXR();
+      if (portalXRSystem) {
+        proxyState.resolvePortal(portalXRSystem);
+        proxyResolvedToPortal = true;
+      } else {
+        proxyState.resolveNative();
+      }
+    }
+
+    return device;
+  } catch (error) {
+    if (proxyState && !proxyResolvedToPortal) {
+      proxyState.resolveNative();
+    }
+    throw error;
   }
-
-  storeState({
-    device,
-    devUIInstalled: Boolean(devUIConstructor),
-    initializedAt: Date.now(),
-  });
-
-  return device;
 }
 
 async function autoInstallStandaloneEmulator(): Promise<void> {
