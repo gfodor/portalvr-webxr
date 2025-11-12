@@ -1,21 +1,18 @@
-import type { PortalEmulatorConfig } from 'portalvr/device/PortalEmulatorConfig.js';
-import {
-	CONFIG_STORAGE_KEY,
-	MESSAGE_TYPE_ENSURE_RUNTIME,
-	MESSAGE_TYPE_GET_CONFIG,
-	MESSAGE_TYPE_SET_CONFIG,
-	PORTAL_CONFIG_OVERRIDE_GLOBAL,
-	RUNTIME_ASSET_BASE_GLOBAL,
-	RUNTIME_ASSET_BASE_SETTER,
-} from 'portalvr/context/constants.js';
-import {
-	createPortalRuntimeContext,
-	type RuntimeConfigStore,
-} from 'portalvr/context/PortalRuntimeContext.js';
+export {};
 
 declare const chrome: any;
 
+const MESSAGE_TYPE_SET_CONFIG = 'portalvr:set-config';
+const MESSAGE_TYPE_ENSURE_RUNTIME = 'portalvr:ensure-runtime';
+const MESSAGE_TYPE_GET_CONFIG = 'portalvr:get-config';
+const CONFIG_STORAGE_KEY = 'portalvrConfig';
+const SUFFIX_LENGTH = 12;
+const UI_SUFFIX_LENGTH = 4;
+const ALPHANUM = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+const PORTAL_CONFIG_OVERRIDE_GLOBAL = '__PORTALVR_EMULATOR_CONFIG_OVERRIDE__';
 const RUNTIME_SCRIPT_PATH = 'build/iwe.min.js';
+const RUNTIME_ASSET_BASE_GLOBAL = '__PORTALVR_RUNTIME_BASE_URL__';
+const RUNTIME_ASSET_BASE_SETTER = '__PORTALVR_SET_ASSET_BASE__';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
@@ -24,24 +21,6 @@ const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'v
 const inflightInjectionTasks = new Map<string, Promise<void>>();
 // Silence debug output by default
 const DEBUG_LOGGING = false;
-
-const runtimeConfigStore: RuntimeConfigStore = {
-	async read() {
-		const stored = await storageGet(CONFIG_STORAGE_KEY);
-		const candidate = stored?.[CONFIG_STORAGE_KEY] as
-			| PortalEmulatorConfig
-			| null
-			| undefined;
-		return candidate ?? null;
-	},
-	async write(config) {
-		await storageSet({
-			[CONFIG_STORAGE_KEY]: config,
-		});
-	},
-};
-
-const runtimeConfigController = createPortalRuntimeContext(runtimeConfigStore);
 
 function logDebug(...args: unknown[]): void {
 	if (!DEBUG_LOGGING) {
@@ -54,6 +33,29 @@ function logDebug(...args: unknown[]): void {
 	}
 }
 
+interface PortalEmulatorConfig {
+	device: {
+		suffix: string;
+	};
+	settings: {
+		faceTrackingEnabled: boolean;
+		stereoRenderingEnabled: boolean;
+		immersiveFullscreenEnabled: boolean;
+		connectToControllerViaLan: boolean;
+	};
+	version?: number;
+}
+const DEFAULT_CONFIG: PortalEmulatorConfig = {
+	device: { suffix: '' },
+	settings: {
+		faceTrackingEnabled: true,
+		stereoRenderingEnabled: false,
+		immersiveFullscreenEnabled: true,
+		connectToControllerViaLan: true,
+	},
+	version: 1,
+};
+
 void ensureRuntimePreloadRegistered();
 
 chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: number }; frameId?: number; url?: string } | null, sendResponse: (response?: unknown) => void) => {
@@ -62,16 +64,14 @@ chrome.runtime.onMessage.addListener((message: unknown, sender: { tab?: { id?: n
 	}
 
 	if (message.type === MESSAGE_TYPE_SET_CONFIG) {
-		runtimeConfigController
-			.setRuntimeConfig((message as { config?: unknown }).config)
+		setRuntimeConfig((message as { config?: unknown }).config)
 			.then((config) => sendResponse({ ok: true, config }))
 			.catch(() => sendResponse({ ok: false }));
 		return true;
 	}
 
 	if (message.type === MESSAGE_TYPE_GET_CONFIG) {
-		runtimeConfigController
-			.getOrCreateRuntimeConfig()
+		getOrCreateRuntimeConfig()
 			.then((config) => sendResponse({ ok: true, config }))
 			.catch(() => sendResponse({ ok: false }));
 		return true;
@@ -147,7 +147,7 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 			logDebug('runtime already installed (will still inject config override)', { tabId, frameId });
 		}
 
-		const config = await runtimeConfigController.getOrCreateRuntimeConfig();
+		const config = await getOrCreateRuntimeConfig();
 		logDebug('injecting config override', {
 			tabId,
 			frameId,
@@ -167,7 +167,137 @@ async function ensureRuntimeInjected(tabId: number, frameId: number, url?: strin
 	}
 }
 
-async function isRuntimeAlreadyInstalled(target: FrameTarget): Promise<boolean> {
+async function getOrCreateRuntimeConfig(): Promise<PortalEmulatorConfig> {
+	const storedConfig = await readStoredConfig();
+	if (storedConfig) {
+		return storedConfig;
+	}
+
+	const base = ensureConfigDefaults(
+		normalizeConfig(
+			{
+				device: { suffix: '' },
+				settings: DEFAULT_CONFIG.settings,
+				version: DEFAULT_CONFIG.version,
+			},
+			null,
+		),
+	);
+	const configWithSuffix = ensureConfigSuffix(base);
+	await persistState({ config: configWithSuffix });
+	return configWithSuffix;
+}
+
+async function setRuntimeConfig(candidate: unknown): Promise<PortalEmulatorConfig> {
+	const current = await getOrCreateRuntimeConfig();
+	const normalizedConfig = ensureConfigSuffix(
+		ensureConfigDefaults(normalizeConfig(candidate, current)),
+	);
+	await persistState({ config: normalizedConfig });
+	return normalizedConfig;
+}
+
+async function readStoredConfig(): Promise<PortalEmulatorConfig | null> {
+	const stored = await storageGet(CONFIG_STORAGE_KEY);
+	const candidate = stored?.[CONFIG_STORAGE_KEY];
+	if (!candidate) {
+		return null;
+	}
+	const normalized = ensureConfigSuffix(
+		ensureConfigDefaults(normalizeConfig(candidate, null)),
+	);
+	return normalized;
+}
+
+function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfig {
+	const normalizedSuffix = normalizeSuffix(config.device.suffix) ?? '';
+	return {
+		device: { suffix: normalizedSuffix },
+		settings: {
+			faceTrackingEnabled: config.settings.faceTrackingEnabled,
+			stereoRenderingEnabled: config.settings.stereoRenderingEnabled,
+			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
+			connectToControllerViaLan: config.settings.connectToControllerViaLan,
+		},
+		version:
+			typeof config.version === 'number' ? config.version : DEFAULT_CONFIG.version,
+	};
+}
+
+function ensureConfigSuffix(config: PortalEmulatorConfig): PortalEmulatorConfig {
+	const normalizedSuffix = normalizeSuffix(config.device.suffix) ?? generateSuffix();
+	return {
+		...config,
+		device: { ...config.device, suffix: normalizedSuffix },
+	};
+}
+
+function normalizeConfig(
+	candidate: unknown,
+	fallback: PortalEmulatorConfig | null,
+): PortalEmulatorConfig {
+	const base = fallback ?? DEFAULT_CONFIG;
+	const result: PortalEmulatorConfig = {
+		device: { suffix: normalizeSuffix(base.device.suffix) ?? '' },
+		settings: {
+			faceTrackingEnabled: base.settings.faceTrackingEnabled,
+			stereoRenderingEnabled: base.settings.stereoRenderingEnabled,
+			immersiveFullscreenEnabled: base.settings.immersiveFullscreenEnabled,
+			connectToControllerViaLan: base.settings.connectToControllerViaLan,
+		},
+		version:
+			typeof base.version === 'number' ? base.version : DEFAULT_CONFIG.version,
+	};
+
+	if (!candidate || typeof candidate !== 'object') {
+		return result;
+	}
+
+	const deviceCandidate = (candidate as { device?: unknown }).device;
+	if (deviceCandidate && typeof deviceCandidate === 'object') {
+		const suffixCandidate = normalizeSuffix(
+			typeof (deviceCandidate as { suffix?: unknown }).suffix === 'string'
+				? (deviceCandidate as { suffix: string }).suffix
+				: null,
+		);
+		if (suffixCandidate) {
+			result.device.suffix = suffixCandidate;
+		}
+	}
+
+	const settingsCandidate = (candidate as { settings?: unknown }).settings;
+	if (settingsCandidate && typeof settingsCandidate === 'object') {
+		const faceCandidate = (settingsCandidate as { faceTrackingEnabled?: unknown }).faceTrackingEnabled;
+		if (typeof faceCandidate === 'boolean') {
+			result.settings.faceTrackingEnabled = faceCandidate;
+		}
+		const stereoCandidate = (settingsCandidate as { stereoRenderingEnabled?: unknown }).stereoRenderingEnabled;
+		if (typeof stereoCandidate === 'boolean') {
+			result.settings.stereoRenderingEnabled = stereoCandidate;
+		}
+		const fullscreenCandidate = (settingsCandidate as { immersiveFullscreenEnabled?: unknown }).immersiveFullscreenEnabled;
+		if (typeof fullscreenCandidate === 'boolean') {
+			result.settings.immersiveFullscreenEnabled = fullscreenCandidate;
+		}
+		const lanCandidate = (settingsCandidate as { connectToControllerViaLan?: unknown }).connectToControllerViaLan;
+		if (typeof lanCandidate === 'boolean') {
+			result.settings.connectToControllerViaLan = lanCandidate;
+		}
+	}
+
+	const versionCandidate = (candidate as { version?: unknown }).version;
+	if (typeof versionCandidate === 'number') {
+		result.version = versionCandidate;
+	}
+
+	return result;
+}
+
+async function persistState(state: { config: PortalEmulatorConfig }): Promise<void> {
+	await storageSet({
+		[CONFIG_STORAGE_KEY]: state.config,
+	});
+}
 
 async function isRuntimeAlreadyInstalled(target: FrameTarget): Promise<boolean> {
 	try {
@@ -294,6 +424,68 @@ function shouldSkipInjection(url?: string): boolean {
 	}
 	const normalized = url.trim().toLowerCase();
 	return BLOCKED_PROTOCOL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function normalizeSuffix(candidate: string | null): string | null {
+	if (!candidate) {
+		return null;
+	}
+	const trimmed = candidate.trim().toUpperCase();
+	if (trimmed.length < UI_SUFFIX_LENGTH) {
+		return null;
+	}
+	for (let i = 0; i < trimmed.length; i += 1) {
+		if (!ALPHANUM.includes(trimmed[i])) {
+			return null;
+		}
+	}
+	let result = trimmed;
+	if (result.length > SUFFIX_LENGTH) {
+		result = result.substring(0, SUFFIX_LENGTH);
+	}
+	if (result.length < SUFFIX_LENGTH) {
+		const needed = SUFFIX_LENGTH - result.length;
+		result += generateCharacters(needed);
+	}
+	return result;
+}
+
+function generateSuffix(): string {
+	return generateCharacters(SUFFIX_LENGTH);
+}
+
+function generateCharacters(count: number): string {
+	let output = '';
+	for (let i = 0; i < count; i += 1) {
+		output += randomChar();
+	}
+	return output;
+}
+
+function randomChar(): string {
+	const alphabetLength = ALPHANUM.length;
+	const cryptoObj = getCrypto();
+	if (cryptoObj && typeof cryptoObj.getRandomValues === 'function') {
+		const maxValid = Math.floor(256 / alphabetLength) * alphabetLength;
+		const buffer = new Uint8Array(1);
+		while (true) {
+			cryptoObj.getRandomValues(buffer);
+			const value = buffer[0];
+			if (value < maxValid) {
+				return ALPHANUM.charAt(value % alphabetLength);
+			}
+		}
+	}
+
+	const fallback = Math.floor(Math.random() * alphabetLength);
+	return ALPHANUM.charAt(fallback);
+}
+
+function getCrypto(): Crypto | null {
+	if (typeof globalThis !== 'undefined' && globalThis.crypto) {
+		return globalThis.crypto;
+	}
+	return null;
 }
 
 function storageGet(key: string): Promise<Record<string, unknown>> {

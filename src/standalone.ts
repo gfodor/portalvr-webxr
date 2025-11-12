@@ -4,7 +4,6 @@ import {
   XRDevice,
   type DevUIConstructor,
 } from './device/XRDevice.js';
-import { installStandaloneContextBridge } from './context/StandaloneContextBridge.js';
 import { oculusQuest1 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
@@ -13,7 +12,6 @@ import { setEmbeddedAssetFallbackEnabled } from './runtime/RuntimeAssetResolver.
 const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
 
 setEmbeddedAssetFallbackEnabled(true);
-const contextBridgeReady = installStandaloneContextBridge();
 
 type StandaloneState = {
   device: XRDevice;
@@ -128,8 +126,6 @@ export async function bootstrapStandaloneEmulator(
   if (typeof window === 'undefined') {
     return null;
   }
-
-  await contextBridgeReady;
 
   if (!options.forceReinstall) {
     const existing = getStandaloneState();
