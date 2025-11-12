@@ -16,6 +16,7 @@ const RUNTIME_ASSET_BASE_SETTER = '__PORTALVR_SET_ASSET_BASE__';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
+const CONTEXT_BRIDGE_DISABLE_GLOBAL = '__PORTALVR_DISABLE_CONTEXT_BRIDGE__';
 // Removed: CONFIG_READY_RESOLVED_KEY / CONFIG_READY_PROMISE_KEY / CONFIG_READY_RESOLVER_KEY
 const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'view-source:', 'chrome-extension:'];
 const inflightInjectionTasks = new Map<string, Promise<void>>();
@@ -330,10 +331,12 @@ async function injectConfigOverride(
 				configKey: string,
 				configValue: PortalEmulatorConfig,
 				configEventType: string,
+				disableFlagKey: string,
 			) => {
 				const globalTarget = window as typeof window & Record<string, unknown>;
 				try {
 					globalTarget[configKey] = configValue;
+					globalTarget[disableFlagKey] = true;
 				} catch {
 					// ignore assignment failure
 				}
@@ -350,6 +353,7 @@ async function injectConfigOverride(
 				PORTAL_CONFIG_OVERRIDE_GLOBAL,
 				config,
 				MESSAGE_TYPE_SET_CONFIG,
+				CONTEXT_BRIDGE_DISABLE_GLOBAL,
 			],
 		});
 	} catch (_error) {
@@ -382,10 +386,16 @@ async function injectRuntimeAssetBase(target: FrameTarget): Promise<void> {
 			target: createFrameTarget(target),
 			world: 'MAIN',
 			injectImmediately: true,
-			func: (globalKey: string, setterKey: string, base: string) => {
+			func: (
+				globalKey: string,
+				setterKey: string,
+				disableFlagKey: string,
+				base: string,
+			) => {
 				const globalTarget = window as typeof window & Record<string, unknown>;
 				try {
 					globalTarget[globalKey] = base;
+					globalTarget[disableFlagKey] = true;
 					const setter = globalTarget[setterKey];
 					if (typeof setter === 'function') {
 						try {
@@ -398,7 +408,12 @@ async function injectRuntimeAssetBase(target: FrameTarget): Promise<void> {
 					// ignore assignment failures
 				}
 			},
-			args: [RUNTIME_ASSET_BASE_GLOBAL, RUNTIME_ASSET_BASE_SETTER, normalized],
+			args: [
+				RUNTIME_ASSET_BASE_GLOBAL,
+				RUNTIME_ASSET_BASE_SETTER,
+				CONTEXT_BRIDGE_DISABLE_GLOBAL,
+				normalized,
+			],
 		});
 	} catch (error) {
 		logDebug('failed to inject runtime asset base', { error });

@@ -9,9 +9,11 @@ import { updatePortalEmulatorConfig, type PortalEmulatorConfig } from './device/
 import { oculusQuest1 } from './device/configs/headset/meta.js';
 import { getPortalPoseWasmDataURL } from './wasm/portal-pose/portal_pose_embed.js';
 import { DevUI as PortalVRDevUI } from '../devui/lib/index.js';
-import { setEmbeddedAssetFallbackEnabled } from './runtime/RuntimeAssetResolver.js';
+import { getRuntimeAssetBaseUrl, setEmbeddedAssetFallbackEnabled } from './runtime/RuntimeAssetResolver.js';
 
 const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
+const CONTEXT_BRIDGE_DISABLE_GLOBAL = '__PORTALVR_DISABLE_CONTEXT_BRIDGE__';
+const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:', 'ms-browser-extension:', 'edge-extension:']);
 
 setEmbeddedAssetFallbackEnabled(true);
 
@@ -122,6 +124,8 @@ function resolveDevUIConstructor(
   return PortalVRDevUI as unknown as DevUIConstructor;
 }
 
+type GlobalWithFlags = typeof globalThis & Record<string, unknown>;
+
 const CONTEXT_URL = 'https://portalvr.run/context';
 const CONTEXT_ORIGIN = (() => {
   try { return new URL(CONTEXT_URL).origin; } catch { return 'https://portalvr.run'; }
@@ -137,6 +141,38 @@ let contextWindow: Window | null = null;
 const ignoreReplyIds = new Set<string>(); // IDs for which config replies should be ignored (echo from our forwarded set-config)
 let initialRequestId: string | null = null;
 let contextReady = false;
+
+function isBrowserExtensionRuntime(): boolean {
+  const baseUrl = getRuntimeAssetBaseUrl();
+  if (!baseUrl) {
+    return false;
+  }
+  try {
+    const protocol = new URL(baseUrl).protocol;
+    return EXTENSION_PROTOCOLS.has(protocol);
+  } catch {
+    return false;
+  }
+}
+
+function isContextBridgeGloballyDisabled(): boolean {
+  try {
+    const globalTarget = globalThis as GlobalWithFlags;
+    return Boolean(globalTarget[CONTEXT_BRIDGE_DISABLE_GLOBAL]);
+  } catch {
+    return false;
+  }
+}
+
+function shouldInstallContextBridge(): boolean {
+  if (isContextBridgeGloballyDisabled()) {
+    return false;
+  }
+  if (isBrowserExtensionRuntime()) {
+    return false;
+  }
+  return true;
+}
 
 function generateRequestId(): string {
   // Quick random ID, fine for message correlation.
@@ -225,6 +261,9 @@ function onContextMessage(event: MessageEvent) {
 }
 
 function installPortalVRContextBridge(): void {
+  if (!shouldInstallContextBridge()) {
+    return;
+  }
   if (typeof window === 'undefined') return;
 
   const doInstall = () => {
