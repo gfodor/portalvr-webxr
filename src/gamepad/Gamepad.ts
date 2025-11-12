@@ -30,6 +30,23 @@ export interface GamepadConfig {
   axes: (Axis | null)[];
 }
 
+interface VirtualGamepadHapticActuator extends GamepadHapticActuator {
+  pulse(intensity: number, duration: number): Promise<boolean>;
+}
+
+function createVirtualHapticActuators(
+  count: number,
+): VirtualGamepadHapticActuator[] {
+  if (!Number.isFinite(count) || count <= 0) {
+    return [];
+  }
+  const length = Math.max(0, Math.floor(count));
+  return Array.from({ length }, () => ({
+    type: 'vibration' as GamepadHapticActuatorType,
+    pulse: () => Promise.resolve(true),
+  }));
+}
+
 export class GamepadButton {
   [P_GAMEPAD]: {
     type: 'analog' | 'binary' | 'manual';
@@ -105,6 +122,7 @@ export class Gamepad {
     gamepadConfig: GamepadConfig,
     id: string = '',
     index: number = -1,
+    virtualHapticActuatorCount: number = 0,
   ) {
     this[P_GAMEPAD] = {
       id,
@@ -139,6 +157,10 @@ export class Gamepad {
         }
       }
     });
+    if (virtualHapticActuatorCount > 0) {
+      this[P_GAMEPAD].hapticActuators =
+        createVirtualHapticActuators(virtualHapticActuatorCount);
+    }
   }
 
   get id() {

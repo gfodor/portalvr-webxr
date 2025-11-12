@@ -193,4 +193,20 @@ describe('Gamepad', () => {
 		expect(axes[1]).toBe(-0.3); // stick1 y-axis  
 		expect(axes[2]).toBe(0.8);  // stick2 x-axis
 	});
+
+	test('should expose virtual haptic actuators with pulse stub when requested', async () => {
+		const config = {
+			mapping: GamepadMappingType.Standard,
+			buttons: [],
+			axes: []
+		};
+
+		const gamepad = new Gamepad(config, 'test-gamepad', 0, 2);
+
+		expect(gamepad.hapticActuators).toHaveLength(2);
+		const firstActuator = gamepad.hapticActuators[0] as GamepadHapticActuator & {
+			pulse: (intensity: number, duration: number) => Promise<boolean>;
+		};
+		await expect(firstActuator.pulse(0.5, 100)).resolves.toBe(true);
+	});
 });

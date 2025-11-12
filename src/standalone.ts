@@ -14,6 +14,8 @@ import { getRuntimeAssetBaseUrl, setEmbeddedAssetFallbackEnabled } from './runti
 const GLOBAL_STATE_KEY = '__PORTALVR_META_QUEST3_EMULATOR__';
 const CONTEXT_BRIDGE_DISABLE_GLOBAL = '__PORTALVR_DISABLE_CONTEXT_BRIDGE__';
 const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:', 'ms-browser-extension:', 'edge-extension:']);
+const CONTEXT_BRIDGE_MARKER = '__PORTALVR_CONTEXT_BRIDGE__' as string;
+const CONTEXT_BRIDGE_COMPILED_IN = CONTEXT_BRIDGE_MARKER !== 'disabled';
 
 setEmbeddedAssetFallbackEnabled(true);
 
@@ -344,7 +346,9 @@ export async function bootstrapStandaloneEmulator(
 }
 
 // Install the iframe context bridge BEFORE attempting to bootstrap, so the initial config is ready ASAP.
-installPortalVRContextBridge();
+if (CONTEXT_BRIDGE_COMPILED_IN) {
+  installPortalVRContextBridge();
+}
 
 void bootstrapStandaloneEmulator().catch((error) => {
   console.error('[PortalVR Standalone] Failed to install emulator', error);

@@ -3,9 +3,22 @@ import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 import replace from '@rollup/plugin-replace';
 
+const contextBridgeDisabledValues = ['1', 'true', 'yes'];
+const isContextBridgeDisabled = contextBridgeDisabledValues.includes(
+  String(process.env.PORTALVR_DISABLE_CONTEXT_BRIDGE ?? '').toLowerCase(),
+);
+
+const replaceValues = {
+  'process.env.NODE_ENV': JSON.stringify('production'),
+};
+
+if (isContextBridgeDisabled) {
+  replaceValues.__PORTALVR_CONTEXT_BRIDGE__ = 'disabled';
+}
+
 const basePlugins = [
 	replace({
-		'process.env.NODE_ENV': JSON.stringify('production'),
+		...replaceValues,
 		preventAssignment: true,
 	}),
 	resolve({

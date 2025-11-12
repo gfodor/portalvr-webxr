@@ -40,33 +40,37 @@ export class XRController extends XRTrackedInput {
     handedness: XRHandedness,
     globalSpace: GlobalSpace,
   ) {
-    if (!controllerConfig.layout[handedness]) {
+    const controllerLayout = controllerConfig.layout[handedness];
+    if (!controllerLayout) {
       throw new DOMException('Handedness not supported', 'InvalidStateError');
     }
     const targetRaySpace = new XRSpace(globalSpace);
-    const gripSpace = controllerConfig.layout[handedness]!.gripOffsetMatrix
-      ? new XRSpace(
-          targetRaySpace,
-          controllerConfig.layout[handedness]!.gripOffsetMatrix,
-        )
+    const gripSpace = controllerLayout.gripOffsetMatrix
+      ? new XRSpace(targetRaySpace, controllerLayout.gripOffsetMatrix)
       : undefined;
     const profiles = [
       controllerConfig.profileId,
       ...controllerConfig.fallbackProfileIds,
     ];
+    const gamepad = new Gamepad(
+      controllerLayout.gamepad,
+      '',
+      -1,
+      controllerLayout.numHapticActuators,
+    );
     const inputSource = new XRInputSource(
       handedness,
       XRTargetRayMode.TrackedPointer,
       profiles,
       targetRaySpace,
-      new Gamepad(controllerConfig.layout[handedness]!.gamepad),
+      gamepad,
       gripSpace,
     );
 
     super(inputSource);
     this[P_CONTROLLER] = {
       profileId: controllerConfig.profileId,
-      gamepadConfig: controllerConfig.layout[handedness]!.gamepad,
+      gamepadConfig: controllerLayout.gamepad,
     };
   }
 
