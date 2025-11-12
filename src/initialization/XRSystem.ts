@@ -132,24 +132,29 @@ export class XRSystem extends EventTarget {
           return;
         }
 
-        this[P_SYSTEM].device.handleSessionRequestStart(mode);
+        Promise.resolve(this[P_SYSTEM].device.handleSessionRequestStart(mode))
+          .then(() => {
+            const sessionGrantConfig = {
+              resolve,
+              reject: (reason?: any) => {
+                this[P_SYSTEM].device.handleSessionRequestFailed(mode);
+                reject(reason);
+              },
+              mode,
+              options,
+            };
 
-        const sessionGrantConfig = {
-          resolve,
-          reject: (reason?: any) => {
+            try {
+              this[P_SYSTEM].grantSession(sessionGrantConfig);
+            } catch (error) {
+              this[P_SYSTEM].device.handleSessionRequestFailed(mode);
+              reject(error);
+            }
+          })
+          .catch((error) => {
             this[P_SYSTEM].device.handleSessionRequestFailed(mode);
-            reject(reason);
-          },
-          mode,
-          options,
-        };
-
-        try {
-          this[P_SYSTEM].grantSession(sessionGrantConfig);
-        } catch (error) {
-          this[P_SYSTEM].device.handleSessionRequestFailed(mode);
-          throw error;
-        }
+            reject(error);
+          });
       } catch (error) {
         reject(error);
       }

@@ -498,6 +498,7 @@ export class XRDevice {
   private faceTrackingRecenterPending = false;
   private faceTrackingStartPromise: Promise<void> | null = null;
   private faceTrackingPermissionRejected = false;
+  private faceTrackingPermissionPreflightPromise: Promise<void> | null = null;
   private readonly faceTrackingTarget = vec3.create();
   private readonly faceTrackingOffset = vec3.create();
   private readonly faceTrackingLocalOffset = vec3.create();
@@ -1189,7 +1190,7 @@ export class XRDevice {
     state.lastStack = stack;
   }
 
-  handleSessionRequestStart(mode: XRSessionMode): void {
+  async handleSessionRequestStart(mode: XRSessionMode): Promise<void> {
     if (!this.shouldRequestFullscreenForMode(mode)) {
       return;
     }
@@ -1198,6 +1199,13 @@ export class XRDevice {
     }
     if (this.isFullscreenSuppressedByDetection()) {
       return;
+    }
+    if (this.shouldPreflightFaceTrackingForMode(mode)) {
+      try {
+        await this.preflightFaceTrackingCameraPermission();
+      } catch (error) {
+        console.warn('[XRDevice] face tracking permission preflight failed', error);
+      }
     }
     this.prepareCanvasContainerForFullscreenRequest();
     this.tryRequestCanvasContainerFullscreen('request');
@@ -2490,6 +2498,22 @@ export class XRDevice {
     return this.isImmersiveMode(mode) && this[P_DEVICE].immersiveFullscreenEnabled;
   }
 
+  private shouldPreflightFaceTrackingForMode(mode: XRSessionMode): boolean {
+    if (!this[P_DEVICE].faceTrackingEnabled) {
+      return false;
+    }
+    if (!this.isImmersiveMode(mode)) {
+      return false;
+    }
+    if (this.faceTrackingPermissionRejected) {
+      return false;
+    }
+    if (this.faceTrackingVisibilitySuspended) {
+      return false;
+    }
+    return true;
+  }
+
   private isFullscreenSuppressedByDetection(): boolean {
     const detection = this[P_DEVICE].engineDetection;
     return detection.wonderland && this[P_DEVICE].stereoEnabled;
@@ -2972,6 +2996,65 @@ export class XRDevice {
       .finally(() => {
         this.faceTrackingStartPromise = null;
       });
+  }
+
+  private async preflightFaceTrackingCameraPermission(): Promise<void> {
+    if (this.faceTrackingVisibilitySuspended) {
+      return;
+    }
+    if (this.faceTrackingPermissionRejected) {
+      return;
+    }
+    if (this.faceTracker) {
+      return;
+    }
+    const existingStart = this.faceTrackingStartPromise;
+    if (existingStart) {
+      try {
+        await existingStart;
+      } catch {
+        // Swallow start errors; permission rejection is tracked separately.
+      }
+      return;
+    }
+    if (typeof navigator === 'undefined' || typeof document === 'undefined') {
+      return;
+    }
+    if (document.visibilityState !== 'visible') {
+      this.faceTrackingVisibilitySuspended = true;
+      return;
+    }
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      this.faceTrackingPermissionRejected = true;
+      return;
+    }
+    if (this.faceTrackingPermissionPreflightPromise) {
+      return this.faceTrackingPermissionPreflightPromise;
+    }
+
+    this.faceTrackingPermissionPreflightPromise = (async () => {
+      let stream: MediaStream | null = null;
+      try {
+        stream = await this.requestFaceTrackingStream();
+      } catch (error) {
+        const name = (error as DOMException | undefined)?.name;
+        if (name === 'NotAllowedError' || name === 'NotFoundError' || name === 'NotReadableError') {
+          this.faceTrackingPermissionRejected = true;
+        }
+        throw error;
+      } finally {
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+        }
+      }
+    })();
+
+    try {
+      await this.faceTrackingPermissionPreflightPromise;
+    } finally {
+      this.faceTrackingPermissionPreflightPromise = null;
+    }
   }
 
   private async requestFaceTrackingStream(): Promise<MediaStream> {
