@@ -418,10 +418,6 @@ export async function bootstrapStandaloneEmulator(
 
 async function autoInstallStandaloneEmulator(): Promise<void> {
   try {
-    const extensionDetected = await waitForExtensionPresence();
-    if (extensionDetected) {
-      return;
-    }
     await bootstrapStandaloneEmulator();
   } catch (error) {
     console.error('[PortalVR Standalone] Failed to install emulator', error);
