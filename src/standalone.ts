@@ -16,6 +16,10 @@ const CONTEXT_BRIDGE_DISABLE_GLOBAL = '__PORTALVR_DISABLE_CONTEXT_BRIDGE__';
 const EXTENSION_PROTOCOLS = new Set(['chrome-extension:', 'moz-extension:', 'ms-browser-extension:', 'edge-extension:']);
 const CONTEXT_BRIDGE_MARKER = '__PORTALVR_CONTEXT_BRIDGE__' as string;
 const CONTEXT_BRIDGE_COMPILED_IN = CONTEXT_BRIDGE_MARKER !== 'disabled';
+const EXTENSION_RUNTIME_FLAG = '__iweRuntimeInstalled__';
+const EXTENSION_RUNTIME_PROMISE_KEY = '__iweRuntimeInstallPromise__';
+const EXTENSION_DETECTION_TIMEOUT_MS = 750;
+const EXTENSION_DETECTION_POLL_MS = 25;
 
 setEmbeddedAssetFallbackEnabled(true);
 
@@ -127,6 +131,8 @@ function resolveDevUIConstructor(
 }
 
 type GlobalWithFlags = typeof globalThis & Record<string, unknown>;
+type ExtensionAwareGlobal = GlobalWithFlags &
+  Record<typeof EXTENSION_RUNTIME_FLAG | typeof EXTENSION_RUNTIME_PROMISE_KEY, unknown>;
 
 const CONTEXT_URL = 'https://portalvr.run/context';
 const CONTEXT_ORIGIN = (() => {
@@ -174,6 +180,60 @@ function shouldInstallContextBridge(): boolean {
     return false;
   }
   return true;
+}
+
+function hasExtensionRuntimeInstallMarkers(): boolean {
+  try {
+    const globalTarget = globalThis as ExtensionAwareGlobal;
+    if (globalTarget[EXTENSION_RUNTIME_FLAG]) {
+      return true;
+    }
+    if (globalTarget[EXTENSION_RUNTIME_PROMISE_KEY]) {
+      return true;
+    }
+  } catch {
+    // ignore access errors
+  }
+  return false;
+}
+
+function isImmersiveWebExtensionDetected(): boolean {
+  if (hasExtensionRuntimeInstallMarkers()) {
+    return true;
+  }
+  if (isContextBridgeGloballyDisabled()) {
+    return true;
+  }
+  if (isBrowserExtensionRuntime()) {
+    return true;
+  }
+  return false;
+}
+
+function waitForExtensionPresence(
+  timeoutMs = EXTENSION_DETECTION_TIMEOUT_MS,
+  pollMs = EXTENSION_DETECTION_POLL_MS,
+): Promise<boolean> {
+  if (isImmersiveWebExtensionDetected()) {
+    return Promise.resolve(true);
+  }
+  if (typeof window === 'undefined' || typeof window.setInterval !== 'function') {
+    return Promise.resolve(isImmersiveWebExtensionDetected());
+  }
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const intervalId = window.setInterval(() => {
+      if (isImmersiveWebExtensionDetected()) {
+        window.clearInterval(intervalId);
+        resolve(true);
+        return;
+      }
+      if (Date.now() - start >= timeoutMs) {
+        window.clearInterval(intervalId);
+        resolve(isImmersiveWebExtensionDetected());
+      }
+    }, pollMs);
+  });
 }
 
 function generateRequestId(): string {
@@ -288,6 +348,17 @@ function installPortalVRContextBridge(): void {
   }
 }
 
+async function deferContextBridgeInstall(): Promise<void> {
+  if (!shouldInstallContextBridge()) {
+    return;
+  }
+  const extensionDetected = await waitForExtensionPresence();
+  if (extensionDetected) {
+    return;
+  }
+  installPortalVRContextBridge();
+}
+
 export async function bootstrapStandaloneEmulator(
   options: StandaloneOptions = {},
 ): Promise<XRDevice | null> {
@@ -345,14 +416,24 @@ export async function bootstrapStandaloneEmulator(
   return device;
 }
 
-// Install the iframe context bridge BEFORE attempting to bootstrap, so the initial config is ready ASAP.
-if (CONTEXT_BRIDGE_COMPILED_IN) {
-  installPortalVRContextBridge();
+async function autoInstallStandaloneEmulator(): Promise<void> {
+  try {
+    const extensionDetected = await waitForExtensionPresence();
+    if (extensionDetected) {
+      return;
+    }
+    await bootstrapStandaloneEmulator();
+  } catch (error) {
+    console.error('[PortalVR Standalone] Failed to install emulator', error);
+  }
 }
 
-void bootstrapStandaloneEmulator().catch((error) => {
-  console.error('[PortalVR Standalone] Failed to install emulator', error);
-});
+// Install the iframe context bridge BEFORE attempting to bootstrap, so the initial config is ready ASAP.
+if (CONTEXT_BRIDGE_COMPILED_IN) {
+  void deferContextBridgeInstall();
+}
+
+void autoInstallStandaloneEmulator();
 
 export function ensureStandaloneSurfaceInitialized(forcePolyfill = true): void {
   ensurePolyfillInstalled(forcePolyfill);
