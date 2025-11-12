@@ -189,6 +189,7 @@ const POINTER_LOOK_YAW_RAD_PER_PIXEL = 0.0025;
 const POINTER_LOOK_PITCH_RAD_PER_PIXEL = 0.0020;
 const POINTER_LOOK_MAX_STEP_RAD = Math.PI / 3; // clamp spikes to 60 degrees per frame
 const POINTER_LOOK_SMOOTH_TAU_MS = 35;
+const POINTER_LOCK_ESCAPE_GUARD_MS = 300;
 
 export interface XRDeviceConfig {
   name: string;
@@ -520,6 +521,7 @@ export class XRDevice {
   private pointerLookPendingYaw = 0;
   private pointerLookPendingPitch = 0;
   private pointerLookLastFlushMs: number | null = null;
+	private pointerLockReleaseGuardUntilMs: number = 0;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -1515,12 +1517,66 @@ export class XRDevice {
   };
 
   private readonly handlePointerLockChange = () => {
+	if (typeof document === 'undefined') {
+		return;
+	}
+	const wasLocked = this.pointerLockActive;
     this.syncPointerLockState();
+	if (wasLocked && !this.pointerLockActive) {
+		// Recently unlocked: arm an ESC guard briefly so the browser doesn't also exit fullscreen.
+		this.pointerLockReleaseGuardUntilMs = getNowMs() + POINTER_LOCK_ESCAPE_GUARD_MS;
+	} else if (this.pointerLockActive) {
+		// Upon re-lock, clear any previous guard.
+		this.pointerLockReleaseGuardUntilMs = 0;
+	}
   };
 
   private readonly handlePointerLockError = () => {
     this.pointerLockActive = false;
     this.detachPointerLookMoveListener();
+  };
+
+  private readonly handlePointerLookEscapeKey = (event: KeyboardEvent) => {
+    if (!this.pointerLookListenersAttached) {
+      return;
+    }
+    const session = this.activeSession;
+    if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+      return;
+    }
+    const isEscape =
+      event.key === 'Escape' ||
+      event.key === 'Esc' ||
+      event.code === 'Escape' ||
+      event.keyCode === 27;
+    if (!isEscape) {
+      return;
+    }
+
+	const container = this[P_DEVICE].canvasContainer;
+	const ownsPointerLockNow =
+		this.pointerLockActive || this.getPointerLockElement() === container;
+
+	const now = getNowMs();
+	const withinRecentUnlockGuard =
+		this.pointerLockReleaseGuardUntilMs > 0 && now <= this.pointerLockReleaseGuardUntilMs;
+
+	const shouldIntercept = ownsPointerLockNow || withinRecentUnlockGuard;
+	if (!shouldIntercept) {
+		// Not ours anymore and outside guard: allow ESC to bubble (browser may exit fullscreen/immersive).
+      return;
+    }
+
+	// While immersive and we (recently) owned pointer lock, ESC should only unlock the cursor.
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') {
+      event.stopImmediatePropagation();
+    }
+    this.exitPointerLockIfOwned();
+
+	// Nudge the guard forward minimally to cover this same event loop turn.
+	this.pointerLockReleaseGuardUntilMs = now + 1;
   };
 
   private readonly handlePointerLookActivation = (event: PointerEvent) => {
@@ -1536,6 +1592,32 @@ export class XRDevice {
     if (event.isPrimary === false) {
       return;
     }
+
+	// If the click occurred on the DevUI overlay (settings/help, etc.), do NOT re-lock.
+	const devui = this[P_DEVICE].devui;
+	const sem = this[P_DEVICE].sem;
+	const baseCanvas = this[P_DEVICE].canvasData?.canvas ?? null;
+	const semCanvas = sem?.environmentCanvas ?? null;
+	const uiContainer = devui?.devUIContainer ?? null;
+
+	const path = typeof event.composedPath === 'function'
+		? (event.composedPath() as EventTarget[])
+		: (event.target ? [event.target] : []);
+
+	const clickedInsideDevUI = uiContainer ? path.includes(uiContainer) : false;
+	if (clickedInsideDevUI) {
+		return;
+	}
+
+	// Allow re-lock only when clicking the app canvas (or SEM canvas), not arbitrary descendants.
+	const clickedOnAppSurface =
+		(baseCanvas ? path.includes(baseCanvas) : false) ||
+		(semCanvas ? path.includes(semCanvas) : false);
+
+	if (!clickedOnAppSurface) {
+		return;
+	}
+
     this.requestPointerLockForCanvas();
   };
 
@@ -2628,6 +2710,7 @@ export class XRDevice {
     container.addEventListener('pointerdown', this.handlePointerLookActivation, { passive: true });
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
+    document.addEventListener('keydown', this.handlePointerLookEscapeKey, true);
     this.pointerLookListenersAttached = true;
     this.pointerLookLastFlushMs = getNowMs();
     this.requestPointerLockForCanvas();
@@ -2643,12 +2726,14 @@ export class XRDevice {
     if (typeof document !== 'undefined') {
       document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
       document.removeEventListener('pointerlockerror', this.handlePointerLockError);
+      document.removeEventListener('keydown', this.handlePointerLookEscapeKey, true);
     }
     this.detachPointerLookMoveListener();
     this.pointerLockActive = false;
     this.pointerLookPendingYaw = 0;
     this.pointerLookPendingPitch = 0;
     this.pointerLookLastFlushMs = null;
+	this.pointerLockReleaseGuardUntilMs = 0;
     this.exitPointerLockIfOwned();
   }
 
