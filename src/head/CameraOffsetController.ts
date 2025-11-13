@@ -5,7 +5,7 @@ const Y_OFFSET_MAX = 1.5;
 
 const TAU_OFFSET_SECONDS = 0.05;
 const TAU_PITCH_SECONDS = 0.05;
-const PITCH_LIMIT_RAD = (85 * Math.PI) / 180;
+const PITCH_LIMIT_RAD = Math.PI / 4;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
