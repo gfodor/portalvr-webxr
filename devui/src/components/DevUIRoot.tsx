@@ -45,7 +45,6 @@ export function DevUIRoot({
 	controllerPrompt,
 }: DevUIRootProps): JSX.Element {
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
-	const [isHelpOpen, setHelpOpen] = useState(false);
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
 		readSettings(portalConfigProvider.getConfigSync()),
 	);
@@ -103,7 +102,6 @@ export function DevUIRoot({
 		const handleKey = (event: KeyboardEvent) => {
 			if (event.key === 'Escape') {
 				setSettingsOpen(false);
-				setHelpOpen(false);
 			}
 		};
 		window.addEventListener('keydown', handleKey);
@@ -174,14 +172,6 @@ export function DevUIRoot({
 
 	const closeSettings = useCallback(() => {
 		setSettingsOpen(false);
-	}, []);
-
-	const openHelp = useCallback(() => {
-		setHelpOpen(true);
-	}, []);
-
-	const closeHelp = useCallback(() => {
-		setHelpOpen(false);
 	}, []);
 
 	const toggleFaceTracking = useCallback(
@@ -258,7 +248,6 @@ export function DevUIRoot({
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
 				setSettingsOpen(false);
-				setHelpOpen(false);
 			}
 		},
 		[],
@@ -343,14 +332,15 @@ export function DevUIRoot({
 			</a>
 
 			<div className="portal-top-icons">
-				<button
+				<a
 					className="portal-icon-button"
-					type="button"
-					aria-label="Open help"
-					onClick={openHelp}
+					href="https://youtu.be/-_IGHQrVfZ4"
+					target="_blank"
+					rel="noreferrer"
+					aria-label="Watch help video"
 				>
 					<img src={ASSET_ICON_HELP} alt="" aria-hidden="true" />
-				</button>
+				</a>
 				<button
 					className="portal-icon-button"
 					type="button"
@@ -379,7 +369,7 @@ export function DevUIRoot({
 			<div
 				ref={scrimRef}
 				className="portal-settings-scrim"
-				aria-hidden={!isSettingsOpen && !isHelpOpen}
+				aria-hidden={!isSettingsOpen}
 				onClick={closeOnScrimClick}
 			>
 				{isSettingsOpen && (
@@ -478,22 +468,6 @@ export function DevUIRoot({
 							type="button"
 							className="portal-close-button"
 							onClick={closeSettings}
-						>
-							Close
-						</button>
-					</div>
-				)}
-
-				{isHelpOpen && (
-					<div className="portal-help-dialog" role="dialog" aria-modal="true">
-						<h2>PortalVR Help</h2>
-						<p className="portal-help-text">
-							More content here soon, in the meantime, see the <a href="https://portalvr.io/docs" target="_blank" rel="noreferrer">PortalVR Documentation</a>.
-						</p>
-						<button
-							type="button"
-							className="portal-close-button"
-							onClick={closeHelp}
 						>
 							Close
 						</button>
