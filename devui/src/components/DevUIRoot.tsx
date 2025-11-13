@@ -334,7 +334,7 @@ export function DevUIRoot({
 			<div className="portal-top-icons">
 				<a
 					className="portal-icon-button"
-					href="https://youtu.be/-_IGHQrVfZ4"
+					href="https://youtu.be/g30wYsLU9AI"
 					target="_blank"
 					rel="noreferrer"
 					aria-label="Watch help video"
