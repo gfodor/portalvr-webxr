@@ -2,11 +2,15 @@ import commonjs from '@rollup/plugin-commonjs';
 import resolve from '@rollup/plugin-node-resolve';
 import terser from '@rollup/plugin-terser';
 import replace from '@rollup/plugin-replace';
+import { join as joinPath } from 'node:path';
 
 const contextBridgeDisabledValues = ['1', 'true', 'yes'];
 const isContextBridgeDisabled = contextBridgeDisabledValues.includes(
   String(process.env.PORTALVR_DISABLE_CONTEXT_BRIDGE ?? '').toLowerCase(),
 );
+
+const BUILD_DIR = process.env.PORTALVR_BUILD_DIR ?? 'build';
+const toOutputPath = (filename) => joinPath(BUILD_DIR, filename);
 
 const replaceValues = {
   'process.env.NODE_ENV': JSON.stringify('production'),
@@ -82,14 +86,14 @@ const libraryConfig = {
 	output: [
 		// UMD build
 		{
-			file: 'build/portalvr.js',
+			file: toOutputPath('portalvr.js'),
 			format: 'umd',
 			name: 'PortalVR',
 			inlineDynamicImports: true,
 		},
 		// Minified UMD build
 		{
-			file: 'build/portalvr.min.js',
+			file: toOutputPath('portalvr.min.js'),
 			format: 'umd',
 			name: 'PortalVR',
 			inlineDynamicImports: true,
@@ -97,12 +101,12 @@ const libraryConfig = {
 		},
 		// ES module build
 		{
-			file: 'build/portalvr.module.js',
+			file: toOutputPath('portalvr.module.js'),
 			format: 'es',
 		},
 		// Minified ES module build
 		{
-			file: 'build/portalvr.module.min.js',
+			file: toOutputPath('portalvr.module.min.js'),
 			format: 'es',
 			plugins: [terser()],
 		},
@@ -114,14 +118,14 @@ const standaloneConfig = {
 	plugins: basePlugins,
 	output: [
 		{
-			file: 'build/portalvr-standalone.js',
+			file: toOutputPath('portalvr-standalone.js'),
 			format: 'iife',
 			name: 'PortalVRStandalone',
 			inlineDynamicImports: true,
 			intro: 'globalThis.__PORTALVR_FORCE_EMBEDDED_ASSETS__ = true;',
 		},
 		{
-			file: 'build/portalvr-standalone.min.js',
+			file: toOutputPath('portalvr-standalone.min.js'),
 			format: 'iife',
 			name: 'PortalVRStandalone',
 			inlineDynamicImports: true,
@@ -136,13 +140,13 @@ const contextConfig = {
 	plugins: [...basePlugins, contextHtmlPlugin()],
 	output: [
 		{
-			file: 'build/context.js',
+			file: toOutputPath('context.js'),
 			format: 'iife',
 			name: 'PortalVRContext',
 			inlineDynamicImports: true,
 		},
 		{
-			file: 'build/context.min.js',
+			file: toOutputPath('context.min.js'),
 			format: 'iife',
 			name: 'PortalVRContext',
 			inlineDynamicImports: true,

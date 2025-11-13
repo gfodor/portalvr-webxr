@@ -2,8 +2,13 @@
 import { mkdir, copyFile, stat } from 'fs/promises';
 import { resolve } from 'path';
 
+const PORTALVR_BUILD_DIR = process.env.PORTALVR_BUILD_DIR ?? 'build';
+
 const SOURCE_DIR = resolve('src', 'wasm', 'portal-pose');
-const TARGET_DIRS = [resolve('lib', 'wasm', 'portal-pose'), resolve('build', 'wasm', 'portal-pose')];
+const TARGET_DIRS = [
+	resolve('lib', 'wasm', 'portal-pose'),
+	resolve(PORTALVR_BUILD_DIR, 'wasm', 'portal-pose'),
+];
 const FILES = ['portal_pose.js', 'portal_pose.wasm'];
 
 async function directoryExists(path) {

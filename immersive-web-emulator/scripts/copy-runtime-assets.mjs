@@ -8,7 +8,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const EXT_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(EXT_ROOT, '..');
-const RUNTIME_BUILD_DIR = resolve(REPO_ROOT, 'build');
+const RUNTIME_DIR = process.env.PORTALVR_RUNTIME_DIR ?? 'build';
+const RUNTIME_BUILD_DIR = resolve(REPO_ROOT, RUNTIME_DIR);
 const RUNTIME_WASM_DIR = resolve(RUNTIME_BUILD_DIR, 'wasm');
 // Only ship the module build; the UMD/standalone bundles are for other targets.
 const RUNTIME_FILES = ['portalvr.module.min.js'];

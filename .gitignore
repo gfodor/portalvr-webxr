@@ -28,3 +28,4 @@ docs/.vitepress/cache/
 *.tgz
 
 /coverage/
+build-emulator/
