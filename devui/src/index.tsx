@@ -13,56 +13,31 @@ import { DevUIRoot } from './components/DevUIRoot.js';
 
 export class DevUI {
 	public readonly version = VERSION;
-	public readonly devUICanvas: HTMLCanvasElement;
-	public readonly devUIContainer: HTMLDivElement;
-	private readonly reactRoot: Root;
+	private devUICanvasElement: HTMLCanvasElement | null = null;
+	private devUIContainerElement: HTMLDivElement | null = null;
+	private reactRoot: Root | null = null;
 	private readonly xrDevice: XRDevice;
 	private controllerConnected = false;
 	private controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden' = 'qr';
 
 	constructor(xrDevice: XRDevice) {
 		this.xrDevice = xrDevice;
+	}
 
-		this.devUICanvas = document.createElement('canvas');
-		this.devUICanvas.width = 0;
-		this.devUICanvas.height = 0;
-		this.devUICanvas.style.position = 'absolute';
-		this.devUICanvas.style.inset = '0';
-		this.devUICanvas.style.pointerEvents = 'none';
-		this.devUICanvas.style.opacity = '0';
+	public get devUICanvas(): HTMLCanvasElement {
+		this.ensureMounted();
+		if (!this.devUICanvasElement) {
+			throw new Error('PortalVR DevUI canvas unavailable; DOM not ready.');
+		}
+		return this.devUICanvasElement;
+	}
 
-		this.devUIContainer = document.createElement('div');
-		this.devUIContainer.style.position = 'fixed';
-		this.devUIContainer.style.inset = '0';
-		this.devUIContainer.style.pointerEvents = 'none';
-		this.devUIContainer.style.fontFamily = 'system-ui, sans-serif';
-		this.devUIContainer.style.color = '#000';
-		this.devUIContainer.style.zIndex = '10000';
-
-		queueMicrotask(() => {
-			this.devUIContainer.style.zIndex = '10000';
-		});
-
-		const resetWrapper = document.createElement('div');
-		resetWrapper.dataset.portalvrDevui = 'reset-boundary';
-		resetWrapper.className = 'portal-reset-boundary';
-		resetWrapper.style.position = 'fixed';
-		resetWrapper.style.inset = '0';
-		resetWrapper.style.pointerEvents = 'none';
-		resetWrapper.style.zIndex = '1';
-
-		const reactHost = document.createElement('div');
-		reactHost.style.position = 'absolute';
-		reactHost.style.inset = '0';
-		reactHost.style.pointerEvents = 'none';
-		reactHost.style.zIndex = '1';
-		reactHost.dataset.portalvrDevui = 'root';
-
-		resetWrapper.appendChild(reactHost);
-		this.devUIContainer.appendChild(resetWrapper);
-
-		this.reactRoot = createRoot(reactHost);
-		this.renderReact();
+	public get devUIContainer(): HTMLDivElement {
+		this.ensureMounted();
+		if (!this.devUIContainerElement) {
+			throw new Error('PortalVR DevUI container unavailable; DOM not ready.');
+		}
+		return this.devUIContainerElement;
 	}
 
 	public setControllerConnected(connected: boolean): void {
@@ -90,7 +65,68 @@ export class DevUI {
 		this.renderReact();
 	}
 
+	private ensureMounted(): void {
+		if (this.reactRoot) {
+			return;
+		}
+		if (typeof document === 'undefined') {
+			return;
+		}
+
+		const devUICanvas = document.createElement('canvas');
+		devUICanvas.width = 0;
+		devUICanvas.height = 0;
+		devUICanvas.style.position = 'absolute';
+		devUICanvas.style.inset = '0';
+		devUICanvas.style.pointerEvents = 'none';
+		devUICanvas.style.opacity = '0';
+		this.devUICanvasElement = devUICanvas;
+
+		const devUIContainer = document.createElement('div');
+		devUIContainer.style.position = 'fixed';
+		devUIContainer.style.inset = '0';
+		devUIContainer.style.pointerEvents = 'none';
+		devUIContainer.style.fontFamily = 'system-ui, sans-serif';
+		devUIContainer.style.color = '#000';
+		devUIContainer.style.zIndex = '10000';
+		this.devUIContainerElement = devUIContainer;
+
+		if (typeof queueMicrotask === 'function') {
+			queueMicrotask(() => {
+				if (this.devUIContainerElement) {
+					this.devUIContainerElement.style.zIndex = '10000';
+				}
+			});
+		} else {
+			this.devUIContainerElement.style.zIndex = '10000';
+		}
+
+		const resetWrapper = document.createElement('div');
+		resetWrapper.dataset.portalvrDevui = 'reset-boundary';
+		resetWrapper.className = 'portal-reset-boundary';
+		resetWrapper.style.position = 'fixed';
+		resetWrapper.style.inset = '0';
+		resetWrapper.style.pointerEvents = 'none';
+		resetWrapper.style.zIndex = '1';
+
+		const reactHost = document.createElement('div');
+		reactHost.style.position = 'absolute';
+		reactHost.style.inset = '0';
+		reactHost.style.pointerEvents = 'none';
+		reactHost.style.zIndex = '1';
+		reactHost.dataset.portalvrDevui = 'root';
+
+		resetWrapper.appendChild(reactHost);
+		devUIContainer.appendChild(resetWrapper);
+
+		this.reactRoot = createRoot(reactHost);
+		this.renderReact();
+	}
+
 	private renderReact(): void {
+		if (!this.reactRoot) {
+			return;
+		}
 		this.reactRoot.render(
 			<DevUIRoot
 				xrDevice={this.xrDevice}

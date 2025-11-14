@@ -687,6 +687,7 @@ export class DualRoomCoordinator {
   private _backoffInterrupt: (() => void) | null = null;
   private _backoffWaiting = false;
   private _idleCleanup: Array<() => void> = [];
+  private _mouseWakeCleanup: (() => void) | null = null;
   private _lastWakeTriggerMs = 0;
   private _mouseIdle = true;
   private _mouseIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -721,7 +722,7 @@ export class DualRoomCoordinator {
   }
 
   private _setupIdleWakeListeners() {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
+    if (typeof document === 'undefined') {
       return;
     }
 
@@ -732,21 +733,47 @@ export class DualRoomCoordinator {
     };
     document.addEventListener('visibilitychange', onVisibility);
     this._idleCleanup.push(() => document.removeEventListener('visibilitychange', onVisibility));
+  }
 
+  setUserInputMonitoring(enabled: boolean) {
+    if (enabled) {
+      this._enableMouseWakeListener();
+    } else {
+      this._disableMouseWakeListener();
+    }
+  }
+
+  private _enableMouseWakeListener() {
+    if (this._mouseWakeCleanup || typeof window === 'undefined') {
+      return;
+    }
     const onMouseMove = () => {
       this._handleMouseMove();
     };
     window.addEventListener('mousemove', onMouseMove, { passive: true });
-    this._idleCleanup.push(() => window.removeEventListener('mousemove', onMouseMove));
-
+    this._mouseWakeCleanup = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      this._mouseWakeCleanup = null;
+    };
+    this._mouseIdle = true;
     this._scheduleMouseIdleReset();
   }
 
-  private _teardownIdleWakeListeners() {
+  private _disableMouseWakeListener() {
+    if (this._mouseWakeCleanup) {
+      const cleanup = this._mouseWakeCleanup;
+      this._mouseWakeCleanup = null;
+      cleanup();
+    }
     if (this._mouseIdleTimer) {
       clearTimeout(this._mouseIdleTimer);
       this._mouseIdleTimer = null;
     }
+    this._mouseIdle = true;
+  }
+
+  private _teardownIdleWakeListeners() {
+    this._disableMouseWakeListener();
     this._mouseIdle = true;
     if (!this._idleCleanup.length) {
       return;
@@ -762,7 +789,7 @@ export class DualRoomCoordinator {
   }
 
   private _handleMouseMove() {
-    if (typeof window === 'undefined') {
+    if (typeof window === 'undefined' || !this._mouseWakeCleanup) {
       return;
     }
     if (this._mouseIdle) {
@@ -808,6 +835,9 @@ export class DualRoomCoordinator {
     if (this._mouseIdleTimer) {
       clearTimeout(this._mouseIdleTimer);
       this._mouseIdleTimer = null;
+    }
+    if (!this._mouseWakeCleanup) {
+      return;
     }
     if (typeof window === 'undefined') {
       return;
@@ -1415,6 +1445,12 @@ export class SIGCF {
   simulateDisconnect() {
     try {
       this._coord?.simulateDisconnect?.();
+    } catch {}
+  }
+
+  setUserInputMonitoring(enabled: boolean) {
+    try {
+      this._coord?.setUserInputMonitoring?.(enabled);
     } catch {}
   }
 

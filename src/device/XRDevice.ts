@@ -189,7 +189,6 @@ const POINTER_LOOK_YAW_RAD_PER_PIXEL = 0.0025;
 const POINTER_LOOK_PITCH_RAD_PER_PIXEL = 0.0020;
 const POINTER_LOOK_MAX_STEP_RAD = Math.PI / 3; // clamp spikes to 60 degrees per frame
 const POINTER_LOOK_SMOOTH_TAU_MS = 35;
-const POINTER_LOCK_ESCAPE_GUARD_MS = 300;
 
 export interface XRDeviceConfig {
   name: string;
@@ -518,10 +517,10 @@ export class XRDevice {
   private pointerLookListenersAttached = false;
   private pointerLockActive = false;
   private pointerLookMoveListenerAttached = false;
+  private pointerLookKeyListenerAttached = false;
   private pointerLookPendingYaw = 0;
   private pointerLookPendingPitch = 0;
   private pointerLookLastFlushMs: number | null = null;
-	private pointerLockReleaseGuardUntilMs: number = 0;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -742,6 +741,7 @@ export class XRDevice {
         this.ensureFullscreenForImmersiveSession();
       },
       onSessionEnd: () => {
+        this.webrtcStreamer?.setUserInputMonitoringEnabled(false);
         this.exitFullscreenForImmersiveSession();
         this.disablePointerLookControlsForSession();
         this[P_DEVICE].currentBaseLayer?.disposeStereoTargets();
@@ -1520,20 +1520,13 @@ export class XRDevice {
 	if (typeof document === 'undefined') {
 		return;
 	}
-	const wasLocked = this.pointerLockActive;
     this.syncPointerLockState();
-	if (wasLocked && !this.pointerLockActive) {
-		// Recently unlocked: arm an ESC guard briefly so the browser doesn't also exit fullscreen.
-		this.pointerLockReleaseGuardUntilMs = getNowMs() + POINTER_LOCK_ESCAPE_GUARD_MS;
-	} else if (this.pointerLockActive) {
-		// Upon re-lock, clear any previous guard.
-		this.pointerLockReleaseGuardUntilMs = 0;
-	}
   };
 
   private readonly handlePointerLockError = () => {
     this.pointerLockActive = false;
     this.detachPointerLookMoveListener();
+    this.detachPointerLookKeyListener();
   };
 
   private readonly handlePointerLookEscapeKey = (event: KeyboardEvent) => {
@@ -1552,31 +1545,17 @@ export class XRDevice {
     if (!isEscape) {
       return;
     }
-
-	const container = this[P_DEVICE].canvasContainer;
-	const ownsPointerLockNow =
-		this.pointerLockActive || this.getPointerLockElement() === container;
-
-	const now = getNowMs();
-	const withinRecentUnlockGuard =
-		this.pointerLockReleaseGuardUntilMs > 0 && now <= this.pointerLockReleaseGuardUntilMs;
-
-	const shouldIntercept = ownsPointerLockNow || withinRecentUnlockGuard;
-	if (!shouldIntercept) {
-		// Not ours anymore and outside guard: allow ESC to bubble (browser may exit fullscreen/immersive).
+    const ownsPointerLock = this.pointerLockActive ||
+      this.getPointerLockElement() === this[P_DEVICE].canvasContainer;
+    if (!ownsPointerLock) {
       return;
     }
-
-	// While immersive and we (recently) owned pointer lock, ESC should only unlock the cursor.
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === 'function') {
       event.stopImmediatePropagation();
     }
     this.exitPointerLockIfOwned();
-
-	// Nudge the guard forward minimally to cover this same event loop turn.
-	this.pointerLockReleaseGuardUntilMs = now + 1;
   };
 
   private readonly handlePointerLookActivation = (event: PointerEvent) => {
@@ -2710,7 +2689,6 @@ export class XRDevice {
     container.addEventListener('pointerdown', this.handlePointerLookActivation, { passive: true });
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
-    document.addEventListener('keydown', this.handlePointerLookEscapeKey, true);
     this.pointerLookListenersAttached = true;
     this.pointerLookLastFlushMs = getNowMs();
     this.requestPointerLockForCanvas();
@@ -2726,14 +2704,13 @@ export class XRDevice {
     if (typeof document !== 'undefined') {
       document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
       document.removeEventListener('pointerlockerror', this.handlePointerLockError);
-      document.removeEventListener('keydown', this.handlePointerLookEscapeKey, true);
     }
     this.detachPointerLookMoveListener();
+    this.detachPointerLookKeyListener();
     this.pointerLockActive = false;
     this.pointerLookPendingYaw = 0;
     this.pointerLookPendingPitch = 0;
     this.pointerLookLastFlushMs = null;
-	this.pointerLockReleaseGuardUntilMs = 0;
     this.exitPointerLockIfOwned();
   }
 
@@ -2797,8 +2774,10 @@ export class XRDevice {
     this.pointerLockActive = isLocked;
     if (isLocked) {
       this.attachPointerLookMoveListener();
+      this.attachPointerLookKeyListener();
     } else {
       this.detachPointerLookMoveListener();
+      this.detachPointerLookKeyListener();
     }
   }
 
@@ -2816,6 +2795,22 @@ export class XRDevice {
     }
     document.removeEventListener('mousemove', this.handlePointerLookMouseMove);
     this.pointerLookMoveListenerAttached = false;
+  }
+
+  private attachPointerLookKeyListener(): void {
+    if (this.pointerLookKeyListenerAttached || typeof document === 'undefined') {
+      return;
+    }
+    document.addEventListener('keydown', this.handlePointerLookEscapeKey, true);
+    this.pointerLookKeyListenerAttached = true;
+  }
+
+  private detachPointerLookKeyListener(): void {
+    if (!this.pointerLookKeyListenerAttached || typeof document === 'undefined') {
+      return;
+    }
+    document.removeEventListener('keydown', this.handlePointerLookEscapeKey, true);
+    this.pointerLookKeyListenerAttached = false;
   }
 
   private getPointerLockElement(): Element | null {
@@ -2892,6 +2887,14 @@ export class XRDevice {
   private isImmersiveSessionActive(): boolean {
     const session = this.activeSession;
     return Boolean(session && this.isImmersiveSession(session));
+  }
+
+  private updateWebRTCUserInputMonitoring(): void {
+    const shouldMonitor = this.isImmersiveSessionActive();
+    if (!this.webrtcStreamer) {
+      return;
+    }
+    this.webrtcStreamer.setUserInputMonitoringEnabled(shouldMonitor);
   }
 
   private applyConfigSettings(config: PortalEmulatorConfig): void {
@@ -2996,6 +2999,7 @@ export class XRDevice {
       return;
     }
     this.webrtcSuspendedForVisibility = true;
+    this.webrtcStreamer.setUserInputMonitoringEnabled(false);
     this.webrtcStreamer.dispose();
     this.webrtcStreamer = null;
     this.lastImmersiveSessionForWebRTC = null;
@@ -3437,6 +3441,7 @@ export class XRDevice {
 		}
 		this.webrtcStreamOptions = nextOptions;
 		this.handleControllerConnectionChange(false);
+		this.webrtcStreamer?.setUserInputMonitoringEnabled(false);
 		this.webrtcStreamer?.dispose();
 		const userOnState = nextOptions.onControllerState;
 		const userOnConnection = nextOptions.onConnectionChange;
@@ -3462,11 +3467,13 @@ export class XRDevice {
 				userOnSignalingStatus?.(status);
 			},
 		});
+		this.updateWebRTCUserInputMonitoring();
 	}
 
   disableWebRTCControllerStreaming() {
     this.cancelWebRTCVisibilitySuspendTimer();
     this.webrtcSuspendedForVisibility = false;
+    this.webrtcStreamer?.setUserInputMonitoringEnabled(false);
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
     this.handleControllerConnectionChange(false);

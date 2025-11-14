@@ -96,19 +96,6 @@ export function DevUIRoot({
 	}, []);
 
 	useEffect(() => {
-		if (typeof window === 'undefined') {
-			return;
-		}
-		const handleKey = (event: KeyboardEvent) => {
-			if (event.key === 'Escape') {
-				setSettingsOpen(false);
-			}
-		};
-		window.addEventListener('keydown', handleKey);
-		return () => window.removeEventListener('keydown', handleKey);
-	}, []);
-
-	useEffect(() => {
 		const unsubscribe = xrDevice.onControllerSearchStatus((status) => {
 			const connected = Boolean(status?.connected);
 			setIsSigcfConnected(connected);
@@ -281,44 +268,7 @@ export function DevUIRoot({
 		!isActiveSearch &&
 		searchCountdownSeconds != null;
 
-	useEffect(() => {
-		if (controllerPrompt !== 'qr' || isSigcfConnected) {
-			return;
-		}
-		const handleSpaceShortcut = (event: KeyboardEvent) => {
-			if (
-				event.defaultPrevented ||
-				event.altKey ||
-				event.ctrlKey ||
-				event.metaKey ||
-				event.shiftKey
-			) {
-				return;
-			}
-			const key = event.key || event.code;
-			if (key !== ' ' && key !== 'Space' && key !== 'Spacebar') {
-				return;
-			}
-			const target = event.target as HTMLElement | null;
-			if (target) {
-				const tagName = target.tagName;
-				const isEditable =
-					target.isContentEditable ||
-					tagName === 'INPUT' ||
-					tagName === 'TEXTAREA' ||
-					tagName === 'SELECT';
-				if (isEditable) {
-					return;
-				}
-			}
-			event.preventDefault();
-			handleSearchNow();
-		};
-		window.addEventListener('keydown', handleSpaceShortcut);
-		return () => {
-			window.removeEventListener('keydown', handleSpaceShortcut);
-		};
-	}, [controllerPrompt, isSigcfConnected, handleSearchNow]);
+
 
 	return (
 		<div className="portal-overlay-root" aria-live="polite">

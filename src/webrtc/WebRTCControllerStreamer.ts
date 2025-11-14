@@ -53,6 +53,7 @@ export class WebRTCControllerStreamer {
   private startPromise: Promise<void> | null = null;
   private lastSessionTimestampMs: number | null = null;
   private lastSessionTimestampReceivedAt = 0;
+  private userInputMonitoringEnabled = false;
 
   constructor(options: WebRTCControllerStreamOptions = {}) {
     this.workerUrl = (options.workerUrl || DEFAULT_SIGNALING_BASE).replace(/\/$/, '');
@@ -103,10 +104,19 @@ export class WebRTCControllerStreamer {
       this.onConnectionChange?.(false);
     }
     this.connected = false;
+    this.userInputMonitoringEnabled = false;
   }
 
   forceSignalingReconnect() {
     this.sigcf?.forceReconnect();
+  }
+
+  setUserInputMonitoringEnabled(enabled: boolean) {
+    this.userInputMonitoringEnabled = enabled;
+    if (!this.sigcf) {
+      return;
+    }
+    this.sigcf.setUserInputMonitoring(enabled);
   }
 
   private ensureStarted() {
@@ -118,6 +128,7 @@ export class WebRTCControllerStreamer {
       log: (m) => this.log(m),
       enableLocalPath: this.enableLocalPath,
     });
+    this.sigcf.setUserInputMonitoring(this.userInputMonitoringEnabled);
 
     if (this.onSignalingStatus) {
       this.cleanupHandlers.push(
