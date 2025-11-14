@@ -238,8 +238,25 @@ class PortalPoseCameraNudger {
       return;
     }
     const delta = this.readVec3(this.deltaPtr);
+    const prevOffset = this.offsetController.copyOffset();
     this.offsetController.accumulateWorldDelta(delta);
-    this.debug('nudge-delta', { input: { dx, dy, dz }, delta, targets: this.offsetController.copyOffset() });
+    const newOffset = this.offsetController.copyOffset();
+    const appliedShift = {
+      x: newOffset.x - prevOffset.x,
+      y: newOffset.y - prevOffset.y,
+      z: newOffset.z - prevOffset.z,
+    };
+    const shiftMagnitude = Math.abs(appliedShift.x) + Math.abs(appliedShift.y) + Math.abs(appliedShift.z);
+    if (shiftMagnitude > 1e-6) {
+      this.poseSmoother.translateHistory(appliedShift.x, appliedShift.y, appliedShift.z);
+      this.shiftCachedPoses(appliedShift);
+    }
+    this.debug('nudge-delta', {
+      input: { dx, dy, dz },
+      delta,
+      appliedShift,
+      targets: this.offsetController.copyOffset(),
+    });
   }
 
   private applyYawDelta(dYawRad: number) {
@@ -372,6 +389,23 @@ class PortalPoseCameraNudger {
       this.baseOrientation.w,
       nowNs,
     );
+  }
+
+  private shiftCachedPoses(shift: Vec3Like) {
+    const { x, y, z } = shift;
+    if (Math.abs(x) < 1e-6 && Math.abs(y) < 1e-6 && Math.abs(z) < 1e-6) {
+      return;
+    }
+    if (this.latestSmoothedPose) {
+      this.latestSmoothedPose[0] += x;
+      this.latestSmoothedPose[1] += y;
+      this.latestSmoothedPose[2] += z;
+    }
+    if (this.latestFinalPose) {
+      this.latestFinalPose[0] += x;
+      this.latestFinalPose[1] += y;
+      this.latestFinalPose[2] += z;
+    }
   }
 
   private writeVec3(ptr: number, value: Vec3Like) {
