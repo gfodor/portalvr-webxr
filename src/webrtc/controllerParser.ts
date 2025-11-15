@@ -74,9 +74,12 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     return null;
   }
 
-  if (buffer.byteLength !== 61 && buffer.byteLength !== 59) {
-    console.warn(`Expected 61 or 59 bytes, got ${buffer.byteLength}`);
+  if (buffer.byteLength < 59) {
+    console.warn(`Controller packet length ${buffer.byteLength} is smaller than the minimum supported 59 bytes.`);
     return null;
+  }
+  if (buffer.byteLength !== 61 && buffer.byteLength !== 59) {
+    console.warn(`Controller packet length ${buffer.byteLength} differs from known versions; parsing known fields only.`);
   }
 
   const view = new DataView(buffer);
