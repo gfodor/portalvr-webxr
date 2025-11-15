@@ -226,7 +226,7 @@ class PortalPoseCameraNudger {
       dy,
       dz,
       this.smoothedQuatPtr,
-      this.offsetController.getSmoothedYawRad(),
+      this.offsetController.getYawRad(),
       this.offsetController.getSmoothedPitchRad(),
       this.cameraPitchRad,
       this.cameraPitchSin,
@@ -318,7 +318,7 @@ class PortalPoseCameraNudger {
     if (!pose) {
       return;
     }
-    const yawRad = this.offsetController.getSmoothedYawRad();
+    const yawRad = this.offsetController.getYawRad();
     const pitchRad = this.offsetController.getSmoothedPitchRad();
     const smOffset = this.offsetController.copySmoothedOffset();
 

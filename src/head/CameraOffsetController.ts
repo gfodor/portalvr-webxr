@@ -5,7 +5,6 @@ const Y_OFFSET_MAX = 1.5;
 
 const TAU_OFFSET_SECONDS = 0.05;
 const TAU_PITCH_SECONDS = 0.05;
-const TAU_YAW_SECONDS = 0.05;
 const PITCH_LIMIT_RAD = (77.5 * Math.PI) / 180;
 
 function clamp(value: number, min: number, max: number): number {
@@ -22,7 +21,6 @@ export class CameraOffsetController {
 
   private pitchOffsetRad = 0;
   private smoothedPitchRad = 0;
-  private smoothedYawRad = 0;
 
   private yawOffsetRad = 0;
   private lastUpdateNs = 0;
@@ -40,7 +38,6 @@ export class CameraOffsetController {
       this.smoothedOffset.y = this.uiOffsetWorld.y;
       this.smoothedOffset.z = this.uiOffsetWorld.z;
       this.smoothedPitchRad = this.pitchOffsetRad;
-      this.smoothedYawRad = this.yawOffsetRad;
       this.lastUpdateNs = nowNs;
       return;
     }
@@ -49,14 +46,12 @@ export class CameraOffsetController {
 
     const alphaOffset = this.alphaFor(dtSec, TAU_OFFSET_SECONDS);
     const alphaPitch = this.alphaFor(dtSec, TAU_PITCH_SECONDS);
-    const alphaYaw = this.alphaFor(dtSec, TAU_YAW_SECONDS);
 
     this.smoothedOffset.x += alphaOffset * (this.uiOffsetWorld.x - this.smoothedOffset.x);
     this.smoothedOffset.y += alphaOffset * (this.uiOffsetWorld.y - this.smoothedOffset.y);
     this.smoothedOffset.z += alphaOffset * (this.uiOffsetWorld.z - this.smoothedOffset.z);
 
     this.smoothedPitchRad += alphaPitch * (this.pitchOffsetRad - this.smoothedPitchRad);
-    this.smoothedYawRad += alphaYaw * (this.yawOffsetRad - this.smoothedYawRad);
   }
 
   public copyOffset(): Vec3Like {
@@ -69,10 +64,6 @@ export class CameraOffsetController {
 
   public getYawRad(): number {
     return this.yawOffsetRad;
-  }
-
-  public getSmoothedYawRad(): number {
-    return this.smoothedYawRad;
   }
 
   public getPitchOffsetRad(): number {
@@ -123,7 +114,6 @@ export class CameraOffsetController {
     this.pitchOffsetRad = 0;
     this.smoothedPitchRad = 0;
     this.yawOffsetRad = 0;
-    this.smoothedYawRad = 0;
     this.lastUpdateNs = 0;
   }
 
