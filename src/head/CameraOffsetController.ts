@@ -95,6 +95,10 @@ export class CameraOffsetController {
 
   public applyYawAdjust(newYawRad: number, adjust: Vec3Like): void {
     this.yawOffsetRad = this.wrapPi(newYawRad);
+    adjust.x = -adjust.x;
+    adjust.y = -adjust.y;
+    adjust.z = -adjust.z;
+
     this.accumulateWorldDelta(adjust);
   }
 
