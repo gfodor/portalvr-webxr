@@ -190,6 +190,18 @@ const POINTER_LOOK_PITCH_RAD_PER_PIXEL = 0.0020;
 const POINTER_LOOK_MAX_STEP_RAD = Math.PI / 3; // clamp spikes to 60 degrees per frame
 const POINTER_LOOK_SMOOTH_TAU_MS = 35;
 
+// Remote/host trackpad mapping constants (tuned for comfortable motion)
+const TRACKPAD_YAW_RADIANS_PER_UNIT = Math.PI / 2;        // Δx across full width -> ±π/2
+const TRACKPAD_PITCH_RADIANS_PER_UNIT = Math.PI / 4;      // Δy across full height -> ±π/4 (up = look up)
+const TRACKPAD_TOUCH_EPS = 1e-5;
+
+// Host trackpad wheel scaling helpers
+const DOM_DELTA_PIXEL = 0;
+const DOM_DELTA_LINE = 1;
+const DOM_DELTA_PAGE = 2;
+const WHEEL_LINE_TO_PX = 16; // heuristic
+const WHEEL_PAGE_TO_PX = 800; // fallback heuristic
+
 export interface XRDeviceConfig {
   name: string;
   controllerConfig: XRControllerConfig | undefined;
@@ -1392,6 +1404,40 @@ export class XRDevice {
       console.error('[XRDevice] Failed to process controller state', error);
     }
 
+	// Remote trackpad → camera yaw/pitch nudges (Android parity)
+	try {
+		const tp = (state as any).trackpad as { touch0Down?: boolean; xNorm?: number; yNorm?: number } | undefined;
+		if (tp && typeof tp.touch0Down === 'boolean') {
+		const anyThis = this as unknown as Record<string, any>;
+		if (tp.touch0Down) {
+			const xNorm = Number.isFinite(tp.xNorm) ? (tp.xNorm as number) : 0;
+			const yNorm = Number.isFinite(tp.yNorm) ? (tp.yNorm as number) : 0;
+			if (anyThis.__tpPrevActive) {
+			const dX = xNorm - (anyThis.__tpPrevXNorm ?? 0);
+			const dY = yNorm - (anyThis.__tpPrevYNorm ?? 0);
+			const dYaw = dX * TRACKPAD_YAW_RADIANS_PER_UNIT;
+			const dPitch = (-dY) * TRACKPAD_PITCH_RADIANS_PER_UNIT; // invert Y: upward drag => positive pitch
+			if (Math.abs(dYaw) > TRACKPAD_TOUCH_EPS || Math.abs(dPitch) > TRACKPAD_TOUCH_EPS) {
+				this.portalPoseCamera?.applyCameraDragIncrements({
+				incYaw: dYaw,
+				incPitch: dPitch,
+				incX: 0,
+				incY: 0,
+				incZ: 0,
+				});
+			}
+			}
+			anyThis.__tpPrevXNorm = xNorm;
+			anyThis.__tpPrevYNorm = yNorm;
+			anyThis.__tpPrevActive = true;
+		} else {
+			(this as unknown as Record<string, any>).__tpPrevActive = false;
+		}
+		}
+	} catch {
+		// ignore trackpad parse errors
+	}
+
     const activeState = resolveActiveWandState(state.wandMode);
     this.setActiveWandState(activeState);
     this.updateControllerButtons(state, activeState);
@@ -1599,6 +1645,46 @@ export class XRDevice {
 
     this.requestPointerLockForCanvas();
   };
+
+	private readonly handleHostTrackpadWheel = (event: WheelEvent) => {
+	// Only active during immersive VR with listeners attached and when we do not have pointer lock
+	const session = this.activeSession;
+	if (!session || session[P_SESSION].mode !== 'immersive-vr') {
+		return;
+	}
+	if (!this.pointerLookListenersAttached || this.pointerLockActive) {
+		return;
+	}
+	
+	// Determine pixel deltas
+	const container = this[P_DEVICE].canvasContainer as HTMLDivElement | null;
+	const scaleX =
+		event.deltaMode === DOM_DELTA_PIXEL ? 1 :
+		event.deltaMode === DOM_DELTA_LINE ? WHEEL_LINE_TO_PX :
+		event.deltaMode === DOM_DELTA_PAGE ? (container?.clientWidth || WHEEL_PAGE_TO_PX) : 1;
+	const scaleY =
+		event.deltaMode === DOM_DELTA_PIXEL ? 1 :
+		event.deltaMode === DOM_DELTA_LINE ? WHEEL_LINE_TO_PX :
+		event.deltaMode === DOM_DELTA_PAGE ? (container?.clientHeight || WHEEL_PAGE_TO_PX) : 1;
+	
+	const deltaXpx = Number(event.deltaX) * scaleX;
+	const deltaYpx = Number(event.deltaY) * scaleY;
+	
+	// Convert to yaw/pitch increments; reuse pointer-look scales & clamp
+	const incYaw = this.clampPointerLookDelta(-deltaXpx * POINTER_LOOK_YAW_RAD_PER_PIXEL);
+	const incPitch = this.clampPointerLookDelta(-deltaYpx * POINTER_LOOK_PITCH_RAD_PER_PIXEL);
+	
+	if (Math.abs(incYaw) < 1e-6 && Math.abs(incPitch) < 1e-6) {
+		return;
+	}
+	
+	// Accumulate into the same pending values so smoothing applies
+	this.pointerLookPendingYaw += incYaw;
+	this.pointerLookPendingPitch += incPitch;
+	
+	// Prevent the page from scrolling
+	try { event.preventDefault(); } catch {}
+	};
 
 	private isTrackingStableFromState(state: ControllerState | null): boolean {
 	if (!state) {
@@ -2689,6 +2775,9 @@ export class XRDevice {
     container.addEventListener('pointerdown', this.handlePointerLookActivation, { passive: true });
     document.addEventListener('pointerlockchange', this.handlePointerLockChange);
     document.addEventListener('pointerlockerror', this.handlePointerLockError);
+	// host trackpad wheel (non-pointer-locked path)
+	container.addEventListener('wheel', this.handleHostTrackpadWheel, { passive: false });
+
     this.pointerLookListenersAttached = true;
     this.pointerLookLastFlushMs = getNowMs();
     this.requestPointerLockForCanvas();
@@ -2701,6 +2790,9 @@ export class XRDevice {
     this.pointerLookListenersAttached = false;
     const container = this[P_DEVICE].canvasContainer;
     container.removeEventListener('pointerdown', this.handlePointerLookActivation);
+	// detach host trackpad wheel
+	container.removeEventListener('wheel', this.handleHostTrackpadWheel);
+
     if (typeof document !== 'undefined') {
       document.removeEventListener('pointerlockchange', this.handlePointerLockChange);
       document.removeEventListener('pointerlockerror', this.handlePointerLockError);

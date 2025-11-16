@@ -24,6 +24,10 @@ const BTN_CAMERA_DRAG = 1 << 6; // bit 6 (virtual camera-drag button)
 const FLAG_AIM = 1; // bit 0
 const FLAG_STRETCH = 1 << 1; // bit 1
 
+// NEW: Trackpad tail flags + helpers (v3 tail)
+const TRACKPAD_FLAG_TOUCH0_DOWN = 1; // bit 0
+const U16_MAX_INV = 1 / 65535;
+
 // NEW: Interaction modes
 export const INTERACTION_MODE_BASE = 0x0;
 export const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
@@ -60,6 +64,15 @@ export interface ControllerState {
   receivedAt: number;
   trackingState: number;
   trackingReason: number;
+  // NEW: optional trackpad tail (present on v3 67-byte packets)
+  trackpad?: {
+    flags: number;
+    xU16: number;
+    yU16: number;
+    xNorm: number; // 0..1
+    yNorm: number; // 0..1
+    touch0Down: boolean;
+  };
 }
 
 const WAND_MODE_NAMES = [
@@ -92,7 +105,14 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     console.warn(`Controller packet length ${buffer.byteLength} is smaller than the minimum supported 59 bytes.`);
     return null;
   }
-  if (buffer.byteLength !== 62 && buffer.byteLength !== 61 && buffer.byteLength !== 59 && buffer.byteLength !== 55) {
+  // include 67 as a known v3 packet size (flags + x_u16 + y_u16 tail)
+  if (
+    buffer.byteLength !== 67 &&
+    buffer.byteLength !== 62 &&
+    buffer.byteLength !== 61 &&
+    buffer.byteLength !== 59 &&
+    buffer.byteLength !== 55
+  ) {
     console.warn(`Controller packet length ${buffer.byteLength} differs from known versions; parsing known fields only.`);
   }
 
@@ -176,6 +196,29 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     interactionMode = view.getUint8(offset++);
   }
 
+  // NEW: optional trackpad tail [flags][x_u16][y_u16]
+  let trackpad: ControllerState['trackpad'] | undefined = undefined;
+  const remain = buffer.byteLength - offset;
+  if (remain >= 1) {
+    const tpFlags = view.getUint8(offset++) & 0xff;
+    let xU16 = 0;
+    let yU16 = 0;
+    if (buffer.byteLength - offset >= 4) {
+      xU16 = view.getUint16(offset, true); offset += 2;
+      yU16 = view.getUint16(offset, true); offset += 2;
+    }
+    const xNorm = xU16 * U16_MAX_INV;
+    const yNorm = yU16 * U16_MAX_INV;
+    trackpad = {
+      flags: tpFlags,
+      xU16,
+      yU16,
+      xNorm,
+      yNorm,
+      touch0Down: (tpFlags & TRACKPAD_FLAG_TOUCH0_DOWN) !== 0,
+    };
+  }
+
   const buttons = {
     action1: !!(buttonsMask & BTN_ACTION_1),
     action2: !!(buttonsMask & BTN_ACTION_2),
@@ -207,5 +250,6 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     receivedAt: Date.now(),
     trackingState,
     trackingReason,
+    trackpad,
   };
 }
