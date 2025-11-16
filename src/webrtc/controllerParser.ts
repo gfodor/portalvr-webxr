@@ -6,8 +6,8 @@
 export const PACKET_STATE = 0x10;
 export const PACKET_ORIENTATION_RESET = 0x7e;
 export const PACKET_HANGUP = 0x02;
-const PROTO_VERSION = 0x02;
-const LEGACY_PROTO_VERSIONS = new Set([0x01]);
+const PROTO_VERSION = 0x03;
+const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02]);
 const TRACKING_STATE_MASK = 0x03;
 const TRACKING_REASON_MASK = 0x0f;
 
@@ -23,6 +23,17 @@ const BTN_CAMERA_DRAG = 1 << 6; // bit 6 (virtual camera-drag button)
 // Flag bit masks
 const FLAG_AIM = 1; // bit 0
 const FLAG_STRETCH = 1 << 1; // bit 1
+
+// NEW: Interaction modes
+export const INTERACTION_MODE_BASE = 0x0;
+export const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
+export const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+
+const INTERACTION_MODE_NAMES = [
+  'Base',
+  'Dual-Axis Gamepad',
+  'DualShock Gamepad',
+];
 
 export interface ControllerState {
   version: number;
@@ -42,6 +53,9 @@ export interface ControllerState {
   timestampNs: number;
   wandMode: number;
   wandModeName: string;
+  // NEW: interaction mode propagated by BLE v3
+  interactionMode: number;
+  interactionModeName: string;
   flags: { aim: boolean; stretch: boolean };
   receivedAt: number;
   trackingState: number;
@@ -78,7 +92,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     console.warn(`Controller packet length ${buffer.byteLength} is smaller than the minimum supported 59 bytes.`);
     return null;
   }
-  if (buffer.byteLength !== 61 && buffer.byteLength !== 59) {
+  if (buffer.byteLength !== 62 && buffer.byteLength !== 61 && buffer.byteLength !== 59 && buffer.byteLength !== 55) {
     console.warn(`Controller packet length ${buffer.byteLength} differs from known versions; parsing known fields only.`);
   }
 
@@ -95,7 +109,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
   // Byte 1: Protocol version
   const version = view.getUint8(offset++);
   if (version !== PROTO_VERSION && !LEGACY_PROTO_VERSIONS.has(version)) {
-    console.warn(`Expected protocol version ${PROTO_VERSION}, got ${version}`);
+    console.warn(`Expected protocol version ${PROTO_VERSION} or legacy, got ${version}`);
   }
 
   // Bytes 2-13: Position (3 floats, little-endian)
@@ -137,19 +151,29 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
 
   // Byte 50: Wand mode
   const wandMode = view.getUint8(offset++);
-  // Bytes 51-54: Flags (int32, little-endian)
+
+  // Next 4 bytes: Flags (int32, little-endian)
   const flagsRaw = view.getInt32(offset, true);
   offset += 4;
 
-  // Bytes 55-58: Session timestamp (uint32, little-endian)
-  const sessionTimestampMs = view.getUint32(offset, true);
-  offset += 4;
+  // Session timestamp (uint32, little-endian) — optional on early versions
+  let sessionTimestampMs = 0;
+  if (buffer.byteLength >= 59 && offset + 4 <= buffer.byteLength) {
+    sessionTimestampMs = view.getUint32(offset, true);
+    offset += 4;
+  }
 
+  // Tracking status (2 bytes) — optional
   let trackingState = 0;
   let trackingReason = 0;
   if (buffer.byteLength >= 61 && offset + 2 <= buffer.byteLength) {
     trackingState = view.getUint8(offset++) & TRACKING_STATE_MASK;
     trackingReason = view.getUint8(offset++) & TRACKING_REASON_MASK;
+  }
+
+  let interactionMode = INTERACTION_MODE_BASE;
+  if (buffer.byteLength >= 62 && offset < buffer.byteLength) {
+    interactionMode = view.getUint8(offset++);
   }
 
   const buttons = {
@@ -177,6 +201,8 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     timestampNs,
     wandMode,
     wandModeName: WAND_MODE_NAMES[wandMode] || 'Unknown',
+    interactionMode,
+    interactionModeName: INTERACTION_MODE_NAMES[interactionMode] || 'Base',
     flags,
     receivedAt: Date.now(),
     trackingState,

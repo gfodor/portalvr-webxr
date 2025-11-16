@@ -19,6 +19,7 @@ export class DevUI {
 	private readonly xrDevice: XRDevice;
 	private controllerConnected = false;
 	private controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden' = 'qr';
+	private swipeVariant: 'base' | 'recenter' | 'trackpad' = 'base';
 
 	constructor(xrDevice: XRDevice) {
 		this.xrDevice = xrDevice;
@@ -50,18 +51,33 @@ export class DevUI {
 		this.renderReact();
 	}
 
+	private inferSwipeVariant(): 'base' | 'recenter' | 'trackpad' {
+		// use optional chaining across package boundaries for safety
+		const imode: number = (this.xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
+		if (imode === 1) return 'recenter';
+		if (imode === 2) return 'trackpad';
+		return 'base';
+	}
+
 	public setControllerPromptStatus(
 		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
+		swipeVariant?: 'base' | 'recenter' | 'trackpad',
 	): void {
-		if (this.controllerPrompt === status) {
+		if (this.controllerPrompt === status && (status !== 'swipe' || (swipeVariant == null || swipeVariant === this.swipeVariant))) {
 			return;
 		}
 		this.controllerPrompt = status;
+
+		if (status === 'swipe') {
+			this.swipeVariant = swipeVariant ?? this.inferSwipeVariant();
+		}
+
 		// keep controllerConnected heuristically in sync for any legacy checks
 		this.controllerConnected =
 			status !== 'qr' && status !== 'hidden'
 				? true
 				: this.controllerConnected;
+
 		this.renderReact();
 	}
 
@@ -131,6 +147,7 @@ export class DevUI {
 			<DevUIRoot
 				xrDevice={this.xrDevice}
 				controllerPrompt={this.controllerPrompt}
+				swipeVariant={this.swipeVariant}
 			/>,
 		);
 	}

@@ -134,6 +134,10 @@ interface ButtonState {
 
 const AIM_EXIT_W = 0.98;
 
+const INTERACTION_MODE_BASE = 0x0;
+const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
+const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+
 export class PortalControllerRuntime {
   public static async create(options?: PortalPoseLoadOptions): Promise<PortalControllerRuntime> {
     const Module = await loadPortalPoseModule(options);
@@ -172,6 +176,9 @@ export class PortalControllerRuntime {
   private buttonDragRequested = false;
   private aimDragRequested = false;
   private externalUiYawRad: number = 0;
+
+  // NEW: track current interaction mode
+  private interactionMode: number = INTERACTION_MODE_BASE;
 
   private flags = {
     aimModeEnabled: false,
@@ -266,6 +273,8 @@ export class PortalControllerRuntime {
     }
 
     this.applyStaticConfig();
+    // Ensure neutral orientation and roll config reflect default BASE behavior
+    this.applyInteractionMode(INTERACTION_MODE_BASE);
   }
 
   destroy(): void {
@@ -284,6 +293,11 @@ export class PortalControllerRuntime {
     this.lastPacketMs = performance.now();
 
     this.setWandMode(state.wandMode);
+
+    // NEW: update runtime when interaction mode changes
+    if (typeof state.interactionMode === 'number' && state.interactionMode !== this.interactionMode) {
+      this.applyInteractionMode(state.interactionMode);
+    }
 
     const tNs = state.timestampNs || Math.floor(performance.now() * 1e6);
     this.poseSmoother.addSample(
@@ -516,6 +530,33 @@ export class PortalControllerRuntime {
       ANDROID_PLAYER_ARM_SCALING,
       FIXED_DISPLAY_TORSO_DISTANCE_PROPORTION,
     );
+  }
+
+  private applyInteractionMode(mode: number): void {
+    this.interactionMode = mode;
+    if (mode === INTERACTION_MODE_DUAL_AXIS_GAMEPAD || mode === INTERACTION_MODE_DUALSHOCK_GAMEPAD) {
+      // Gamepad-style modes: neutral at 0/0/-90 and no roll amplification
+      this.neutralRollDeg = 0.0;
+      this.neutralPitchDeg = 0.0;
+      this.neutralYawDeg = -90.0;
+      this.Module._portal_wasm_set_roll_config(
+        this.statePtr,
+        1.0, // force roll amplification scale to 1.0
+        DEFAULT_ROLL_ZERO_OFFSET_DEG,
+        DEFAULT_ROLL_AMPLIFY_START_DEG,
+      );
+    } else {
+      // BASE: keep existing constants and default roll amplification
+      this.neutralRollDeg = CONTROLLER_NEUTRAL_ROLL_DEG;
+      this.neutralPitchDeg = CONTROLLER_NEUTRAL_PITCH_DEG;
+      this.neutralYawDeg = CONTROLLER_NEUTRAL_YAW_DEG;
+      this.Module._portal_wasm_set_roll_config(
+        this.statePtr,
+        DEFAULT_YAW_ROLL_AMPLIFY,
+        DEFAULT_ROLL_ZERO_OFFSET_DEG,
+        DEFAULT_ROLL_AMPLIFY_START_DEG,
+      );
+    }
   }
 
   private applyDynamicConfig(): void {

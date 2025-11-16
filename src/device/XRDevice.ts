@@ -3496,6 +3496,13 @@ export class XRDevice {
     this.webrtcStreamer?.forceSignalingReconnect();
   }
 
+	public getLastControllerInteractionMode(): number | null {
+	// lastControllerState is already tracked; interactionMode is added in controller parser v3
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const st: any = this.lastControllerState;
+	return st && typeof st.interactionMode === 'number' ? st.interactionMode : null;
+	}
+
   private ensureDefaultWebRTCStreamer() {
     if (this.webrtcStreamer) {
       return;

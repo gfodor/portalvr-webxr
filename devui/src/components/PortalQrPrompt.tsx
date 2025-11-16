@@ -10,6 +10,7 @@ export type PortalQrPromptProps = {
 	// Old prop `visible` is replaced by `status`. Keep it optional for back-compat but unused now.
 	visible?: boolean;
 	status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
+	swipeVariant?: 'base' | 'recenter' | 'trackpad';
 	searchCountdownSeconds?: number | null;
 	isSearchingActively?: boolean;
 	onSearchNow?: () => void;
@@ -24,6 +25,7 @@ export function PortalQrPrompt({
 	deviceUiCode,
 	deviceId,
 	status,
+	swipeVariant = 'base',
 	searchCountdownSeconds,
 	isSearchingActively = false,
 	onSearchNow,
@@ -80,6 +82,7 @@ export function PortalQrPrompt({
 	}
 
 	const isSwipePrompt = status === 'swipe';
+	const showSwipeVideo = isSwipePrompt && swipeVariant === 'base';
 	const clampedCountdown =
 		searchCountdownSeconds != null ? Math.max(0, searchCountdownSeconds) : null;
 
@@ -94,7 +97,11 @@ export function PortalQrPrompt({
 			? `Scan to pair ${deviceName}`
 			: status === 'tracking-issues'
 				? 'Tracking issues, hold the controller still and ensure camera is clear.'
-				: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
+				: swipeVariant === 'recenter'
+					? 'To recenter, hold the gamepad facing forward and press the Options/Menu button.'
+					: swipeVariant === 'trackpad'
+						? 'DualShock: click the trackpad to recenter your view.'
+						: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt
 		? 'portal-qr-pill portal-qr-pill--swipe'
@@ -102,7 +109,7 @@ export function PortalQrPrompt({
 
 	return (
 		<aside className={containerClassName} role="status" aria-live="polite">
-			{isSwipePrompt && (
+			{showSwipeVideo && (
 				<video
 					className="portal-qr-pill__swipe-video"
 					src={ASSET_SWIPE_CALIBRATION}

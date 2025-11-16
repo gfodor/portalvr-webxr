@@ -27,6 +27,7 @@ import {
 type DevUIRootProps = {
 	xrDevice: XRDevice;
 	controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
+	swipeVariant?: 'base' | 'recenter' | 'trackpad';
 };
 
 type EmulatorSettingsState = {
@@ -43,6 +44,7 @@ const AMAZON_3D_GLASSES_URL =
 export function DevUIRoot({
 	xrDevice,
 	controllerPrompt,
+	swipeVariant = 'base',
 }: DevUIRootProps): JSX.Element {
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
@@ -307,6 +309,7 @@ export function DevUIRoot({
 				deviceUiCode={deviceUiCode}
 				deviceId={deviceId}
 				status={controllerPrompt}
+				swipeVariant={swipeVariant}
 				searchCountdownSeconds={
 					showSearchButton ? searchCountdownSeconds : null
 				}
