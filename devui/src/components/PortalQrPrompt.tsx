@@ -98,7 +98,7 @@ export function PortalQrPrompt({
 			: status === 'tracking-issues'
 				? 'Tracking issues, hold the controller still and ensure camera is clear.'
 				: swipeVariant === 'recenter'
-					? 'To recenter, hold the gamepad facing forward and press the Options/Menu button.'
+					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
 					: swipeVariant === 'trackpad'
 						? 'DualShock: click the trackpad to recenter your view.'
 						: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
