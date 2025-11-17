@@ -100,7 +100,7 @@ export function PortalQrPrompt({
 				: swipeVariant === 'recenter'
 					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
 					: swipeVariant === 'trackpad'
-						? 'DualShock: click the trackpad to recenter your view.'
+						? 'Click the controller trackpad to calibrate the controller.'
 						: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt
