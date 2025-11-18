@@ -407,6 +407,12 @@ ${buildFontFaceDeclaration()}
   opacity: 0.8;
 }
 
+.portal-qr-pill__code {
+  font-size: 0.75rem;
+  opacity: 0.85;
+  letter-spacing: 0.08em;
+}
+
 .portal-qr-pill__canvas,
 canvas.portal-qr-pill__canvas {
   width: 4cm;

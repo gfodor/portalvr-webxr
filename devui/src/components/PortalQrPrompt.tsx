@@ -14,7 +14,7 @@ export type PortalQrPromptProps = {
 	// Old prop `visible` is replaced by `status`. Keep it optional for back-compat but unused now.
 	visible?: boolean;
 	status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
-	swipeVariant?: 'base' | 'recenter' | 'trackpad';
+	swipeVariant?: 'base' | 'recenter' | 'trackpad' | 'quest-stick';
 	searchCountdownSeconds?: number | null;
 	isSearchingActively?: boolean;
 	onSearchNow?: () => void;
@@ -26,7 +26,6 @@ const QR_MARGIN = 4;
 export function PortalQrPrompt({
 	pairingUrl,
 	deviceName,
-	deviceUiCode,
 	deviceId,
 	status,
 	swipeVariant = 'base',
@@ -104,8 +103,10 @@ export function PortalQrPrompt({
 				? 'Tracking issues, hold the controller still and ensure camera is clear.'
 				: swipeVariant === 'recenter'
 					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
-					: swipeVariant === 'trackpad'
-						? 'Click the controller trackpad to calibrate the controller.'
+				: swipeVariant === 'trackpad'
+					? 'Click the controller trackpad to calibrate the controller.'
+					: swipeVariant === 'quest-stick'
+						? 'To calibrate, click the stick on each controller.'
 						: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt
@@ -144,27 +145,23 @@ export function PortalQrPrompt({
 						aria-label={`PortalVR pairing QR code for ${deviceName}`}
 					/>
 				)}
-				{status === 'qr' && (
-					<div className="portal-qr-pill__footer">
-						<span className="portal-qr-pill__search-status">{footerLabel}</span>
-						{!isSearchingActively && onSearchNow && clampedCountdown != null && (
-							<button
-								type="button"
-								className="portal-qr-pill__search-button"
-								onClick={onSearchNow}
-							>
-								Search Now
-							</button>
-						)}
-					</div>
-				)}
-				{status !== 'qr' && (
-					<span className="portal-qr-pill__subtitle">
-						{deviceUiCode} · {deviceId}
-					</span>
-				)}
-			</div>
-		</aside>
+					{status === 'qr' && (
+						<div className="portal-qr-pill__footer">
+							<span className="portal-qr-pill__search-status">{footerLabel}</span>
+							{!isSearchingActively && onSearchNow && clampedCountdown != null && (
+								<button
+									type="button"
+									className="portal-qr-pill__search-button"
+									onClick={onSearchNow}
+								>
+									Search Now
+								</button>
+							)}
+						</div>
+					)}
+					<span className="portal-qr-pill__code">{deviceId}</span>
+				</div>
+			</aside>
 	);
 }
 
