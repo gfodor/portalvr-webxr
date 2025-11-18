@@ -137,6 +137,7 @@ const AIM_EXIT_W = 0.98;
 const INTERACTION_MODE_BASE = 0x0;
 const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
 const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+const INTERACTION_MODE_OPENXR_QUEST = 0x10;
 
 export class PortalControllerRuntime {
   public static async create(options?: PortalPoseLoadOptions): Promise<PortalControllerRuntime> {
@@ -542,6 +543,17 @@ export class PortalControllerRuntime {
       this.Module._portal_wasm_set_roll_config(
         this.statePtr,
         1.0, // force roll amplification scale to 1.0
+        DEFAULT_ROLL_ZERO_OFFSET_DEG,
+        DEFAULT_ROLL_AMPLIFY_START_DEG,
+      );
+    } else if (mode === INTERACTION_MODE_OPENXR_QUEST) {
+      // OpenXR Quest mode: neutral at 0/0/0 and no roll amplification
+      this.neutralRollDeg = 0.0;
+      this.neutralPitchDeg = 0.0;
+      this.neutralYawDeg = 0.0;
+      this.Module._portal_wasm_set_roll_config(
+        this.statePtr,
+        1.0,
         DEFAULT_ROLL_ZERO_OFFSET_DEG,
         DEFAULT_ROLL_AMPLIFY_START_DEG,
       );

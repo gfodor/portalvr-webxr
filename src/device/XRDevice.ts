@@ -243,6 +243,8 @@ const DEFAULT_CONFIG_SETTINGS = {
 	connectToControllerViaLan: true,
 };
 
+type ControllerSwipeVariant = 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+
 export interface DevUIConstructor {
   new (xrDevice: XRDevice): DevUI;
 }
@@ -252,7 +254,10 @@ export interface DevUI {
   get devUICanvas(): HTMLCanvasElement;
   get devUIContainer(): HTMLDivElement;
   setControllerConnected(connected: boolean): void;
-	setControllerPromptStatus(status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden'): void;
+	setControllerPromptStatus(
+		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
+		swipeVariant?: ControllerSwipeVariant,
+	): void;
 }
 
 export interface SEMConstructor {

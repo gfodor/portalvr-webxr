@@ -32,12 +32,14 @@ const U16_MAX_INV = 1 / 65535;
 export const INTERACTION_MODE_BASE = 0x0;
 export const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
 export const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+export const INTERACTION_MODE_OPENXR_QUEST = 0x10;
 
-const INTERACTION_MODE_NAMES = [
-  'Base',
-  'Dual-Axis Gamepad',
-  'DualShock Gamepad',
-];
+const INTERACTION_MODE_NAMES: Record<number, string> = {
+  [INTERACTION_MODE_BASE]: 'Base',
+  [INTERACTION_MODE_DUAL_AXIS_GAMEPAD]: 'Dual-Axis Gamepad',
+  [INTERACTION_MODE_DUALSHOCK_GAMEPAD]: 'DualShock Gamepad',
+  [INTERACTION_MODE_OPENXR_QUEST]: 'OpenXR Quest',
+};
 
 export interface ControllerState {
   version: number;
