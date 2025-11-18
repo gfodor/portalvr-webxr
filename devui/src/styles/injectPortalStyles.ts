@@ -290,6 +290,27 @@ ${buildFontFaceDeclaration()}
   text-align: center;
 }
 
+.portal-qr-pill__usb-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--portal-spacing-xs);
+  max-width: 280px;
+}
+
+.portal-qr-pill__subtitle-line {
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.portal-qr-pill__separator {
+  font-size: 0.72rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: var(--portal-spacing-xs);
+}
+
 .portal-qr-pill--swipe .portal-qr-pill__content {
   align-items: flex-start;
   text-align: left;
@@ -317,9 +338,45 @@ ${buildFontFaceDeclaration()}
   width: 100%;
 }
 
+.portal-qr-pill__usb-button {
+  padding: var(--portal-spacing-xs) var(--portal-spacing-lg);
+  border-radius: var(--portal-radius-button);
+  border: none;
+  background: var(--portal-color-text-inverse);
+  color: var(--portal-color-card);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.portal-qr-pill__usb-button:hover:not(:disabled) {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.portal-qr-pill__usb-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .portal-qr-pill__search-status {
   font-size: 0.75rem;
   opacity: 0.85;
+}
+
+.portal-qr-pill__usb-status {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.portal-qr-pill__usb-status--success {
+  color: #8de1c6;
+}
+
+.portal-qr-pill__usb-status--error {
+  color: #ff9b9b;
 }
 
 .portal-qr-pill__search-button {

@@ -1,6 +1,10 @@
 import { useEffect, useRef } from 'react';
 import qrcodeGenerator from 'qrcode-generator';
 import { ASSET_SWIPE_CALIBRATION } from '../generated/assets.js';
+import {
+	useQuestUsbDetection,
+	type QuestUsbDetectionState,
+} from '../hooks/useQuestUsbDetection.js';
 
 export type PortalQrPromptProps = {
 	pairingUrl: string;
@@ -31,6 +35,7 @@ export function PortalQrPrompt({
 	onSearchNow,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+	const questUsb = useQuestUsbDetection(status === 'qr');
 
 	useEffect(() => {
 		if (status !== 'qr') {
@@ -122,7 +127,14 @@ export function PortalQrPrompt({
 				/>
 			)}
 			<div className="portal-qr-pill__content">
-				<span className="portal-qr-pill__title">{title}</span>
+				{status === 'qr' ? (
+					<QuestUsbInstructions
+						questState={questUsb.state}
+						onRequestPermission={questUsb.requestPermission}
+					/>
+				) : (
+					<span className="portal-qr-pill__title">{title}</span>
+				)}
 				{status === 'qr' && (
 					<canvas
 						ref={canvasRef}
@@ -154,4 +166,79 @@ export function PortalQrPrompt({
 			</div>
 		</aside>
 	);
+}
+
+type QuestUsbInstructionsProps = {
+	questState: QuestUsbDetectionState;
+	onRequestPermission: () => Promise<void>;
+};
+
+function QuestUsbInstructions({
+	questState,
+	onRequestPermission,
+}: QuestUsbInstructionsProps): JSX.Element {
+	const showButton =
+		questState.kind === 'needs-permission' ||
+		questState.kind === 'requesting-permission';
+
+	const handleRequest = () => {
+		void onRequestPermission();
+	};
+
+	const statusClassName = buildUsbStatusClassName(questState);
+	const statusLabel = buildUsbStatusLabel(questState);
+
+	return (
+		<div className="portal-qr-pill__usb-block">
+			<span className="portal-qr-pill__subtitle-line">
+				Connect a Meta Quest in developer mode to use tracked controllers.
+			</span>
+			{showButton ? (
+				<button
+					type="button"
+					className="portal-qr-pill__usb-button"
+					onClick={handleRequest}
+					disabled={questState.kind === 'requesting-permission'}
+				>
+					{questState.kind === 'requesting-permission'
+						? 'Waiting for USB approval...'
+						: 'Connect via USB'}
+				</button>
+			) : (
+				<span className={statusClassName}>{statusLabel}</span>
+			)}
+			<span className="portal-qr-pill__separator" aria-hidden="true">
+				–or–
+			</span>
+			<span className="portal-qr-pill__subtitle-line">Connect to your phone:</span>
+		</div>
+	);
+}
+
+function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
+	switch (state.kind) {
+		case 'quest-detected':
+			return 'Quest Detected.';
+		case 'error':
+			return state.message;
+		case 'unsupported':
+			return 'Use Chrome or Edge over HTTPS to connect via USB.';
+		case 'waiting':
+			return state.message ?? 'Looking for Quest over USB...';
+		case 'idle':
+			return 'Checking USB support...';
+		default:
+			return 'Looking for Quest over USB...';
+	}
+}
+
+function buildUsbStatusClassName(state: QuestUsbDetectionState): string {
+	const base = 'portal-qr-pill__usb-status';
+	if (state.kind === 'quest-detected') {
+		return `${base} portal-qr-pill__usb-status--success`;
+	}
+	if (state.kind === 'error') {
+		return `${base} portal-qr-pill__usb-status--error`;
+	}
+	return base;
 }
