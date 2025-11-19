@@ -116,7 +116,6 @@ function handleSocketClose(_tabId: number, id: string, code?: number, reason?: s
 }
 
 interface AdbUsbConfig {
-	permissionGranted: boolean;
 	adbPrivateKeyPkcs8: string | null;
 }
 
@@ -134,7 +133,6 @@ interface PortalEmulatorConfig {
 	version?: number;
 }
 const DEFAULT_ADB_USB: AdbUsbConfig = {
-	permissionGranted: false,
 	adbPrivateKeyPkcs8: null,
 };
 const DEFAULT_CONFIG: PortalEmulatorConfig = {
@@ -435,15 +433,10 @@ function normalizeConfig(
 
 function normalizeAdbUsb(candidate: unknown, fallback: AdbUsbConfig): AdbUsbConfig {
 	const normalized: AdbUsbConfig = {
-		permissionGranted: fallback?.permissionGranted ?? DEFAULT_ADB_USB.permissionGranted,
 		adbPrivateKeyPkcs8: fallback?.adbPrivateKeyPkcs8 ?? DEFAULT_ADB_USB.adbPrivateKeyPkcs8,
 	};
 	if (!candidate || typeof candidate !== 'object') {
 		return normalized;
-	}
-	const permissionCandidate = (candidate as { permissionGranted?: unknown }).permissionGranted;
-	if (typeof permissionCandidate === 'boolean') {
-		normalized.permissionGranted = permissionCandidate;
 	}
 	const keyCandidate = (candidate as { adbPrivateKeyPkcs8?: unknown }).adbPrivateKeyPkcs8;
 	if (typeof keyCandidate === 'string') {

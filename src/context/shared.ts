@@ -18,7 +18,6 @@ export const CONTEXT_SCOPE = 'portalvr';
 export const CONFIG_STORAGE_KEY = 'portalvrConfig';
 
 export interface AdbUsbConfig {
-  permissionGranted: boolean;
   adbPrivateKeyPkcs8: string | null;
 }
 
@@ -35,7 +34,6 @@ export interface PortalEmulatorConfig {
 }
 
 const DEFAULT_ADB_USB: AdbUsbConfig = {
-  permissionGranted: false,
   adbPrivateKeyPkcs8: null,
 };
 
@@ -164,15 +162,10 @@ export function normalizeConfig(candidate: unknown, fallback: PortalEmulatorConf
 
 function normalizeAdbUsb(candidate: unknown, fallback: AdbUsbConfig): AdbUsbConfig {
   const normalized: AdbUsbConfig = {
-    permissionGranted: fallback?.permissionGranted ?? DEFAULT_ADB_USB.permissionGranted,
     adbPrivateKeyPkcs8: fallback?.adbPrivateKeyPkcs8 ?? DEFAULT_ADB_USB.adbPrivateKeyPkcs8,
   };
   if (!candidate || typeof candidate !== 'object') {
     return normalized;
-  }
-  const permissionCandidate = (candidate as { permissionGranted?: unknown }).permissionGranted;
-  if (typeof permissionCandidate === 'boolean') {
-    normalized.permissionGranted = permissionCandidate;
   }
   const keyCandidate = (candidate as { adbPrivateKeyPkcs8?: unknown }).adbPrivateKeyPkcs8;
   if (typeof keyCandidate === 'string') {

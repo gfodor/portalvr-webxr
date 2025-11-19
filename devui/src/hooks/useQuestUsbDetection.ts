@@ -27,7 +27,6 @@ const POLL_INTERVAL_MS = 4000;
 type AdbUsbStorageState = PortalEmulatorConfig['adbUsb'];
 
 const ADB_USB_DEFAULT_STATE: AdbUsbStorageState = {
-	permissionGranted: false,
 	adbPrivateKeyPkcs8: null,
 };
 
@@ -97,25 +96,15 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 
 		const initializePermission = async () => {
 			try {
-				if (readPermissionFlag()) {
-					setHasPermission(true);
-					setState((prev) =>
-						prev.kind === 'quest-detected'
-							? prev
-							: { kind: 'waiting', message: 'Looking for Quest over USB...' },
-					);
-					return;
-				}
-
 				const devices = await manager.getDevices({ filters: QUEST_DEVICE_FILTERS });
 				if (cancelled) {
 					return;
 				}
 				if (devices.length > 0) {
 					setHasPermission(true);
-					writePermissionFlag(true);
 					setState({ kind: 'waiting', message: 'Looking for Quest over USB...' });
 				} else {
+					setHasPermission(false);
 					setState({ kind: 'needs-permission' });
 				}
 			} catch (error) {
@@ -243,7 +232,6 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 				setState({ kind: 'needs-permission' });
 				return;
 			}
-			writePermissionFlag(true);
 			setHasPermission(true);
 			setState({ kind: 'waiting', message: 'Looking for Quest over USB...' });
 		} catch (error) {
@@ -324,15 +312,6 @@ function formatError(error: unknown): string {
 		return error.message || 'Unexpected error while talking to Quest.';
 	}
 	return 'Unexpected error while talking to Quest.';
-}
-
-function readPermissionFlag(): boolean {
-	const state = readAdbUsbState();
-	return state?.permissionGranted ?? false;
-}
-
-function writePermissionFlag(value: boolean): void {
-	updateAdbUsbState((state) => ({ ...state, permissionGranted: value }));
 }
 
 class QuestCredentialStore implements AdbCredentialStore {
@@ -450,7 +429,6 @@ function cloneAdbUsbState(state: AdbUsbStorageState | null | undefined): AdbUsbS
 		return { ...ADB_USB_DEFAULT_STATE };
 	}
 	return {
-		permissionGranted: typeof state.permissionGranted === 'boolean' ? state.permissionGranted : false,
 		adbPrivateKeyPkcs8:
 			typeof state.adbPrivateKeyPkcs8 === 'string' && state.adbPrivateKeyPkcs8.length > 0
 				? state.adbPrivateKeyPkcs8
