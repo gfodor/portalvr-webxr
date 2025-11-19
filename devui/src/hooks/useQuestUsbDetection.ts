@@ -159,6 +159,15 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 					);
 					return;
 				}
+				setState((prev) =>
+					prev.kind === 'quest-detected'
+						? prev
+						: {
+							kind: 'waiting',
+							message:
+								'Quest detected over USB. Put on your headset and approve the USB debugging prompt.',
+						},
+				);
 				const info = await probeQuestDevice(questDevice, ensureCredentialStore());
 				if (cancelled || questDetectedRef.current) {
 					return;
@@ -174,7 +183,7 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 					setState({
 						kind: 'waiting',
 						message:
-							'USB link ready. Enable Developer Mode and approve USB debugging inside the headset.',
+							'USB link ready. Waiting for USB debugging approval...',
 					});
 				}
 			} catch (error) {

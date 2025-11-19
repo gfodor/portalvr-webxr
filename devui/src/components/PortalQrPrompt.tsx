@@ -215,7 +215,7 @@ function QuestUsbInstructions({
 function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 	switch (state.kind) {
 		case 'quest-detected':
-			return 'Quest Detected.';
+			return 'Quest connected via USB. Ready for updates.';
 		case 'error':
 			return state.message;
 		case 'unsupported':
