@@ -115,6 +115,11 @@ function handleSocketClose(_tabId: number, id: string, code?: number, reason?: s
 	try { socketsById.delete(id); } catch {}
 }
 
+interface AdbUsbConfig {
+	permissionGranted: boolean;
+	adbPrivateKeyPkcs8: string | null;
+}
+
 interface PortalEmulatorConfig {
 	device: {
 		suffix: string;
@@ -125,8 +130,13 @@ interface PortalEmulatorConfig {
 		immersiveFullscreenEnabled: boolean;
 		connectToControllerViaLan: boolean;
 	};
+	adbUsb: AdbUsbConfig;
 	version?: number;
 }
+const DEFAULT_ADB_USB: AdbUsbConfig = {
+	permissionGranted: false,
+	adbPrivateKeyPkcs8: null,
+};
 const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	device: { suffix: '' },
 	settings: {
@@ -135,6 +145,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 		immersiveFullscreenEnabled: true,
 		connectToControllerViaLan: true,
 	},
+	adbUsb: { ...DEFAULT_ADB_USB },
 	version: 1,
 };
 
@@ -341,6 +352,7 @@ function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfi
 			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
 			connectToControllerViaLan: config.settings.connectToControllerViaLan,
 		},
+		adbUsb: normalizeAdbUsb(config.adbUsb, DEFAULT_ADB_USB),
 		version:
 			typeof config.version === 'number' ? config.version : DEFAULT_CONFIG.version,
 	};
@@ -367,6 +379,7 @@ function normalizeConfig(
 			immersiveFullscreenEnabled: base.settings.immersiveFullscreenEnabled,
 			connectToControllerViaLan: base.settings.connectToControllerViaLan,
 		},
+		adbUsb: normalizeAdbUsb(base.adbUsb, DEFAULT_ADB_USB),
 		version:
 			typeof base.version === 'number' ? base.version : DEFAULT_CONFIG.version,
 	};
@@ -407,12 +420,38 @@ function normalizeConfig(
 		}
 	}
 
+	const adbUsbCandidate = (candidate as { adbUsb?: unknown }).adbUsb;
+	if (adbUsbCandidate && typeof adbUsbCandidate === 'object') {
+		result.adbUsb = normalizeAdbUsb(adbUsbCandidate, result.adbUsb);
+	}
+
 	const versionCandidate = (candidate as { version?: unknown }).version;
 	if (typeof versionCandidate === 'number') {
 		result.version = versionCandidate;
 	}
 
 	return result;
+}
+
+function normalizeAdbUsb(candidate: unknown, fallback: AdbUsbConfig): AdbUsbConfig {
+	const normalized: AdbUsbConfig = {
+		permissionGranted: fallback?.permissionGranted ?? DEFAULT_ADB_USB.permissionGranted,
+		adbPrivateKeyPkcs8: fallback?.adbPrivateKeyPkcs8 ?? DEFAULT_ADB_USB.adbPrivateKeyPkcs8,
+	};
+	if (!candidate || typeof candidate !== 'object') {
+		return normalized;
+	}
+	const permissionCandidate = (candidate as { permissionGranted?: unknown }).permissionGranted;
+	if (typeof permissionCandidate === 'boolean') {
+		normalized.permissionGranted = permissionCandidate;
+	}
+	const keyCandidate = (candidate as { adbPrivateKeyPkcs8?: unknown }).adbPrivateKeyPkcs8;
+	if (typeof keyCandidate === 'string') {
+		normalized.adbPrivateKeyPkcs8 = keyCandidate.length > 0 ? keyCandidate : null;
+	} else if (keyCandidate === null) {
+		normalized.adbPrivateKeyPkcs8 = null;
+	}
+	return normalized;
 }
 
 async function persistState(state: { config: PortalEmulatorConfig }): Promise<void> {

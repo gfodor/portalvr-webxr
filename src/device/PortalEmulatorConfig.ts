@@ -24,6 +24,11 @@ declare const chrome:
       };
     };
 
+export interface AdbUsbConfig {
+  permissionGranted: boolean;
+  adbPrivateKeyPkcs8: string | null;
+}
+
 export interface PortalEmulatorConfig {
   device: {
     /** 12-char uppercase A–Z0–9 suffix, eg: ABCD… */
@@ -35,6 +40,7 @@ export interface PortalEmulatorConfig {
     immersiveFullscreenEnabled: boolean;
     connectToControllerViaLan: boolean;
   };
+  adbUsb: AdbUsbConfig;
   /** reserved for future migrations */
   version?: number;
 }
@@ -42,7 +48,13 @@ export interface PortalEmulatorConfig {
 type PartialConfig = {
   device?: Partial<PortalEmulatorConfig['device']>;
   settings?: Partial<PortalEmulatorConfig['settings']>;
+  adbUsb?: Partial<PortalEmulatorConfig['adbUsb']>;
   version?: PortalEmulatorConfig['version'];
+};
+
+const DEFAULT_ADB_USB: AdbUsbConfig = {
+  permissionGranted: false,
+  adbPrivateKeyPkcs8: null,
 };
 
 const DEFAULT_CONFIG: PortalEmulatorConfig = {
@@ -53,6 +65,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
     immersiveFullscreenEnabled: true,
     connectToControllerViaLan: true,
   },
+  adbUsb: { ...DEFAULT_ADB_USB },
   version: 1,
 };
 
@@ -60,6 +73,7 @@ function createDefaultConfig(): PortalEmulatorConfig {
   return {
     device: { ...DEFAULT_CONFIG.device },
     settings: { ...DEFAULT_CONFIG.settings },
+    adbUsb: { ...DEFAULT_ADB_USB },
     version: DEFAULT_CONFIG.version,
   };
 }
@@ -86,6 +100,10 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
     typeof (source as { settings?: unknown }).settings === 'object' && (source as { settings?: unknown }).settings
       ? ((source as { settings: Record<string, unknown> }).settings)
       : {};
+  const adbUsbCandidate =
+    typeof (source as { adbUsb?: unknown }).adbUsb === 'object' && (source as { adbUsb?: unknown }).adbUsb
+      ? ((source as { adbUsb: Record<string, unknown> }).adbUsb)
+      : null;
   const normalized: PortalEmulatorConfig = {
     device: {
       suffix:
@@ -111,11 +129,36 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
           ? ((settingsCandidate as { connectToControllerViaLan: boolean }).connectToControllerViaLan)
           : DEFAULT_CONFIG.settings.connectToControllerViaLan,
     },
+    adbUsb: normalizeAdbUsbCandidate(adbUsbCandidate, DEFAULT_ADB_USB),
     version:
       typeof (source as { version?: unknown }).version === 'number'
         ? ((source as { version: number }).version)
         : DEFAULT_CONFIG.version,
   };
+  return normalized;
+}
+
+function normalizeAdbUsbCandidate(
+  candidate: unknown,
+  fallback: AdbUsbConfig,
+): AdbUsbConfig {
+  const normalized: AdbUsbConfig = {
+    permissionGranted: fallback.permissionGranted,
+    adbPrivateKeyPkcs8: fallback.adbPrivateKeyPkcs8,
+  };
+  if (!candidate || typeof candidate !== 'object') {
+    return normalized;
+  }
+  const permissionCandidate = (candidate as { permissionGranted?: unknown }).permissionGranted;
+  if (typeof permissionCandidate === 'boolean') {
+    normalized.permissionGranted = permissionCandidate;
+  }
+  const keyCandidate = (candidate as { adbPrivateKeyPkcs8?: unknown }).adbPrivateKeyPkcs8;
+  if (typeof keyCandidate === 'string') {
+    normalized.adbPrivateKeyPkcs8 = keyCandidate.length > 0 ? keyCandidate : null;
+  } else if (keyCandidate === null) {
+    normalized.adbPrivateKeyPkcs8 = null;
+  }
   return normalized;
 }
 
@@ -149,6 +192,7 @@ export function updatePortalEmulatorConfig(patch: PartialConfig): PortalEmulator
     ...current,
     device: { ...current.device, ...(patch.device ?? {}) },
     settings: { ...current.settings, ...(patch.settings ?? {}) },
+    adbUsb: { ...current.adbUsb, ...(patch.adbUsb ?? {}) },
     version: current.version ?? 1,
   };
   writeConfig(next);

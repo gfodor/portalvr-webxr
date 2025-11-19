@@ -9,16 +9,27 @@ import {
 	AdbDaemonWebUsbDevice,
 	AdbDaemonWebUsbDeviceManager,
 } from '@yume-chan/adb-daemon-webusb';
+import {
+	getPortalEmulatorConfig,
+	portalConfigProvider,
+	updatePortalEmulatorConfig,
+	type PortalEmulatorConfig,
+} from 'portalvr';
 
 const QUEST_VENDOR_IDS = [0x2833];
 const QUEST_DEVICE_FILTERS: USBDeviceFilter[] = QUEST_VENDOR_IDS.map((vendorId) => ({
 	vendorId,
 }));
 
-const QUEST_PERMISSION_FLAG = 'portalvr.quest.webusbPermissionGranted';
-const QUEST_KEY_STORAGE = 'portalvr.quest.adbKeyPkcs8';
 const QUEST_KEY_NAME = 'PortalVR WebADB';
 const POLL_INTERVAL_MS = 4000;
+
+type AdbUsbStorageState = PortalEmulatorConfig['adbUsb'];
+
+const ADB_USB_DEFAULT_STATE: AdbUsbStorageState = {
+	permissionGranted: false,
+	adbPrivateKeyPkcs8: null,
+};
 
 export type QuestUsbUnsupportedReason = 'no-webusb' | 'insecure-context';
 
@@ -316,27 +327,12 @@ function formatError(error: unknown): string {
 }
 
 function readPermissionFlag(): boolean {
-	const storage = getLocalStorage();
-	if (!storage) {
-		return false;
-	}
-	return storage.getItem(QUEST_PERMISSION_FLAG) === '1';
+	const state = readAdbUsbState();
+	return state?.permissionGranted ?? false;
 }
 
 function writePermissionFlag(value: boolean): void {
-	const storage = getLocalStorage();
-	if (!storage) {
-		return;
-	}
-	try {
-		if (value) {
-			storage.setItem(QUEST_PERMISSION_FLAG, '1');
-		} else {
-			storage.removeItem(QUEST_PERMISSION_FLAG);
-		}
-	} catch {
-		// ignore storage writes that fail
-	}
+	updateAdbUsbState((state) => ({ ...state, permissionGranted: value }));
 }
 
 class QuestCredentialStore implements AdbCredentialStore {
@@ -390,17 +386,6 @@ class QuestCredentialStore implements AdbCredentialStore {
 	}
 }
 
-function getLocalStorage(): Storage | null {
-	if (typeof window === 'undefined') {
-		return null;
-	}
-	try {
-		return window.localStorage;
-	} catch {
-		return null;
-	}
-}
-
 function getWebCrypto(): Crypto | null {
 	if (typeof globalThis === 'undefined') {
 		return null;
@@ -410,31 +395,67 @@ function getWebCrypto(): Crypto | null {
 }
 
 function persistPrivateKey(value: Uint8Array): void {
-	const storage = getLocalStorage();
-	if (!storage) {
-		return;
-	}
-	try {
-		storage.setItem(QUEST_KEY_STORAGE, encodeBase64(value));
-	} catch {
-		// ignore storage errors
-	}
+	updateAdbUsbState((state) => ({ ...state, adbPrivateKeyPkcs8: encodeBase64(value) }));
 }
 
 function readPersistedKey(): Uint8Array | null {
-	const storage = getLocalStorage();
-	if (!storage) {
-		return null;
-	}
-	const serialized = storage.getItem(QUEST_KEY_STORAGE);
-	if (!serialized) {
+	const state = readAdbUsbState();
+	if (!state?.adbPrivateKeyPkcs8) {
 		return null;
 	}
 	try {
-		return decodeBase64(serialized);
+		return decodeBase64(state.adbPrivateKeyPkcs8);
 	} catch {
 		return null;
 	}
+}
+
+function readAdbUsbState(): AdbUsbStorageState | null {
+	if (typeof window === 'undefined') {
+		return null;
+	}
+	const config = getConfigSnapshot();
+	if (!config) {
+		return null;
+	}
+	return cloneAdbUsbState(config.adbUsb);
+}
+
+function updateAdbUsbState(
+	updater: (state: AdbUsbStorageState) => AdbUsbStorageState,
+): AdbUsbStorageState | null {
+	if (typeof window === 'undefined') {
+		return null;
+	}
+	const currentState = cloneAdbUsbState(getConfigSnapshot()?.adbUsb);
+	const nextAdbUsb = updater(currentState);
+	try {
+		const updated = updatePortalEmulatorConfig({ adbUsb: nextAdbUsb });
+		return cloneAdbUsbState(updated.adbUsb);
+	} catch {
+		return null;
+	}
+}
+
+function getConfigSnapshot(): PortalEmulatorConfig | null {
+	try {
+		return portalConfigProvider.getConfigSync() ?? getPortalEmulatorConfig();
+	} catch {
+		return null;
+	}
+}
+
+function cloneAdbUsbState(state: AdbUsbStorageState | null | undefined): AdbUsbStorageState {
+	if (!state) {
+		return { ...ADB_USB_DEFAULT_STATE };
+	}
+	return {
+		permissionGranted: typeof state.permissionGranted === 'boolean' ? state.permissionGranted : false,
+		adbPrivateKeyPkcs8:
+			typeof state.adbPrivateKeyPkcs8 === 'string' && state.adbPrivateKeyPkcs8.length > 0
+				? state.adbPrivateKeyPkcs8
+				: null,
+	};
 }
 
 function encodeBase64(bytes: Uint8Array): string {

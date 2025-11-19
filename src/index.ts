@@ -14,6 +14,13 @@ export {
   setRuntimeAssetBaseUrl,
 } from './runtime/RuntimeAssetResolver.js';
 
+// shared portal config storage
+export {
+  getOrCreateRuntimeConfig,
+  persistStoredConfig,
+  readStoredConfig,
+} from './context/shared.js';
+
 // model
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {
