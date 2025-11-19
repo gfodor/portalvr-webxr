@@ -548,9 +548,9 @@ export class PortalControllerRuntime {
       );
     } else if (mode === INTERACTION_MODE_OPENXR_QUEST) {
       // OpenXR Quest mode: neutral at 0/0/0 and no roll amplification
-      this.neutralRollDeg = 0.0;
-      this.neutralPitchDeg = 0.0;
-      this.neutralYawDeg = 0.0;
+      this.neutralRollDeg = 120.0;
+      this.neutralPitchDeg = 180.0;
+      this.neutralYawDeg = 180.0;
       this.Module._portal_wasm_set_roll_config(
         this.statePtr,
         1.0,
