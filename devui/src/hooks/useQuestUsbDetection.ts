@@ -1099,16 +1099,12 @@ async function launchControllerWithRetries(
 				action: 'android.intent.action.VIEW',
 				data: controllerLaunchUrl,
 			});
-			await runShellText(adb, [
-				'am',
-				'start',
-				'-n',
-				`${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity`,
-				'-a',
-				'android.intent.action.VIEW',
-				'-d',
-				controllerLaunchUrl,
-			]);
+			const quotedUrl = controllerLaunchUrl.replace(/'/g, "'\\''");
+			const intentCmd =
+				`am start -n ${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity ` +
+				`-a android.intent.action.VIEW -d '${quotedUrl}'`;
+			logDebug('Sending launch intent', { intentCmd });
+			await runShellText(adb, intentCmd);
 			logDebug('Launch intent sent');
 		} catch {
 			logDebug('Launch attempt failed');
