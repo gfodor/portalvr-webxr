@@ -121,10 +121,19 @@ export function useQuestUsbDetection(
 	const launchRetryTimeoutRef = useRef<number | null>(null);
 	const enabledRef = useRef(enabled);
 	const controllerConnectedRef = useRef(Boolean(controllerConnected));
+	const unmountedRef = useRef(false);
 
 	useEffect(() => {
 		enabledRef.current = enabled;
 	}, [enabled]);
+
+	useEffect(() => () => {
+		unmountedRef.current = true;
+		if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
+			window.clearTimeout(launchRetryTimeoutRef.current);
+			launchRetryTimeoutRef.current = null;
+		}
+	}, []);
 
 	useEffect(() => {
 		controllerConnectedRef.current = Boolean(controllerConnected);
@@ -301,14 +310,12 @@ export function useQuestUsbDetection(
 		pipelineStartedRef.current = true;
 		logDebug('Starting controller pipeline');
 
-		let cancelled = false;
-
 		const safeSetState = (
 			value:
 				| QuestUsbDetectionState
 				| ((prev: QuestUsbDetectionState) => QuestUsbDetectionState),
 		): void => {
-			if (cancelled || !enabledRef.current) {
+			if (unmountedRef.current || !enabledRef.current) {
 				return;
 			}
 			setState(value);
@@ -373,26 +380,28 @@ export function useQuestUsbDetection(
 					});
 
 					if (needsInstall) {
-						safeSetState({
-							kind: 'controller-setup',
-							phase: 'downloading',
-							message: 'Downloading controller app...',
-							progressPct: 0,
-						});
+							safeSetState({
+								kind: 'controller-setup',
+								phase: 'downloading',
+								message: 'Downloading controller app (0%)',
+								progressPct: 0,
+							});
 
 						const apkBytes = await downloadApkWithProgress(
 							repoInfo.apkUrl,
 							(percent) => {
-								if (percent === 0 || percent === 100 || percent % 10 === 0) {
-									logDebug('APK download progress', `${percent}%`);
+								const pct = clampPercent(percent);
+								if (pct === 0 || pct === 100 || pct % 10 === 0) {
+									logDebug('APK download progress', `${pct}%`);
 								}
 								safeSetState((prev) =>
 									prev.kind === 'controller-setup' &&
 									prev.phase === 'downloading'
 										? {
-												...prev,
-												progressPct: clampPercent(percent),
-											}
+											...prev,
+											message: `Downloading controller app (${pct}%)`,
+											progressPct: pct,
+										}
 										: prev,
 								);
 							},
@@ -416,15 +425,17 @@ export function useQuestUsbDetection(
 						});
 
 						await installControllerApk(adb, apkBytes, (percent) => {
-							if (percent === 0 || percent === 100 || percent % 10 === 0) {
-								logDebug('APK install progress', `${percent}%`);
+							const pct = clampPercent(percent);
+							if (pct === 0 || pct === 100 || pct % 10 === 0) {
+								logDebug('APK install progress', `${pct}%`);
 							}
 							safeSetState((prev) =>
 								prev.kind === 'controller-setup' &&
 								prev.phase === 'installing'
 									? {
 											...prev,
-											progressPct: clampPercent(percent),
+											message: `Installing controller app (${pct}%)`,
+											progressPct: pct,
 										}
 									: prev,
 							);
@@ -440,7 +451,7 @@ export function useQuestUsbDetection(
 					}
 				}
 			} catch (error) {
-				if (!cancelled) {
+				if (!unmountedRef.current && enabledRef.current) {
 					logDebug('Controller pipeline error', error);
 					safeSetState({
 						kind: 'error',
@@ -475,14 +486,6 @@ export function useQuestUsbDetection(
 		};
 
 		void run();
-
-		return () => {
-			cancelled = true;
-			if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
-				window.clearTimeout(launchRetryTimeoutRef.current);
-				launchRetryTimeoutRef.current = null;
-			}
-		};
 	}, [
 		enabled,
 		manager,
@@ -1081,7 +1084,7 @@ async function launchControllerWithRetries(
 		setState({
 			kind: 'controller-setup',
 			phase: 'launching',
-			message: 'Launching controller...',
+			message: `Launching controller (${attempt}/${MAX_CONTROLLER_LAUNCH_ATTEMPTS})...`,
 			progressPct: null,
 			attempts: attempt,
 		});

@@ -185,7 +185,12 @@ function QuestUsbInstructions({
 	};
 
 	const statusClassName = buildUsbStatusClassName(questState);
-	const statusLabel = buildUsbStatusLabel(questState);
+	const statusLabel =
+		'message' in questState &&
+		typeof questState.message === 'string' &&
+		questState.message.length > 0
+			? questState.message
+			: buildUsbStatusLabel(questState);
 
 	const showProgressBar =
 		questState.kind === 'controller-setup' &&
@@ -251,17 +256,11 @@ function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 						'Checking controller app on Quest...'
 					);
 				case 'downloading':
-					return (
-						state.message ?? 'Downloading controller app...'
-					);
+					return state.message ?? 'Downloading controller app...';
 				case 'installing':
-					return (
-						state.message ?? 'Installing controller app...'
-					);
+					return state.message ?? 'Installing controller app...';
 				case 'launching':
-					return (
-						state.message ?? 'Launching controller...'
-					);
+					return state.message ?? 'Launching controller...';
 				case 'ready':
 					return (
 						state.message ??
