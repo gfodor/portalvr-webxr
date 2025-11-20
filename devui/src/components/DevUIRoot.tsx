@@ -317,6 +317,7 @@ export function DevUIRoot({
 				onSearchNow={
 					showSearchButton ? handleSearchNow : undefined
 				}
+				controllerConnected={isSigcfConnected}
 			/>
 
 			<div

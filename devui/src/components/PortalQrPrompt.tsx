@@ -18,6 +18,7 @@ export type PortalQrPromptProps = {
 	searchCountdownSeconds?: number | null;
 	isSearchingActively?: boolean;
 	onSearchNow?: () => void;
+	controllerConnected?: boolean;
 };
 
 const QR_SIZE = 384;
@@ -32,9 +33,10 @@ export function PortalQrPrompt({
 	searchCountdownSeconds,
 	isSearchingActively = false,
 	onSearchNow,
+	controllerConnected = false,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
-	const questUsb = useQuestUsbDetection(status === 'qr');
+	const questUsb = useQuestUsbDetection(status === 'qr', pairingUrl, controllerConnected);
 
 	useEffect(() => {
 		if (status !== 'qr') {
@@ -103,11 +105,11 @@ export function PortalQrPrompt({
 				? 'Tracking issues, hold the controller still and ensure camera is clear.'
 				: swipeVariant === 'recenter'
 					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
-				: swipeVariant === 'trackpad'
-					? 'Click the controller trackpad to calibrate the controller.'
-					: swipeVariant === 'quest-stick'
-						? 'To calibrate, click the stick on each controller.'
-						: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
+					: swipeVariant === 'trackpad'
+						? 'Click the controller trackpad to calibrate the controller.'
+						: swipeVariant === 'quest-stick'
+							? 'To calibrate, click the stick on each controller.'
+							: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt
 		? 'portal-qr-pill portal-qr-pill--swipe'
@@ -185,6 +187,15 @@ function QuestUsbInstructions({
 	const statusClassName = buildUsbStatusClassName(questState);
 	const statusLabel = buildUsbStatusLabel(questState);
 
+	const showProgressBar =
+		questState.kind === 'controller-setup' &&
+		(questState.phase === 'downloading' || questState.phase === 'installing');
+	const progressPct =
+		questState.kind === 'controller-setup' &&
+		typeof questState.progressPct === 'number'
+			? Math.max(0, Math.min(100, questState.progressPct))
+			: null;
+
 	return (
 		<div className="portal-qr-pill__usb-block">
 			<span className="portal-qr-pill__subtitle-line">
@@ -202,7 +213,23 @@ function QuestUsbInstructions({
 						: 'Connect via USB'}
 				</button>
 			) : (
-				<span className={statusClassName}>{statusLabel}</span>
+				<>
+					<span className={statusClassName}>{statusLabel}</span>
+					{showProgressBar && progressPct != null && (
+						<div
+							className="portal-qr-pill__progress"
+							role="progressbar"
+							aria-valuemin={0}
+							aria-valuemax={100}
+							aria-valuenow={progressPct}
+						>
+							<div
+								className="portal-qr-pill__progress-fill"
+								style={{ width: `${progressPct}%` }}
+							/>
+						</div>
+					)}
+				</>
 			)}
 			<span className="portal-qr-pill__separator" aria-hidden="true">
 				–or–
@@ -215,7 +242,35 @@ function QuestUsbInstructions({
 function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 	switch (state.kind) {
 		case 'quest-detected':
-			return 'Quest connected via USB. Ready for updates.';
+			return 'Quest connected via USB. Preparing controller app...';
+		case 'controller-setup': {
+			switch (state.phase) {
+				case 'checking':
+					return (
+						state.message ??
+						'Checking controller app on Quest...'
+					);
+				case 'downloading':
+					return (
+						state.message ?? 'Downloading controller app...'
+					);
+				case 'installing':
+					return (
+						state.message ?? 'Installing controller app...'
+					);
+				case 'launching':
+					return (
+						state.message ?? 'Launching controller...'
+					);
+				case 'ready':
+					return (
+						state.message ??
+						'Controller app installed and ready.'
+					);
+				default:
+					return 'Preparing controller app...';
+			}
+		}
 		case 'error':
 			return state.message;
 		case 'unsupported':
@@ -231,7 +286,10 @@ function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 
 function buildUsbStatusClassName(state: QuestUsbDetectionState): string {
 	const base = 'portal-qr-pill__usb-status';
-	if (state.kind === 'quest-detected') {
+	if (
+		state.kind === 'quest-detected' ||
+		(state.kind === 'controller-setup' && state.phase === 'ready')
+	) {
 		return `${base} portal-qr-pill__usb-status--success`;
 	}
 	if (state.kind === 'error') {

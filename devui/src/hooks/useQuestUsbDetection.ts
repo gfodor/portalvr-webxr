@@ -23,6 +23,22 @@ const QUEST_DEVICE_FILTERS: USBDeviceFilter[] = QUEST_VENDOR_IDS.map((vendorId) 
 
 const QUEST_KEY_NAME = 'PortalVR WebADB';
 const POLL_INTERVAL_MS = 4000;
+const PROXIMITY_CLOSE_ACTION = 'com.oculus.vrpowermanager.prox_close';
+const CONTROLLER_PKG_NAME = 'io.portalvr.controller';
+const CONTROLLER_APK_REMOTE_PATH = '/data/local/tmp/io.portalvr.controller.apk';
+const MAX_CONTROLLER_LAUNCH_ATTEMPTS = 3;
+const CONTROLLER_LAUNCH_RETRY_DELAY_MS = 4000;
+const REPO_BASE_URL = 'https://repo.portalvr.io';
+const REPO_INDEX_PATH = '/index-v2.json';
+
+const LOG_PREFIX = '[QuestUSB]';
+
+function logDebug(...args: unknown[]): void {
+	// Keep lightweight runtime logging to help diagnose WebUSB flakiness
+	if (typeof console !== 'undefined' && console.info) {
+		console.info(LOG_PREFIX, ...args);
+	}
+}
 
 type AdbUsbStorageState = PortalEmulatorConfig['adbUsb'];
 
@@ -32,6 +48,44 @@ const ADB_USB_DEFAULT_STATE: AdbUsbStorageState = {
 
 export type QuestUsbUnsupportedReason = 'no-webusb' | 'insecure-context';
 
+type ControllerSetupPhase =
+	| 'checking'
+	| 'downloading'
+	| 'installing'
+	| 'launching'
+	| 'ready';
+
+type ControllerSetupState = {
+	kind: 'controller-setup';
+	phase: ControllerSetupPhase;
+	message?: string;
+	progressPct: number | null;
+	attempts?: number;
+};
+
+type RepoVersion = {
+	fileName: string;
+	versionCode: number;
+	sha256Hex: string;
+	nativeAbis: string[];
+};
+
+type RepoPackage = {
+	packageName: string;
+	versions: RepoVersion[];
+};
+
+type RepoIndex = {
+	repoAddress: string;
+	packages: Record<string, RepoPackage>;
+};
+
+type ControllerRepoInfo = {
+	versionCode: number;
+	apkUrl: string;
+	sha256Hex?: string;
+};
+
 export type QuestUsbDetectionState =
 	| { kind: 'idle' }
 	| { kind: 'unsupported'; reason: QuestUsbUnsupportedReason }
@@ -39,6 +93,7 @@ export type QuestUsbDetectionState =
 	| { kind: 'requesting-permission' }
 	| { kind: 'waiting'; message?: string }
 	| { kind: 'quest-detected'; model?: string; manufacturer?: string }
+	| ControllerSetupState
 	| { kind: 'error'; message: string };
 
 export type QuestUsbDetectionResult = {
@@ -52,15 +107,32 @@ type QuestInfo = {
 	manufacturer?: string;
 };
 
-export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult {
+export function useQuestUsbDetection(
+	enabled: boolean,
+	controllerLaunchUrl?: string,
+	controllerConnected?: boolean,
+): QuestUsbDetectionResult {
 	const manager = useMemo(() => AdbDaemonWebUsbDeviceManager.BROWSER, []);
 	const [state, setState] = useState<QuestUsbDetectionState>({ kind: 'idle' });
 	const [hasPermission, setHasPermission] = useState(false);
 	const questDetectedRef = useRef(false);
 	const credentialStoreRef = useRef<QuestCredentialStore | null>(null);
+	const pipelineStartedRef = useRef(false);
+	const launchRetryTimeoutRef = useRef<number | null>(null);
+	const enabledRef = useRef(enabled);
+	const controllerConnectedRef = useRef(Boolean(controllerConnected));
 
 	useEffect(() => {
-		questDetectedRef.current = state.kind === 'quest-detected';
+		enabledRef.current = enabled;
+	}, [enabled]);
+
+	useEffect(() => {
+		controllerConnectedRef.current = Boolean(controllerConnected);
+	}, [controllerConnected]);
+
+	useEffect(() => {
+		questDetectedRef.current =
+			state.kind === 'quest-detected' || state.kind === 'controller-setup';
 	}, [state.kind]);
 
 	const ensureCredentialStore = useCallback(() => {
@@ -75,6 +147,11 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 			setState({ kind: 'idle' });
 			setHasPermission(false);
 			questDetectedRef.current = false;
+			pipelineStartedRef.current = false;
+			if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
+				window.clearTimeout(launchRetryTimeoutRef.current);
+				launchRetryTimeoutRef.current = null;
+			}
 			return;
 		}
 
@@ -102,7 +179,10 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 				}
 				if (devices.length > 0) {
 					setHasPermission(true);
-					setState({ kind: 'waiting', message: 'Looking for Quest over USB...' });
+					setState({
+						kind: 'waiting',
+						message: 'Looking for Quest over USB...',
+					});
 				} else {
 					setHasPermission(false);
 					setState({ kind: 'needs-permission' });
@@ -131,7 +211,7 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 		let running = false;
 
 		const schedule = () => {
-			if (!cancelled && !questDetectedRef.current) {
+			if (!cancelled && !questDetectedRef.current && typeof window !== 'undefined') {
 				timeoutId = window.setTimeout(runPoll, POLL_INTERVAL_MS);
 			}
 		};
@@ -150,23 +230,23 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 				const questDevice = devices.find(isQuestUsbDevice);
 				if (!questDevice) {
 					setState((prev) =>
-						prev.kind === 'quest-detected'
+						prev.kind === 'quest-detected' || prev.kind === 'controller-setup'
 							? prev
 							: {
-								kind: 'waiting',
-								message: 'Waiting for Quest to be connected...',
-							},
+									kind: 'waiting',
+									message: 'Waiting for Quest to be connected...',
+								},
 					);
 					return;
 				}
 				setState((prev) =>
-					prev.kind === 'quest-detected'
+					prev.kind === 'quest-detected' || prev.kind === 'controller-setup'
 						? prev
 						: {
-							kind: 'waiting',
-							message:
-								'Quest detected over USB. Put on your headset and approve the USB debugging prompt.',
-						},
+								kind: 'waiting',
+								message:
+									'Quest detected over USB. Put on your headset and approve the USB debugging prompt.',
+							},
 				);
 				const info = await probeQuestDevice(questDevice, ensureCredentialStore());
 				if (cancelled || questDetectedRef.current) {
@@ -200,11 +280,239 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 
 		return () => {
 			cancelled = true;
-			if (timeoutId != null) {
+			if (timeoutId != null && typeof window !== 'undefined') {
 				window.clearTimeout(timeoutId);
 			}
 		};
 	}, [enabled, ensureCredentialStore, hasPermission, manager]);
+
+	// After Quest is detected and ADB is authorized, ensure the controller app is installed,
+	// then launch it with the SIGCF controller URL, retrying if the controller doesn't connect.
+	useEffect(() => {
+		if (!enabled || !manager || !hasPermission) {
+			return;
+		}
+		if (state.kind !== 'quest-detected') {
+			return;
+		}
+		if (pipelineStartedRef.current) {
+			return;
+		}
+		pipelineStartedRef.current = true;
+		logDebug('Starting controller pipeline');
+
+		let cancelled = false;
+
+		const safeSetState = (
+			value:
+				| QuestUsbDetectionState
+				| ((prev: QuestUsbDetectionState) => QuestUsbDetectionState),
+		): void => {
+			if (cancelled || !enabledRef.current) {
+				return;
+			}
+			setState(value);
+		};
+
+		const run = async () => {
+			let adb: Adb | null = null;
+			try {
+				safeSetState({
+					kind: 'controller-setup',
+					phase: 'checking',
+					message: 'Checking controller app on Quest...',
+					progressPct: null,
+				});
+
+				adb = await openQuestAdb(manager, ensureCredentialStore());
+
+				// Disable the proximity sensor so the headset stays awake while streaming.
+				await safeRunShellIgnoreError(adb, [
+					'am',
+					'broadcast',
+					'-a',
+					PROXIMITY_CLOSE_ACTION,
+				]);
+
+				const deviceAbis = await readDeviceAbis(adb);
+				logDebug('Device ABIs', deviceAbis);
+
+				let repoInfo: ControllerRepoInfo | null = null;
+				try {
+					repoInfo = await fetchControllerRepoInfo(deviceAbis);
+					if (repoInfo) {
+						logDebug('Repo controller version', repoInfo.versionCode, repoInfo.apkUrl);
+					}
+				} catch {
+					// Repo unreachable or invalid; treat as offline and fall back to on-device install.
+					repoInfo = null;
+					logDebug('Repo unreachable, falling back to installed version');
+				}
+
+				const installedVersion = await readInstalledControllerVersion(adb);
+				logDebug('Installed controller version', installedVersion);
+
+				if (!repoInfo) {
+					if (installedVersion == null) {
+						throw new Error(
+							'Controller app is not installed, and the PortalVR repo could not be reached.',
+						);
+					}
+					// Repo offline but controller exists – continue to launch below.
+				} else {
+					// Always enforce the repo version when available. If the installed
+					// version differs at all, download and install the repo build,
+					// forcing downgrades/upgrades with -d -r.
+					const needsInstall =
+						installedVersion == null ||
+						installedVersion !== repoInfo.versionCode;
+					logDebug('Version check', {
+						installedVersion,
+						repoVersion: repoInfo.versionCode,
+						needsInstall,
+					});
+
+					if (needsInstall) {
+						safeSetState({
+							kind: 'controller-setup',
+							phase: 'downloading',
+							message: 'Downloading controller app...',
+							progressPct: 0,
+						});
+
+						const apkBytes = await downloadApkWithProgress(
+							repoInfo.apkUrl,
+							(percent) => {
+								if (percent === 0 || percent === 100 || percent % 10 === 0) {
+									logDebug('APK download progress', `${percent}%`);
+								}
+								safeSetState((prev) =>
+									prev.kind === 'controller-setup' &&
+									prev.phase === 'downloading'
+										? {
+												...prev,
+												progressPct: clampPercent(percent),
+											}
+										: prev,
+								);
+							},
+						);
+
+						if (repoInfo.sha256Hex && repoInfo.sha256Hex.length > 0) {
+							const actualSha = await sha256Hex(apkBytes);
+							logDebug('APK sha256', { expected: repoInfo.sha256Hex, actual: actualSha });
+							if (!equalsHex(actualSha, repoInfo.sha256Hex)) {
+								throw new Error(
+									'Downloaded controller app failed integrity verification.',
+								);
+							}
+						}
+
+						safeSetState({
+							kind: 'controller-setup',
+							phase: 'installing',
+							message: 'Installing controller app...',
+							progressPct: 0,
+						});
+
+						await installControllerApk(adb, apkBytes, (percent) => {
+							if (percent === 0 || percent === 100 || percent % 10 === 0) {
+								logDebug('APK install progress', `${percent}%`);
+							}
+							safeSetState((prev) =>
+								prev.kind === 'controller-setup' &&
+								prev.phase === 'installing'
+									? {
+											...prev,
+											progressPct: clampPercent(percent),
+										}
+									: prev,
+							);
+						});
+
+						const afterVersion = await readInstalledControllerVersion(adb);
+						logDebug('Post-install controller version', afterVersion);
+						if (afterVersion == null) {
+							throw new Error(
+								'Controller app did not install correctly on the Quest.',
+							);
+						}
+					}
+				}
+			} catch (error) {
+				if (!cancelled) {
+					logDebug('Controller pipeline error', error);
+					safeSetState({
+						kind: 'error',
+						message: formatError(error),
+					});
+				}
+				return;
+			} finally {
+				await adb?.close().catch(() => undefined);
+			}
+
+			// At this point we know the controller app is present on the device.
+			if (!controllerLaunchUrl) {
+				logDebug('Controller installed; no launch URL provided');
+				safeSetState({
+					kind: 'controller-setup',
+					phase: 'ready',
+					message: 'Quest connected via USB. Controller app installed.',
+					progressPct: null,
+				});
+				return;
+			}
+
+			await launchControllerWithRetries(
+				manager,
+				ensureCredentialStore,
+				controllerLaunchUrl,
+				safeSetState,
+				controllerConnectedRef,
+				launchRetryTimeoutRef,
+			);
+		};
+
+		void run();
+
+		return () => {
+			cancelled = true;
+			if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
+				window.clearTimeout(launchRetryTimeoutRef.current);
+				launchRetryTimeoutRef.current = null;
+			}
+		};
+	}, [
+		enabled,
+		manager,
+		hasPermission,
+		state.kind,
+		controllerLaunchUrl,
+		ensureCredentialStore,
+	]);
+
+	// When the controller connects via SIGCF, mark setup as ready and cancel
+	// any pending launch retries.
+	useEffect(() => {
+		if (!controllerConnected) {
+			return;
+		}
+		if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
+			window.clearTimeout(launchRetryTimeoutRef.current);
+			launchRetryTimeoutRef.current = null;
+		}
+		setState((prev) =>
+			prev.kind === 'controller-setup'
+				? {
+						...prev,
+						phase: 'ready',
+						message: 'Controller connected.',
+						progressPct: null,
+					}
+				: prev,
+		);
+	}, [controllerConnected]);
 
 	const requestPermission = useCallback(async () => {
 		if (!enabled) {
@@ -233,7 +541,10 @@ export function useQuestUsbDetection(enabled: boolean): QuestUsbDetectionResult 
 				return;
 			}
 			setHasPermission(true);
-			setState({ kind: 'waiting', message: 'Looking for Quest over USB...' });
+			setState({
+				kind: 'waiting',
+				message: 'Looking for Quest over USB...',
+			});
 		} catch (error) {
 			if (isUserCancellation(error)) {
 				setState({ kind: 'needs-permission' });
@@ -284,6 +595,57 @@ async function probeQuestDevice(
 	}
 }
 
+async function openQuestAdb(
+	manager: AdbDaemonWebUsbDeviceManager,
+	credentialStore: AdbCredentialStore,
+): Promise<Adb> {
+	const devices = await manager.getDevices({ filters: QUEST_DEVICE_FILTERS });
+	const questDevice = devices.find(isQuestUsbDevice);
+	if (!questDevice) {
+		throw new Error('Quest is no longer connected over USB.');
+	}
+	const connection = await questDevice.connect();
+	const transport = await AdbDaemonTransport.authenticate({
+		serial: questDevice.serial || questDevice.name,
+		connection,
+		credentialStore,
+	});
+	return new Adb(transport);
+}
+
+type AdbShellTextResult = {
+	stdout: string;
+	stderr: string;
+	exitCode: number;
+};
+
+async function runShellText(
+	adb: Adb,
+	command: string | string[],
+): Promise<AdbShellTextResult> {
+	const adbAny = adb as any;
+	const subprocess = adbAny.subprocess;
+	const shellProtocol = subprocess?.shellProtocol;
+	if (!shellProtocol) {
+		throw new Error(
+			'This Quest device does not support the ADB shell protocol required for controller setup.',
+		);
+	}
+	const result = await shellProtocol.spawnWaitText(command);
+	return result as AdbShellTextResult;
+}
+
+async function safeRunShellIgnoreError(
+	adb: Adb,
+	command: string | string[],
+): Promise<void> {
+	try {
+		await runShellText(adb, command);
+	} catch {
+		// best-effort only
+	}
+}
+
 function isQuestProduct(value: {
 	model: string;
 	manufacturer: string;
@@ -293,11 +655,497 @@ function isQuestProduct(value: {
 		return true;
 	}
 	const manufacturerMatch = /(meta|oculus)/i;
-	return manufacturerMatch.test(value.manufacturer) || manufacturerMatch.test(value.brand);
+	return (
+		manufacturerMatch.test(value.manufacturer) ||
+		manufacturerMatch.test(value.brand)
+	);
 }
 
 function sanitize(value: string | null | undefined): string {
 	return (value ?? '').trim();
+}
+
+async function readDeviceAbis(adb: Adb): Promise<string[]> {
+	try {
+		const abilist = sanitize(
+			await adb.getProp('ro.product.cpu.abilist').catch(() => ''),
+		);
+		if (abilist) {
+			return abilist
+				.split(',')
+				.map((part) => part.trim())
+				.filter((part) => part.length > 0);
+		}
+		const abi = sanitize(await adb.getProp('ro.product.cpu.abi').catch(() => ''));
+		if (abi) {
+			return [abi];
+		}
+	} catch {
+		// ignore and fall back to empty list
+	}
+	return [];
+}
+
+async function readInstalledControllerVersion(adb: Adb): Promise<number | null> {
+	try {
+		const result = await runShellText(adb, [
+			'dumpsys',
+			'package',
+			CONTROLLER_PKG_NAME,
+		]);
+		const output = `${result.stdout}\n${result.stderr ?? ''}`;
+		if (
+			result.exitCode !== 0 ||
+			/Unable to find package/i.test(output)
+		) {
+			return null;
+		}
+		const match = output.match(/versionCode=(\d+)/);
+		if (match && match[1]) {
+			const parsed = Number.parseInt(match[1], 10);
+			if (Number.isFinite(parsed) && parsed > 0) {
+				return parsed;
+			}
+		}
+		return null;
+	} catch {
+		return null;
+	}
+}
+
+async function fetchControllerRepoInfo(
+	deviceAbis: string[],
+): Promise<ControllerRepoInfo | null> {
+	const index = await fetchRepoIndex();
+	const controller = index.packages[CONTROLLER_PKG_NAME];
+	if (!controller) {
+		return null;
+	}
+	const best = pickBestVersionForAbis(controller, deviceAbis);
+	if (!best || !best.fileName || !best.versionCode) {
+		return null;
+	}
+	const apkUrl = buildRepoFileUrl(index.repoAddress, best.fileName);
+	return {
+		versionCode: best.versionCode,
+		apkUrl,
+		sha256Hex: best.sha256Hex,
+	};
+}
+
+async function fetchRepoIndex(): Promise<RepoIndex> {
+	const url = REPO_BASE_URL + REPO_INDEX_PATH;
+	const response = await fetchWithTimeout(url, 20_000);
+	if (!response.ok) {
+		throw new Error(`Failed to load PortalVR repo index (${response.status})`);
+	}
+	const json = (await response.json()) as {
+		repo?: { address?: string };
+		packages?: Record<string, any>;
+	};
+
+	const repoAddressRaw =
+		typeof json.repo?.address === 'string' && json.repo.address.length > 0
+			? json.repo.address
+			: `${REPO_BASE_URL}/repo`;
+
+	const repoAddress = repoAddressRaw;
+
+	const packagesSource = json.packages ?? {};
+	const packages: Record<string, RepoPackage> = {};
+
+	for (const [pkgNameKey, pkgVal] of Object.entries(packagesSource)) {
+		const pkgObject = (pkgVal ?? {}) as {
+			packageName?: string;
+			versions?: Record<string, any>;
+		};
+		const packageName =
+			typeof pkgObject.packageName === 'string' && pkgObject.packageName.length > 0
+				? pkgObject.packageName
+				: pkgNameKey;
+		const versionsSource = pkgObject.versions ?? {};
+		const versions: RepoVersion[] = [];
+
+		for (const [shaKey, versionVal] of Object.entries(versionsSource)) {
+			const v = versionVal ?? {};
+			const file = v.file ?? {};
+			const manifest = v.manifest ?? {};
+			const fileName: string | undefined = file.name;
+			const versionCodeRaw = manifest.versionCode;
+			const versionCode =
+				typeof versionCodeRaw === 'number'
+					? versionCodeRaw
+					: typeof versionCodeRaw === 'string'
+						? Number.parseInt(versionCodeRaw, 10)
+						: 0;
+			const sha256HexValue: string | undefined = file.sha256 ?? shaKey;
+			const nativeCodeArray: unknown = manifest.nativecode;
+			const nativeAbis: string[] = Array.isArray(nativeCodeArray)
+				? nativeCodeArray
+						.map((item) => (typeof item === 'string' ? item.trim() : ''))
+						.filter((item) => item.length > 0)
+				: [];
+
+			if (!fileName || !Number.isFinite(versionCode) || versionCode <= 0) {
+				continue;
+			}
+			versions.push({
+				fileName,
+				versionCode,
+				sha256Hex:
+					typeof sha256HexValue === 'string'
+						? sha256HexValue.toLowerCase()
+						: '',
+				nativeAbis,
+			});
+		}
+
+		packages[packageName] = {
+			packageName,
+			versions,
+		};
+	}
+
+	return {
+		repoAddress,
+		packages,
+	};
+}
+
+function pickBestVersionForAbis(
+	pkg: RepoPackage,
+	deviceAbis: string[],
+): RepoVersion | null {
+	if (!pkg.versions.length) {
+		return null;
+	}
+	const abisLower = deviceAbis.map((abi) => abi.toLowerCase());
+	let best: RepoVersion | null = null;
+	for (const v of pkg.versions) {
+		if (!best) {
+			best = v;
+			continue;
+		}
+		if (v.versionCode <= best.versionCode) {
+			continue;
+		}
+		if (!v.nativeAbis.length) {
+			best = v;
+			continue;
+		}
+		const hasIntersection = v.nativeAbis.some((abi) =>
+			abisLower.includes(abi.toLowerCase()),
+		);
+		if (hasIntersection) {
+			best = v;
+		}
+	}
+	return best;
+}
+
+function buildRepoFileUrl(repoAddress: string, fileName: string): string {
+	try {
+		const base = repoAddress.endsWith('/')
+			? repoAddress
+			: `${repoAddress}/`;
+		const path = fileName.startsWith('/') ? fileName.substring(1) : fileName;
+		const url = new URL(path, base);
+		return url.toString();
+	} catch {
+		return `${repoAddress.replace(/\/$/, '')}/${fileName.replace(/^\//, '')}`;
+	}
+}
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+	if (typeof fetch === 'undefined') {
+		throw new Error('This browser does not support fetch for repo access.');
+	}
+	if (typeof AbortController === 'undefined') {
+		return fetch(url);
+	}
+	const controller = new AbortController();
+	const id = setTimeout(() => controller.abort(), timeoutMs);
+	try {
+		return await fetch(url, { signal: controller.signal });
+	} finally {
+		clearTimeout(id);
+	}
+}
+
+async function downloadApkWithProgress(
+	url: string,
+	onProgress?: (percent: number) => void,
+): Promise<Uint8Array> {
+	const response = await fetchWithTimeout(url, 60_000);
+	if (!response.ok || !response.body) {
+		throw new Error(`Failed to download controller app (HTTP ${response.status}).`);
+	}
+	const contentLengthHeader = response.headers.get('content-length');
+	const totalBytes =
+		contentLengthHeader != null ? Number.parseInt(contentLengthHeader, 10) : 0;
+
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let loaded = 0;
+
+	// Read the stream and report progress if total size is known.
+	// eslint-disable-next-line no-constant-condition
+	while (true) {
+		// eslint-disable-next-line no-await-in-loop
+		const { done, value } = await reader.read();
+		if (done) {
+			break;
+		}
+		if (!value) {
+			continue;
+		}
+		chunks.push(value);
+		loaded += value.length;
+		if (totalBytes > 0 && onProgress) {
+			const pct = Math.floor((loaded * 100) / totalBytes);
+			onProgress(clampPercent(pct));
+		}
+	}
+
+	const result = new Uint8Array(loaded);
+	let offset = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, offset);
+		offset += chunk.length;
+	}
+	if (onProgress) {
+		onProgress(100);
+	}
+	return result;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+	const crypto = getWebCrypto();
+	if (!crypto || !crypto.subtle) {
+		throw new Error('WebCrypto is not available to verify controller APK integrity.');
+	}
+	const copy = new Uint8Array(bytes.length);
+	copy.set(bytes);
+	const digest = await crypto.subtle.digest('SHA-256', copy.buffer);
+	const array = new Uint8Array(digest);
+	let hex = '';
+	for (let i = 0; i < array.length; i += 1) {
+		const byte = array[i]!;
+		const part = byte.toString(16);
+		if (part.length === 1) {
+			hex += `0${part}`;
+		} else {
+			hex += part;
+		}
+	}
+	return hex.toLowerCase();
+}
+
+function equalsHex(a: string, b: string): boolean {
+	return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function clampPercent(value: number | null | undefined): number {
+	if (value == null || Number.isNaN(value)) {
+		return 0;
+	}
+	if (value < 0) {
+		return 0;
+	}
+	if (value > 100) {
+		return 100;
+	}
+	return Math.floor(value);
+}
+
+async function installControllerApk(
+	adb: Adb,
+	apkBytes: Uint8Array,
+	onProgress?: (percent: number) => void,
+): Promise<void> {
+	const adbAny = adb as any;
+	const sync = await adbAny.sync();
+
+	const total = apkBytes.length;
+	const chunkSize = 64 * 1024;
+	let offset = 0;
+
+	if (typeof ReadableStream === 'undefined') {
+		throw new Error(
+			'This browser does not support ReadableStream required for controller install over USB.',
+		);
+	}
+
+	const fileStream = new ReadableStream<Uint8Array>({
+		pull(controller) {
+			if (offset >= total) {
+				controller.close();
+				if (onProgress) {
+					onProgress(100);
+				}
+				return;
+			}
+			const end = Math.min(total, offset + chunkSize);
+			const chunk = apkBytes.subarray(offset, end);
+			controller.enqueue(chunk);
+			offset = end;
+			if (onProgress) {
+				const pct = Math.floor((offset * 100) / total);
+				onProgress(clampPercent(pct));
+			}
+		},
+	});
+
+	await sync.write({
+		filename: CONTROLLER_APK_REMOTE_PATH,
+		// Tango's AdbSync typings use a different ReadableStream type; cast through `never`.
+		file: fileStream as never,
+	}).catch((error: unknown) => {
+		logDebug('APK push failed', error);
+		throw error;
+	});
+
+	const result = await runShellText(adb, [
+		'pm',
+		'install',
+		'-d',
+		'-r',
+		CONTROLLER_APK_REMOTE_PATH,
+	]).catch((error: unknown) => {
+		logDebug('pm install failed', error);
+		throw error;
+	});
+
+	if (result.exitCode !== 0 || !/Success/i.test(result.stdout)) {
+		throw new Error(
+			`Controller app install failed: ${
+				result.stderr || result.stdout || `exit code ${result.exitCode}`
+			}`,
+		);
+	}
+	logDebug('pm install success');
+
+	await safeRunShellIgnoreError(adb, ['rm', '-f', CONTROLLER_APK_REMOTE_PATH]);
+}
+
+async function launchControllerWithRetries(
+	manager: AdbDaemonWebUsbDeviceManager,
+	getCredentialStore: () => AdbCredentialStore,
+	controllerLaunchUrl: string,
+	setState: (
+		value:
+			| QuestUsbDetectionState
+			| ((prev: QuestUsbDetectionState) => QuestUsbDetectionState),
+	) => void,
+	controllerConnectedRef: { current: boolean },
+	launchRetryTimeoutRef: { current: number | null },
+): Promise<void> {
+	let attempt = 0;
+	logDebug('Launch controller with retries', { controllerLaunchUrl });
+
+	const attemptLaunch = async (): Promise<void> => {
+		if (controllerConnectedRef.current) {
+			setState((prev) =>
+				prev.kind === 'controller-setup'
+					? {
+							...prev,
+							phase: 'ready',
+							message: 'Controller connected.',
+							progressPct: null,
+						}
+					: prev,
+			);
+			return;
+		}
+
+		if (attempt >= MAX_CONTROLLER_LAUNCH_ATTEMPTS) {
+			// Give up; the user can still open the app manually.
+			setState((prev) =>
+				prev.kind === 'controller-setup'
+					? {
+							...prev,
+							phase: 'ready',
+							message:
+								prev.message ??
+								'Controller app launched. Waiting for connection...',
+							progressPct: null,
+						}
+					: prev,
+			);
+			return;
+		}
+
+		attempt += 1;
+		logDebug('Launching controller attempt', attempt);
+
+		setState({
+			kind: 'controller-setup',
+			phase: 'launching',
+			message: 'Launching controller...',
+			progressPct: null,
+			attempts: attempt,
+		});
+
+		let adb: Adb | null = null;
+		try {
+			adb = await openQuestAdb(manager, getCredentialStore());
+			await safeRunShellIgnoreError(adb, [
+				'am',
+				'force-stop',
+				CONTROLLER_PKG_NAME,
+			]);
+			logDebug('Sending launch intent', {
+				component: `${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity`,
+				action: 'android.intent.action.VIEW',
+				data: controllerLaunchUrl,
+			});
+			await runShellText(adb, [
+				'am',
+				'start',
+				'-n',
+				`${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity`,
+				'-a',
+				'android.intent.action.VIEW',
+				'-d',
+				controllerLaunchUrl,
+			]);
+			logDebug('Launch intent sent');
+		} catch {
+			logDebug('Launch attempt failed');
+			// Ignore individual launch errors; we'll retry below.
+		} finally {
+			await adb?.close().catch(() => undefined);
+		}
+
+		if (controllerConnectedRef.current) {
+			setState((prev) =>
+				prev.kind === 'controller-setup'
+					? {
+							...prev,
+							phase: 'ready',
+							message: 'Controller connected.',
+							progressPct: null,
+						}
+					: prev,
+			);
+			return;
+		}
+
+		if (typeof window !== 'undefined') {
+			if (launchRetryTimeoutRef.current != null) {
+				window.clearTimeout(launchRetryTimeoutRef.current);
+			}
+			launchRetryTimeoutRef.current = window.setTimeout(() => {
+				void attemptLaunch();
+			}, CONTROLLER_LAUNCH_RETRY_DELAY_MS);
+			logDebug('Scheduled controller relaunch retry', {
+				attempt,
+				delayMs: CONTROLLER_LAUNCH_RETRY_DELAY_MS,
+			});
+		}
+	};
+
+	await attemptLaunch();
 }
 
 function isUserCancellation(error: unknown): boolean {
