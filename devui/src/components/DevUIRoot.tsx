@@ -62,6 +62,16 @@ export function DevUIRoot({
 	const [isActiveSearch, setIsActiveSearch] = useState(true);
 	const [isSigcfConnected, setIsSigcfConnected] = useState(false);
 
+	const lastInteractionMode = (xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
+	const isOpenxrQuest = lastInteractionMode === 0x10;
+
+	const handleFirstControllerLaunch = useCallback(() => {
+		xrDevice.forceControllerSearchNow();
+		setIsActiveSearch(true);
+		setNextSearchAttemptAtMs(null);
+		setSearchCountdownSeconds(null);
+	}, [xrDevice]);
+
 	const scrimRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
@@ -318,6 +328,8 @@ export function DevUIRoot({
 					showSearchButton ? handleSearchNow : undefined
 				}
 				controllerConnected={isSigcfConnected}
+				isOpenxrQuest={isOpenxrQuest}
+				onFirstControllerLaunch={handleFirstControllerLaunch}
 			/>
 
 			<div
@@ -425,6 +437,7 @@ export function DevUIRoot({
 						>
 							Close
 						</button>
+
 					</div>
 				)}
 			</div>

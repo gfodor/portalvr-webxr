@@ -32,6 +32,8 @@ const REPO_BASE_URL = 'https://repo.portalvr.io';
 const REPO_INDEX_PATH = '/index-v2.json';
 
 const LOG_PREFIX = '[QuestUSB]';
+export const ADB_BUSY_MESSAGE =
+	"Another app is connected to your Quest. Try closing Unreal, Unity, Android Studio, SideQuest, or run 'adb kill-server' from the command line.";
 
 function logDebug(...args: unknown[]): void {
 	// Keep lightweight runtime logging to help diagnose WebUSB flakiness
@@ -111,6 +113,7 @@ export function useQuestUsbDetection(
 	enabled: boolean,
 	controllerLaunchUrl?: string,
 	controllerConnected?: boolean,
+	onFirstLaunch?: () => void,
 ): QuestUsbDetectionResult {
 	const manager = useMemo(() => AdbDaemonWebUsbDeviceManager.BROWSER, []);
 	const [state, setState] = useState<QuestUsbDetectionState>({ kind: 'idle' });
@@ -122,6 +125,12 @@ export function useQuestUsbDetection(
 	const enabledRef = useRef(enabled);
 	const controllerConnectedRef = useRef(Boolean(controllerConnected));
 	const unmountedRef = useRef(false);
+	const firstLaunchFiredRef = useRef(false);
+	const onFirstLaunchRef = useRef(onFirstLaunch);
+
+	useEffect(() => {
+		onFirstLaunchRef.current = onFirstLaunch;
+	}, [onFirstLaunch]);
 
 	useEffect(() => {
 		enabledRef.current = enabled;
@@ -157,6 +166,7 @@ export function useQuestUsbDetection(
 			setHasPermission(false);
 			questDetectedRef.current = false;
 			pipelineStartedRef.current = false;
+			firstLaunchFiredRef.current = false;
 			if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
 				window.clearTimeout(launchRetryTimeoutRef.current);
 				launchRetryTimeoutRef.current = null;
@@ -482,6 +492,8 @@ export function useQuestUsbDetection(
 				safeSetState,
 				controllerConnectedRef,
 				launchRetryTimeoutRef,
+				onFirstLaunchRef,
+				firstLaunchFiredRef,
 			);
 		};
 
@@ -1042,11 +1054,17 @@ async function launchControllerWithRetries(
 	) => void,
 	controllerConnectedRef: { current: boolean },
 	launchRetryTimeoutRef: { current: number | null },
+	onFirstLaunchRef?: { current: (() => void) | undefined },
+	firstLaunchFiredRef?: { current: boolean },
 ): Promise<void> {
 	let attempt = 0;
 	logDebug('Launch controller with retries', { controllerLaunchUrl });
 
 	const attemptLaunch = async (): Promise<void> => {
+		if (firstLaunchFiredRef && !firstLaunchFiredRef.current) {
+			firstLaunchFiredRef.current = true;
+			onFirstLaunchRef?.current?.();
+		}
 		if (controllerConnectedRef.current) {
 			setState((prev) =>
 				prev.kind === 'controller-setup'
@@ -1153,7 +1171,7 @@ function isUserCancellation(error: unknown): boolean {
 
 function formatError(error: unknown): string {
 	if (error instanceof AdbDaemonWebUsbDevice.DeviceBusyError) {
-		return 'USB device is busy. Close any other adb tools and try again.';
+		return ADB_BUSY_MESSAGE;
 	}
 	if (error instanceof Error) {
 		return error.message || 'Unexpected error while talking to Quest.';

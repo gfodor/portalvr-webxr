@@ -12,7 +12,7 @@
 	],
 	"scripts": {
 		"prebuild": "node -p \"'export const VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
-		"build": "node ./scripts/generate-assets.mjs && tsc && rollup -c"
+		"build": "node ./scripts/generate-assets.mjs && tsc && node ./scripts/copy-static-assets.mjs && rollup -c"
 	},
 	"repository": {
 		"type": "git",

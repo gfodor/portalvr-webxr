@@ -255,6 +255,7 @@ ${buildFontFaceDeclaration()}
   gap: var(--portal-spacing-md);
 }
 
+
 .portal-help-text {
   font-size: 0.875rem;
   color: var(--portal-color-text-secondary);
@@ -296,6 +297,36 @@ ${buildFontFaceDeclaration()}
   align-items: center;
   gap: var(--portal-spacing-xs);
   max-width: 280px;
+}
+
+.portal-qr-pill__usb-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--portal-spacing-sm);
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.portal-qr-pill__controller-icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  color: #dfe8ff;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
+  align-self: center;
+}
+
+.portal-qr-pill__phone-row {
+  display: flex;
+  align-items: center;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-qr-pill__phone-icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
 }
 
 .portal-qr-pill__subtitle-line {
@@ -377,6 +408,29 @@ ${buildFontFaceDeclaration()}
 
 .portal-qr-pill__usb-status--error {
   color: #ff9b9b;
+}
+
+.portal-qr-pill__error-callout {
+  background: #2f2f2f;
+  color: #fff;
+  padding: var(--portal-spacing-sm) var(--portal-spacing-md);
+  border-radius: var(--portal-radius-card);
+  text-align: center;
+  line-height: 1.35;
+}
+
+.portal-qr-pill__permission-callout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-qr-pill__permission-img {
+  width: 240px;
+  max-width: 100%;
+  border-radius: var(--portal-radius-card);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 .portal-qr-pill__search-button {

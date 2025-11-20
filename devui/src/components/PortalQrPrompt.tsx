@@ -3,8 +3,14 @@ import qrcodeGenerator from 'qrcode-generator';
 import { ASSET_SWIPE_CALIBRATION } from '../generated/assets.js';
 import {
 	useQuestUsbDetection,
+	ADB_BUSY_MESSAGE,
 	type QuestUsbDetectionState,
 } from '../hooks/useQuestUsbDetection.js';
+import {
+	QUEST_USB_PERMISSION_DATA_URI,
+	VR_CONTROLLERS_DATA_URI,
+	PHONE_CONTROLLER_DATA_URI,
+} from '../assets/embedded.js';
 
 export type PortalQrPromptProps = {
 	pairingUrl: string;
@@ -19,6 +25,8 @@ export type PortalQrPromptProps = {
 	isSearchingActively?: boolean;
 	onSearchNow?: () => void;
 	controllerConnected?: boolean;
+	isOpenxrQuest?: boolean;
+	onFirstControllerLaunch?: () => void;
 };
 
 const QR_SIZE = 384;
@@ -34,9 +42,34 @@ export function PortalQrPrompt({
 	isSearchingActively = false,
 	onSearchNow,
 	controllerConnected = false,
+	isOpenxrQuest = false,
+	onFirstControllerLaunch,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
-	const questUsb = useQuestUsbDetection(status === 'qr', pairingUrl, controllerConnected);
+	const questUsb = useQuestUsbDetection(
+		status === 'qr',
+		pairingUrl,
+		controllerConnected,
+		onFirstControllerLaunch,
+	);
+	const questDetectedViaUsb =
+		questUsb.state.kind === 'quest-detected' ||
+		questUsb.state.kind === 'controller-setup';
+	const waitingQuestDetected =
+		questUsb.state.kind === 'waiting' &&
+		typeof questUsb.state.message === 'string' &&
+		questUsb.state.message.toLowerCase().includes('quest detected over usb');
+	const showPhoneSection = !(
+		questDetectedViaUsb ||
+		waitingQuestDetected ||
+		questUsb.state.kind === 'controller-setup' ||
+		questUsb.state.kind === 'error'
+	);
+
+	const showUsbIconColumn =
+		questUsb.state.kind === 'needs-permission' || questUsb.state.kind === 'idle';
+
+	const showQrVisuals = status === 'qr' && (showPhoneSection || questUsb.state.kind === 'needs-permission');
 
 	useEffect(() => {
 		if (status !== 'qr') {
@@ -102,7 +135,9 @@ export function PortalQrPrompt({
 		status === 'qr'
 			? `Scan to pair ${deviceName}`
 			: status === 'tracking-issues'
-				? 'Tracking issues, hold the controller still and ensure camera is clear.'
+				? isOpenxrQuest
+					? 'Tracking or connection issue. If it persists, check the headset for notifications.'
+					: 'Tracking issues, hold the controller still and ensure camera is clear.'
 				: swipeVariant === 'recenter'
 					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
 					: swipeVariant === 'trackpad'
@@ -115,10 +150,12 @@ export function PortalQrPrompt({
 		? 'portal-qr-pill portal-qr-pill--swipe'
 		: 'portal-qr-pill';
 
+	const showFooter = status === 'qr';
+
 	return (
 		<aside className={containerClassName} role="status" aria-live="polite">
-			{showSwipeVideo && (
-				<video
+				{showSwipeVideo && (
+					<video
 					className="portal-qr-pill__swipe-video"
 					src={ASSET_SWIPE_CALIBRATION}
 					width={75}
@@ -134,11 +171,13 @@ export function PortalQrPrompt({
 					<QuestUsbInstructions
 						questState={questUsb.state}
 						onRequestPermission={questUsb.requestPermission}
-					/>
+						showPhoneSection={showPhoneSection}
+						showUsbIconColumn={showUsbIconColumn}
+				/>
 				) : (
 					<span className="portal-qr-pill__title">{title}</span>
 				)}
-				{status === 'qr' && (
+				{showQrVisuals && (
 					<canvas
 						ref={canvasRef}
 						className="portal-qr-pill__canvas"
@@ -147,7 +186,7 @@ export function PortalQrPrompt({
 						aria-label={`PortalVR pairing QR code for ${deviceName}`}
 					/>
 				)}
-					{status === 'qr' && (
+					{showFooter && (
 						<div className="portal-qr-pill__footer">
 							<span className="portal-qr-pill__search-status">{footerLabel}</span>
 							{!isSearchingActively && onSearchNow && clampedCountdown != null && (
@@ -161,7 +200,7 @@ export function PortalQrPrompt({
 							)}
 						</div>
 					)}
-					<span className="portal-qr-pill__code">{deviceId}</span>
+					{showQrVisuals && <span className="portal-qr-pill__code">{deviceId}</span>}
 				</div>
 			</aside>
 	);
@@ -170,15 +209,23 @@ export function PortalQrPrompt({
 type QuestUsbInstructionsProps = {
 	questState: QuestUsbDetectionState;
 	onRequestPermission: () => Promise<void>;
+	showPhoneSection: boolean;
+	showUsbIconColumn: boolean;
 };
 
 function QuestUsbInstructions({
 	questState,
 	onRequestPermission,
+	showPhoneSection,
+	showUsbIconColumn,
 }: QuestUsbInstructionsProps): JSX.Element {
-	const showButton =
-		questState.kind === 'needs-permission' ||
-		questState.kind === 'requesting-permission';
+	const showButton = questState.kind === 'needs-permission';
+
+	const isWaitingForPermission = questState.kind === 'requesting-permission';
+	const showUsbApprovalPrompt =
+		questState.kind === 'waiting' &&
+		typeof questState.message === 'string' &&
+		questState.message.toLowerCase().includes('quest detected over usb');
 
 	const handleRequest = () => {
 		void onRequestPermission();
@@ -202,24 +249,54 @@ function QuestUsbInstructions({
 			: null;
 
 	return (
-		<div className="portal-qr-pill__usb-block">
-			<span className="portal-qr-pill__subtitle-line">
-				Connect a Meta Quest in developer mode to use tracked controllers.
-			</span>
-			{showButton ? (
-				<button
+		<div className="portal-qr-pill__usb-row">
+			{showUsbIconColumn && (
+				<img
+					src={VR_CONTROLLERS_DATA_URI}
+					alt="VR controller icon"
+					className="portal-qr-pill__controller-icon"
+				/>
+			)}
+			<div className="portal-qr-pill__usb-block">
+			{showUsbIconColumn && (
+				<span className="portal-qr-pill__subtitle-line">
+					Connect a Quest in{'\u00a0'}
+					<a
+						href="https://www.youtube.com/watch?v=kRpZGBhWxis"
+						target="_blank"
+						rel="noreferrer"
+						className="portal-link"
+					>
+						developer mode
+					</a>{'\u00a0'}
+					to use tracked controllers.
+				</span>
+			)}
+				{showButton ? (
+					<button
 					type="button"
 					className="portal-qr-pill__usb-button"
 					onClick={handleRequest}
-					disabled={questState.kind === 'requesting-permission'}
+					disabled={isWaitingForPermission}
 				>
-					{questState.kind === 'requesting-permission'
-						? 'Waiting for USB approval...'
-						: 'Connect via USB'}
+					{isWaitingForPermission ? 'Waiting for USB approval...' : 'Connect via USB'}
 				</button>
-			) : (
-				<>
-					<span className={statusClassName}>{statusLabel}</span>
+				) : (
+					<>
+					{showUsbApprovalPrompt ? (
+						<div className="portal-qr-pill__error-callout portal-qr-pill__permission-callout">
+							<span>Put on your headset and choose &ldquo;Always allow from this computer&rdquo;.</span>
+							<img
+								src={QUEST_USB_PERMISSION_DATA_URI}
+								alt="Quest USB permission prompt showing the 'Always allow from this computer' checkbox"
+									className="portal-qr-pill__permission-img"
+								/>
+							</div>
+						) : questState.kind === 'error' && statusLabel === ADB_BUSY_MESSAGE ? (
+							<div className="portal-qr-pill__error-callout">{ADB_BUSY_MESSAGE}</div>
+						) : (
+							<span className={statusClassName}>{statusLabel}</span>
+						)}
 					{showProgressBar && progressPct != null && (
 						<div
 							className="portal-qr-pill__progress"
@@ -236,10 +313,24 @@ function QuestUsbInstructions({
 					)}
 				</>
 			)}
-			<span className="portal-qr-pill__separator" aria-hidden="true">
-				–or–
-			</span>
-			<span className="portal-qr-pill__subtitle-line">Connect to your phone:</span>
+			{showPhoneSection && (
+				<>
+					<span className="portal-qr-pill__separator" aria-hidden="true">
+						–or–
+					</span>
+					<div className="portal-qr-pill__phone-row">
+						<img
+							src={PHONE_CONTROLLER_DATA_URI}
+							alt="Phone controller icon"
+							className="portal-qr-pill__phone-icon"
+						/>
+						<span className="portal-qr-pill__subtitle-line">
+							Use your phone as a controller:
+						</span>
+					</div>
+				</>
+			)}
+		</div>
 		</div>
 	);
 }
@@ -248,6 +339,8 @@ function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 	switch (state.kind) {
 		case 'quest-detected':
 			return 'Quest connected via USB. Preparing controller app...';
+		case 'requesting-permission':
+			return 'Waiting for USB approval...';
 		case 'controller-setup': {
 			switch (state.phase) {
 				case 'checking':
