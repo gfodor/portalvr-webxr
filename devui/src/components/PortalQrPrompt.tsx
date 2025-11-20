@@ -52,6 +52,9 @@ export function PortalQrPrompt({
 		controllerConnected,
 		onFirstControllerLaunch,
 	);
+	const handleManualRetry = () => {
+		questUsb.restartLaunchLoop();
+	};
 	const questDetectedViaUsb =
 		questUsb.state.kind === 'quest-detected' ||
 		questUsb.state.kind === 'controller-setup';
@@ -171,6 +174,7 @@ export function PortalQrPrompt({
 					<QuestUsbInstructions
 						questState={questUsb.state}
 						onRequestPermission={questUsb.requestPermission}
+						onManualRetry={handleManualRetry}
 						showPhoneSection={showPhoneSection}
 						showUsbIconColumn={showUsbIconColumn}
 				/>
@@ -211,6 +215,7 @@ type QuestUsbInstructionsProps = {
 	onRequestPermission: () => Promise<void>;
 	showPhoneSection: boolean;
 	showUsbIconColumn: boolean;
+	onManualRetry: () => void;
 };
 
 function QuestUsbInstructions({
@@ -218,6 +223,7 @@ function QuestUsbInstructions({
 	onRequestPermission,
 	showPhoneSection,
 	showUsbIconColumn,
+	onManualRetry,
 }: QuestUsbInstructionsProps): JSX.Element {
 	const showButton = questState.kind === 'needs-permission';
 
@@ -309,6 +315,20 @@ function QuestUsbInstructions({
 								className="portal-qr-pill__progress-fill"
 								style={{ width: `${progressPct}%` }}
 							/>
+						</div>
+						)}
+					{questState.kind === 'controller-setup' && questState.showRetryPrompt && (
+						<div className="portal-qr-pill__retry-callout">
+							<span>
+								Please check the headset for any notifications or popups and ensure it is connected to Wifi, then click Retry.
+							</span>
+							<button
+								type="button"
+								className="portal-qr-pill__usb-button portal-qr-pill__usb-button--secondary"
+								onClick={onManualRetry}
+							>
+								Retry
+							</button>
 						</div>
 					)}
 				</>

@@ -63,6 +63,7 @@ type ControllerSetupState = {
 	message?: string;
 	progressPct: number | null;
 	attempts?: number;
+	showRetryPrompt?: boolean;
 };
 
 type RepoVersion = {
@@ -102,6 +103,7 @@ export type QuestUsbDetectionResult = {
 	state: QuestUsbDetectionState;
 	requestPermission: () => Promise<void>;
 	hasPermission: boolean;
+	restartLaunchLoop: () => void;
 };
 
 type QuestInfo = {
@@ -122,6 +124,7 @@ export function useQuestUsbDetection(
 	const credentialStoreRef = useRef<QuestCredentialStore | null>(null);
 	const pipelineStartedRef = useRef(false);
 	const launchRetryTimeoutRef = useRef<number | null>(null);
+	const exhaustedPromptTimeoutRef = useRef<number | null>(null);
 	const enabledRef = useRef(enabled);
 	const controllerConnectedRef = useRef(Boolean(controllerConnected));
 	const unmountedRef = useRef(false);
@@ -142,10 +145,24 @@ export function useQuestUsbDetection(
 			window.clearTimeout(launchRetryTimeoutRef.current);
 			launchRetryTimeoutRef.current = null;
 		}
+		if (typeof window !== 'undefined' && exhaustedPromptTimeoutRef.current != null) {
+			window.clearTimeout(exhaustedPromptTimeoutRef.current);
+			exhaustedPromptTimeoutRef.current = null;
+		}
 	}, []);
 
 	useEffect(() => {
 		controllerConnectedRef.current = Boolean(controllerConnected);
+		if (controllerConnected && typeof window !== 'undefined') {
+			if (launchRetryTimeoutRef.current != null) {
+				window.clearTimeout(launchRetryTimeoutRef.current);
+				launchRetryTimeoutRef.current = null;
+			}
+			if (exhaustedPromptTimeoutRef.current != null) {
+				window.clearTimeout(exhaustedPromptTimeoutRef.current);
+				exhaustedPromptTimeoutRef.current = null;
+			}
+		}
 	}, [controllerConnected]);
 
 	useEffect(() => {
@@ -160,6 +177,37 @@ export function useQuestUsbDetection(
 		return credentialStoreRef.current;
 	}, []);
 
+	const restartLaunchLoop = useCallback(() => {
+		if (unmountedRef.current || !enabledRef.current) {
+			return;
+		}
+		if (!manager || !hasPermission || !controllerLaunchUrl) {
+			return;
+		}
+		if (typeof window !== 'undefined') {
+			if (launchRetryTimeoutRef.current != null) {
+				window.clearTimeout(launchRetryTimeoutRef.current);
+				launchRetryTimeoutRef.current = null;
+			}
+			if (exhaustedPromptTimeoutRef.current != null) {
+				window.clearTimeout(exhaustedPromptTimeoutRef.current);
+				exhaustedPromptTimeoutRef.current = null;
+			}
+		}
+		controllerConnectedRef.current = Boolean(controllerConnectedRef.current);
+		void launchControllerWithRetries(
+			manager,
+			ensureCredentialStore,
+			controllerLaunchUrl,
+			setState,
+			controllerConnectedRef,
+			launchRetryTimeoutRef,
+			exhaustedPromptTimeoutRef,
+			onFirstLaunchRef,
+			firstLaunchFiredRef,
+		);
+	}, [manager, hasPermission, controllerLaunchUrl, ensureCredentialStore]);
+
 	useEffect(() => {
 		if (!enabled) {
 			setState({ kind: 'idle' });
@@ -170,6 +218,10 @@ export function useQuestUsbDetection(
 			if (typeof window !== 'undefined' && launchRetryTimeoutRef.current != null) {
 				window.clearTimeout(launchRetryTimeoutRef.current);
 				launchRetryTimeoutRef.current = null;
+			}
+			if (typeof window !== 'undefined' && exhaustedPromptTimeoutRef.current != null) {
+				window.clearTimeout(exhaustedPromptTimeoutRef.current);
+				exhaustedPromptTimeoutRef.current = null;
 			}
 			return;
 		}
@@ -483,18 +535,9 @@ export function useQuestUsbDetection(
 					progressPct: null,
 				});
 				return;
-			}
+		}
 
-			await launchControllerWithRetries(
-				manager,
-				ensureCredentialStore,
-				controllerLaunchUrl,
-				safeSetState,
-				controllerConnectedRef,
-				launchRetryTimeoutRef,
-				onFirstLaunchRef,
-				firstLaunchFiredRef,
-			);
+			restartLaunchLoop();
 		};
 
 		void run();
@@ -505,6 +548,7 @@ export function useQuestUsbDetection(
 		state.kind,
 		controllerLaunchUrl,
 		ensureCredentialStore,
+		restartLaunchLoop,
 	]);
 
 	// When the controller connects via SIGCF, mark setup as ready and cancel
@@ -573,6 +617,7 @@ export function useQuestUsbDetection(
 		state,
 		hasPermission,
 		requestPermission,
+		restartLaunchLoop,
 	};
 }
 
@@ -1054,6 +1099,7 @@ async function launchControllerWithRetries(
 	) => void,
 	controllerConnectedRef: { current: boolean },
 	launchRetryTimeoutRef: { current: number | null },
+	exhaustedPromptTimeoutRef: { current: number | null },
 	onFirstLaunchRef?: { current: (() => void) | undefined },
 	firstLaunchFiredRef?: { current: boolean },
 ): Promise<void> {
@@ -1081,6 +1127,10 @@ async function launchControllerWithRetries(
 
 		if (attempt >= MAX_CONTROLLER_LAUNCH_ATTEMPTS) {
 			// Give up; the user can still open the app manually.
+			if (typeof window !== 'undefined' && exhaustedPromptTimeoutRef.current != null) {
+				window.clearTimeout(exhaustedPromptTimeoutRef.current);
+				exhaustedPromptTimeoutRef.current = null;
+			}
 			setState((prev) =>
 				prev.kind === 'controller-setup'
 					? {
@@ -1090,9 +1140,22 @@ async function launchControllerWithRetries(
 								prev.message ??
 								'Controller app launched. Waiting for connection...',
 							progressPct: null,
+							showRetryPrompt: false,
 						}
 					: prev,
 			);
+			if (typeof window !== 'undefined') {
+				exhaustedPromptTimeoutRef.current = window.setTimeout(() => {
+					if (controllerConnectedRef.current) {
+						return;
+					}
+					setState((prev) =>
+						prev.kind === 'controller-setup'
+							? { ...prev, showRetryPrompt: true }
+							: prev,
+					);
+				}, 5000);
+			}
 			return;
 		}
 
@@ -1105,6 +1168,7 @@ async function launchControllerWithRetries(
 			message: `Launching controller (${attempt}/${MAX_CONTROLLER_LAUNCH_ATTEMPTS})...`,
 			progressPct: null,
 			attempts: attempt,
+			showRetryPrompt: false,
 		});
 
 		let adb: Adb | null = null;
@@ -1151,6 +1215,10 @@ async function launchControllerWithRetries(
 		if (typeof window !== 'undefined') {
 			if (launchRetryTimeoutRef.current != null) {
 				window.clearTimeout(launchRetryTimeoutRef.current);
+			}
+			if (exhaustedPromptTimeoutRef.current != null) {
+				window.clearTimeout(exhaustedPromptTimeoutRef.current);
+				exhaustedPromptTimeoutRef.current = null;
 			}
 			launchRetryTimeoutRef.current = window.setTimeout(() => {
 				void attemptLaunch();

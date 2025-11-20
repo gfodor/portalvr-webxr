@@ -381,6 +381,11 @@ ${buildFontFaceDeclaration()}
   transition: opacity 120ms ease, transform 120ms ease;
 }
 
+.portal-qr-pill__usb-button--secondary {
+  background: #4c4f57;
+  color: #ffffff;
+}
+
 .portal-qr-pill__usb-button:hover:not(:disabled) {
   opacity: 0.85;
   transform: translateY(-1px);
@@ -413,6 +418,18 @@ ${buildFontFaceDeclaration()}
 .portal-qr-pill__usb-status--unsupported {
   color: #9aa0ad;
   font-size: 0.75rem;
+}
+
+.portal-qr-pill__retry-callout {
+  margin-top: var(--portal-spacing-sm);
+  color: #cfd4dc;
+  font-size: 0.8rem;
+  display: flex;
+  gap: var(--portal-spacing-sm);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex-wrap: wrap;
 }
 
 .portal-qr-pill__error-callout {
