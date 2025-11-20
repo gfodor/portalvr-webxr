@@ -1455,7 +1455,9 @@ export class XRDevice {
 	this.isControllerConnected = connected;
     this[P_DEVICE].devui?.setControllerConnected(connected);
 
-    if (!connected) {
+	if (connected) {
+		this.tryAutoAcquirePointerLock();
+	} else {
 		// Reset per-connection state
 		this.hasSeenOrientationResetOnce = false;
       this.portalControllerRuntime?.handleDisconnect();
@@ -2540,6 +2542,11 @@ export class XRDevice {
       return;
     }
     this.canvasContainerWasFullscreen = isFullscreen;
+
+	if (isFullscreen) {
+		this.tryAutoAcquirePointerLock();
+	}
+
     if (typeof window === 'undefined') {
       this.dispatchResizeForCanvasViewport();
       return;
@@ -2785,7 +2792,7 @@ export class XRDevice {
 
     this.pointerLookListenersAttached = true;
     this.pointerLookLastFlushMs = getNowMs();
-    this.requestPointerLockForCanvas();
+	// Do not auto-lock here; wait for controller connect/fullscreen or user click.
   }
 
   private disablePointerLookControlsForSession(): void {
@@ -2858,6 +2865,26 @@ export class XRDevice {
       // ignore legacy failures
     }
   }
+
+	private tryAutoAcquirePointerLock(): void {
+		if (this.pointerLockActive) {
+			return;
+		}
+		const session = this.activeSession;
+		const isImmersive = session && session[P_SESSION].mode === 'immersive-vr';
+		if (!isImmersive || !this.pointerLookListenersAttached || !this.portalPoseCamera) {
+			return;
+		}
+		if (!this.isControllerConnected) {
+			return;
+		}
+		const containerIsFullscreen = this.getActiveFullscreenElement() === this[P_DEVICE].canvasContainer;
+		if (!containerIsFullscreen) {
+			return;
+		}
+
+		this.requestPointerLockForCanvas();
+	}
 
   private syncPointerLockState(): void {
     if (typeof document === 'undefined') {

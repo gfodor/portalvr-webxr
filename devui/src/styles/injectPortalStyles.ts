@@ -410,6 +410,11 @@ ${buildFontFaceDeclaration()}
   color: #ff9b9b;
 }
 
+.portal-qr-pill__usb-status--unsupported {
+  color: #9aa0ad;
+  font-size: 0.75rem;
+}
+
 .portal-qr-pill__error-callout {
   background: #2f2f2f;
   color: #fff;

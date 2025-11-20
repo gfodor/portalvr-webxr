@@ -366,7 +366,9 @@ function buildUsbStatusLabel(state: QuestUsbDetectionState): string {
 		case 'error':
 			return state.message;
 		case 'unsupported':
-			return 'Use Chrome or Edge over HTTPS to connect via USB.';
+			return state.reason === 'no-webusb'
+				? 'USB connectivity unsupported, try a Chrome, Edge, or Brave'
+				: 'Use Chrome or Edge over HTTPS to connect via USB.';
 		case 'waiting':
 			return state.message ?? 'Looking for Quest over USB...';
 		case 'idle':
@@ -386,6 +388,9 @@ function buildUsbStatusClassName(state: QuestUsbDetectionState): string {
 	}
 	if (state.kind === 'error') {
 		return `${base} portal-qr-pill__usb-status--error`;
+	}
+	if (state.kind === 'unsupported') {
+		return `${base} portal-qr-pill__usb-status--unsupported`;
 	}
 	return base;
 }
