@@ -1,7 +1,7 @@
 import type { Vec3Like } from '../types/geometry.js';
 
-const Y_OFFSET_MIN = -1.5;
-const Y_OFFSET_MAX = 1.5;
+export const Y_OFFSET_MIN = 0.0;
+export const Y_OFFSET_MAX = 1.5;
 
 const TAU_OFFSET_SECONDS = 0.05;
 const TAU_PITCH_SECONDS = 0.05;

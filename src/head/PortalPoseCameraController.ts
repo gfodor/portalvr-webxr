@@ -1,6 +1,6 @@
 import type { XRDevice } from '../device/XRDevice.js';
 import type { XRFrame } from '../frameloop/XRFrame.js';
-import { CameraOffsetController } from './CameraOffsetController.js';
+import { CameraOffsetController, Y_OFFSET_MIN, Y_OFFSET_MAX } from './CameraOffsetController.js';
 import { PoseSmoother, type PoseArray } from './PoseSmoother.js';
 import type { PortalPoseModuleInstance } from '../wasm/portal-pose/portal_pose.js';
 import {
@@ -17,9 +17,6 @@ const VEC3_COMPONENTS = 3;
 const QUAT_SIZE_BYTES = QUAT_COMPONENTS * FLOAT_SIZE_BYTES; // 16
 const VEC3_SIZE_BYTES = VEC3_COMPONENTS * FLOAT_SIZE_BYTES; // 12
 const POSE_SIZE_BYTES = QUAT_SIZE_BYTES + VEC3_SIZE_BYTES; // 28 (float-aligned)
-
-const Y_OFFSET_MIN = -1.5;
-const Y_OFFSET_MAX = 1.5;
 
 interface PortalPoseCameraInternalOptions {
   cameraPitchRad: number;
