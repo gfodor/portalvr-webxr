@@ -1422,14 +1422,12 @@ export class XRDevice {
 			const dY = yNorm - (anyThis.__tpPrevYNorm ?? 0);
 			const dYaw = dX * TRACKPAD_YAW_RADIANS_PER_UNIT;
 			const dPitch = (-dY) * TRACKPAD_PITCH_RADIANS_PER_UNIT; // invert Y: upward drag => positive pitch
-			if (Math.abs(dYaw) > TRACKPAD_TOUCH_EPS || Math.abs(dPitch) > TRACKPAD_TOUCH_EPS) {
-				this.portalPoseCamera?.applyCameraDragIncrements({
-				incYaw: dYaw,
-				incPitch: dPitch,
-				incX: 0,
-				incY: 0,
-				incZ: 0,
-				});
+			// Feed through the existing pointer-look smoothing pipeline to avoid per-packet jitter.
+			const incYaw = this.clampPointerLookDelta(dYaw);
+			const incPitch = this.clampPointerLookDelta(dPitch);
+			if (Math.abs(incYaw) > TRACKPAD_TOUCH_EPS || Math.abs(incPitch) > TRACKPAD_TOUCH_EPS) {
+				this.pointerLookPendingYaw += incYaw;
+				this.pointerLookPendingPitch += incPitch;
 			}
 			}
 			anyThis.__tpPrevXNorm = xNorm;
