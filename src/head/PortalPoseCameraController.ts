@@ -155,11 +155,23 @@ class PortalPoseCameraNudger {
   }
 
   public resetOrientation() {
-    this.offsetController.resetAll();
+    // Orientation reset should zero translation offsets while retaining yaw/pitch nudges.
+    const yawRad = this.offsetController.getYawRad();
+    const pitchRad = this.offsetController.getPitchOffsetRad();
+    this.offsetController.resetAll(); // clears XYZ + yaw/pitch
+    this.offsetController.setYawRad(yawRad);
+    this.offsetController.nudgePitchLocal(pitchRad);
+    const newOffset = this.offsetController.copyOffset();
+
+    const samplePos = {
+      x: this.basePosition.x + newOffset.x,
+      y: this.basePosition.y + newOffset.y,
+      z: this.basePosition.z + newOffset.z,
+    };
     const sample: PoseArray = [
-      this.basePosition.x,
-      this.basePosition.y,
-      this.basePosition.z,
+      samplePos.x,
+      samplePos.y,
+      samplePos.z,
       this.baseOrientation.x,
       this.baseOrientation.y,
       this.baseOrientation.z,

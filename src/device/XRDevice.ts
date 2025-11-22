@@ -1481,6 +1481,8 @@ export class XRDevice {
     } else {
       this.pendingOrientationReset = true;
     }
+    // Also clear camera offsets (but keep yaw/pitch nudges) on orientation reset.
+    this.portalPoseCamera?.handleOrientationReset();
 	this.updateControllerPromptUI();
   };
 
