@@ -86,7 +86,8 @@ class PortalPoseCameraNudger {
     this.poseSmoother = new PoseSmoother(90);
 
     const initNs = this.nowNs();
-    const initOffset = this.offsetController.copyOffset();
+    this.offsetController.stepSmoothing(initNs);
+    const initOffset = this.offsetController.copySmoothedOffset();
     const samplePos = {
       x: this.basePosition.x + initOffset.x,
       y: this.basePosition.y + initOffset.y,
@@ -122,6 +123,7 @@ class PortalPoseCameraNudger {
   handleFrame(device: XRDevice, frame: XRFrame) {
     void this.computeDeltaSeconds(frame);
     const nowNs = this.nowNs();
+    this.offsetController.stepSmoothing(nowNs);
     this.addPoseSample(nowNs);
     const predicted = this.poseSmoother.predict(nowNs);
     this.composeFinalPose(device, predicted);
@@ -178,6 +180,7 @@ class PortalPoseCameraNudger {
       this.baseOrientation.w,
     ] as PoseArray;
     const nowNs = this.nowNs();
+    this.offsetController.stepSmoothing(nowNs);
     this.poseSmoother.reset(sample, nowNs);
     this.latestSmoothedPose = new Float32Array(sample);
     this.latestFinalPose = new Float32Array(sample);
@@ -233,7 +236,7 @@ class PortalPoseCameraNudger {
       dz,
       this.smoothedQuatPtr,
       this.offsetController.getYawRad(),
-      this.offsetController.getPitchOffsetRad(),
+      this.offsetController.getSmoothedPitchRad(),
       this.cameraPitchRad,
       this.cameraPitchSin,
       this.fixedDisplayLocked,
@@ -282,7 +285,7 @@ class PortalPoseCameraNudger {
       z: smoothedPose[5],
       w: smoothedPose[6],
     });
-    const currentOffset = this.offsetController.copyOffset();
+    const currentOffset = this.offsetController.copySmoothedOffset();
     this.writeVec3(this.uiOffsetPtr, currentOffset);
     this.writeQuat(this.posePtr, {
       x: finalPose[3],
@@ -325,8 +328,8 @@ class PortalPoseCameraNudger {
       return;
     }
     const yawRad = this.offsetController.getYawRad();
-    const pitchRad = this.offsetController.getPitchOffsetRad();
-    const smOffset = this.offsetController.copyOffset();
+    const pitchRad = this.offsetController.getSmoothedPitchRad();
+    const smOffset = this.offsetController.copySmoothedOffset();
 
     this.writeVec3(this.smoothedPosPtr, { x: pose[0], y: pose[1], z: pose[2] });
     this.writeQuat(this.smoothedQuatPtr, {
@@ -379,7 +382,7 @@ class PortalPoseCameraNudger {
   }
 
   private addPoseSample(nowNs: number) {
-    const smOffset = this.offsetController.copyOffset();
+    const smOffset = this.offsetController.copySmoothedOffset();
     const samplePos = {
       x: this.basePosition.x + smOffset.x,
       y: this.basePosition.y + smOffset.y,
