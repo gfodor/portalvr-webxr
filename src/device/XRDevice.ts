@@ -2076,44 +2076,92 @@ export class XRDevice {
     }
 
     if (update.cameraFovDeg > 0) {
-      const clampedFovDeg = Math.min(Math.max(update.cameraFovDeg, 1), 179);
+		const clampedFovDeg = Math.min(
+		Math.max(update.cameraFovDeg, 1),
+		179,
+		);
       const newFovyRad = degreesToRadians(clampedFovDeg);
       if (Number.isFinite(newFovyRad) && newFovyRad > 0) {
         this.fovy = newFovyRad;
       }
     }
 
-    let leftPose: PortalPose | null = null;
-    let rightPose: PortalPose | null = null;
+	const wandMode = this.lastControllerState?.wandMode ?? 0;
+	const dualTracked = !!this.lastControllerState?.dualTrackedRequested;
+	const activeState = this.activeWandState;
 
-    switch (this.activeWandState) {
+	// Start from per-hand results coming from the portal session.
+	let leftPose: PortalPose | null = update.byHand.left.finalPose
+		? this.clonePortalPose(update.byHand.left.finalPose)
+		: null;
+	let rightPose: PortalPose | null = update.byHand.right.finalPose
+		? this.clonePortalPose(update.byHand.right.finalPose)
+		: null;
+
+	if (!dualTracked) {
+		switch (activeState) {
       case 'both': {
-        const wandMode = this.lastControllerState?.wandMode ?? 0;
-        const submode: 'mirrored' | 'opposed' = wandMode === 5 ? 'opposed' : 'mirrored';
-        if (this.lastDualSubmode !== submode) {
+			const submode: 'mirrored' | 'opposed' =
+			wandMode === 5 ? 'opposed' : 'mirrored';
+			if (this.lastDualSubmode !== submode) {
           this.lastDualSubmode = submode;
           this.dualOpposedNeutral = null;
+			}
+
+			const dominantSource = rightPose ?? leftPose;
+			if (dominantSource) {
+			const dominantPose = this.clonePortalPose(dominantSource);
+			rightPose = dominantPose;
+			const offhand = this.computeDualOffhandPose(
+				dominantPose,
+				headPose,
+				submode,
+			);
+			leftPose =
+				offhand ?? this.clonePortalPose(dominantPose);
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			break;
         }
-        const dominantPose = this.clonePortalPose(update.finalPose);
-        rightPose = dominantPose;
-        const offhand = this.computeDualOffhandPose(dominantPose, headPose, submode);
-        leftPose = offhand ?? this.clonePortalPose(dominantPose);
-        break;
+		case 'left': {
+			const source = leftPose ?? rightPose;
+			if (source) {
+			leftPose = this.clonePortalPose(source);
+			rightPose = null;
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
       }
-      case 'left':
-        leftPose = this.clonePortalPose(update.finalPose);
-        this.lastDualSubmode = null;
-        this.dualOpposedNeutral = null;
-        break;
-      case 'right':
-        rightPose = this.clonePortalPose(update.finalPose);
-        this.lastDualSubmode = null;
-        this.dualOpposedNeutral = null;
-        break;
+		case 'right': {
+			const source = rightPose ?? leftPose;
+			if (source) {
+			rightPose = this.clonePortalPose(source);
+			leftPose = null;
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
+		}
       default:
+			leftPose = null;
+			rightPose = null;
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
+		}
+	} else {
+		// Dual-tracked: rely directly on per-hand session results, no synthetic off-hand.
         this.lastDualSubmode = null;
         this.dualOpposedNeutral = null;
-        break;
     }
 
     const headPortalPose: PortalPose = {
@@ -2122,16 +2170,32 @@ export class XRDevice {
     };
 
     if (runtime) {
-      if (!leftPose && this.cameraLockState.left.active && this.lastControllerPoseByHand.left) {
-        const updated = runtime.updateCameraLockedPose('left', headPortalPose, this.lastControllerPoseByHand.left);
+		if (
+		!leftPose &&
+		this.cameraLockState.left.active &&
+		this.lastControllerPoseByHand.left
+		) {
+		const updated = runtime.updateCameraLockedPose(
+			'left',
+			headPortalPose,
+			this.lastControllerPoseByHand.left,
+		);
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           leftPose = lockedPose;
           this.lastControllerPoseByHand.left = lockedPose;
         }
       }
-      if (!rightPose && this.cameraLockState.right.active && this.lastControllerPoseByHand.right) {
-        const updated = runtime.updateCameraLockedPose('right', headPortalPose, this.lastControllerPoseByHand.right);
+		if (
+		!rightPose &&
+		this.cameraLockState.right.active &&
+		this.lastControllerPoseByHand.right
+		) {
+		const updated = runtime.updateCameraLockedPose(
+			'right',
+			headPortalPose,
+			this.lastControllerPoseByHand.right,
+		);
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           rightPose = lockedPose;
@@ -2141,14 +2205,22 @@ export class XRDevice {
     }
 
     if (leftPose) {
-      this.applyControllerPose(controllers[XRHandedness.Left], leftPose);
+		this.applyControllerPose(
+		controllers[XRHandedness.Left],
+		leftPose,
+		);
     }
     if (rightPose) {
-      this.applyControllerPose(controllers[XRHandedness.Right], rightPose);
+		this.applyControllerPose(
+		controllers[XRHandedness.Right],
+		rightPose,
+		);
     }
 
     if (update.cameraDrag) {
-      this.portalPoseCamera?.applyCameraDragIncrements(update.cameraDrag);
+		this.portalPoseCamera?.applyCameraDragIncrements(
+		update.cameraDrag,
+		);
     }
   }
 

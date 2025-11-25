@@ -46,13 +46,20 @@ interface PortalCameraDragHandle {
   end(): void;
 }
 
+interface PortalControllerPerHandUpdate {
+  finalPose: PortalPose | null;
+  unblendedPose: PortalPose | null;
+}
+
 interface PortalControllerUpdate {
-  finalPose: PortalPose;
-  unblendedPose: PortalPose;
+  byHand: {
+    left: PortalControllerPerHandUpdate;
+    right: PortalControllerPerHandUpdate;
+  };
   aimWeight: number;
   headWeight: number;
   stretchAmount: number;
-  cameraDrag?: CameraDragIncrements; // NEW: controller-driven camera-drag increments for this frame
+  cameraDrag?: CameraDragIncrements;
   cameraFovDeg: number;
 }
 
@@ -178,6 +185,49 @@ interface ButtonState {
   menu: boolean;
 }
 
+type HandId = 'left' | 'right';
+
+interface HandRuntimeState {
+  smoother: PoseSmoother;
+  lastSmoothedPose: PoseArray | null;
+  buttonState: ButtonState;
+  lastUnblendedPose: PortalPose | null;
+}
+
+const HAND_IDS: HandId[] = ['right', 'left'];
+
+const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
+  right: {
+    smoother: new PoseSmoother(90),
+    lastSmoothedPose: null,
+    buttonState: {
+      trigger: false,
+      squeeze: false,
+      action1: false,
+      action2: false,
+      stickClick: false,
+      menu: false,
+    },
+    lastUnblendedPose: null,
+  },
+  left: {
+    smoother: new PoseSmoother(90),
+    lastSmoothedPose: null,
+    buttonState: {
+      trigger: false,
+      squeeze: false,
+      action1: false,
+      action2: false,
+      stickClick: false,
+      menu: false,
+    },
+    lastUnblendedPose: null,
+  },
+};
+
+GLOBAL_HAND_STATES.right.smoother.setMode(PoseSmootherMode.LOW);
+GLOBAL_HAND_STATES.left.smoother.setMode(PoseSmootherMode.LOW);
+
 const AIM_EXIT_W = 0.98;
 
 const INTERACTION_MODE_BASE = 0x0;
@@ -231,7 +281,6 @@ export class PortalControllerRuntime {
   private flags = {
     aimModeEnabled: false,
     armStretchEnabled: false,
-    squeezePressed: false,
   };
 
   private buttonState: ButtonState = {
@@ -242,7 +291,6 @@ export class PortalControllerRuntime {
     stickClick: false,
     menu: false,
   };
-
 
   private neutralRollDeg = CONTROLLER_NEUTRAL_ROLL_DEG;
   private neutralPitchDeg = CONTROLLER_NEUTRAL_PITCH_DEG;
@@ -270,27 +318,44 @@ export class PortalControllerRuntime {
     this.I32 = Module.HEAP32;
     this.F64 = Module.HEAPF64;
 
-    if (typeof Module._portal_wasm_set_drag_button_active === 'function') {
+    if (typeof Module._portal_wasm_controller_set_drag_button_active === 'function') {
       this.dragButtonSetter = (active: boolean): void => {
-        Module._portal_wasm_set_drag_button_active(active ? 1 : 0);
+        Module._portal_wasm_controller_set_drag_button_active(active ? 1 : 0);
       };
     }
 
-    const stateSize = Module._portal_wasm_state_size();
-    const stateAlign = Module._portal_wasm_state_alignment();
-    this.stateBasePtr = Module._malloc(stateSize + stateAlign);
-    this.statePtr = (this.stateBasePtr + (stateAlign - 1)) & ~(stateAlign - 1);
-    Module._portal_wasm_state_init(this.statePtr);
+    this.stateBasePtr = 0;
 
-    this.inputsPtr = Module._malloc(SIZEOF_PORTAL_POSE_INPUTS);
-    this.resultPtr = Module._malloc(SIZEOF_PORTAL_POSE_RESULT);
+    const sessionPtr = Module._portal_wasm_pose_session_create(2);
+    (this as any).sessionPtr = sessionPtr;
+
+    // Treat statePtr as the right-hand portal_pose_state*
+    this.statePtr = Module._portal_wasm_pose_session_get_hand_state(
+      sessionPtr,
+      PortalHandEnum.Right,
+    );
+    (this as any).stateLeftPtr = Module._portal_wasm_pose_session_get_hand_state(
+      sessionPtr,
+      PortalHandEnum.Left,
+    );
+
+    const sampleInPtr = Module._malloc(SIZEOF_PORTAL_POSE_SESSION_SAMPLE_IN);
+    const sampleOutPtr = Module._malloc(SIZEOF_PORTAL_POSE_SESSION_SAMPLE_OUT);
+    (this as any).sampleInPtr = sampleInPtr;
+    (this as any).sampleOutPtr = sampleOutPtr;
+
+    // inputsPtr/resultPtr now point into the embedded portal_pose_inputs / portal_pose_result
+    this.inputsPtr = sampleInPtr + OFF_SAMPLE_IN_INPUTS;
+    this.resultPtr = sampleOutPtr + OFF_SAMPLE_OUT_RESULT;
+
     this.headPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.ctrlPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.outPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.vecPtr = Module._malloc(3 * FLOAT_SIZE);
 
-    this.poseSmoother = new PoseSmoother(90);
-    this.poseSmoother.setMode(PoseSmootherMode.LOW)
+    // Legacy alias (right-hand smoother) kept for compatibility
+    this.poseSmoother = GLOBAL_HAND_STATES.right.smoother;
+    this.poseSmoother.setMode(PoseSmootherMode.LOW);
 
     // NEW: create PortalCameraDragHandle and wire display-delta callback
     try {
@@ -303,7 +368,11 @@ export class PortalControllerRuntime {
             return null;
           }
           this.writePose(this.ctrlPosePtr, this.lastUnblendedPose);
-          const ok = this.Module._portal_wasm_compute_display_delta(this.statePtr, this.ctrlPosePtr, this.vecPtr);
+          const ok = this.Module._portal_wasm_pose_state_compute_display_delta(
+            this.statePtr,
+            this.ctrlPosePtr,
+            this.vecPtr,
+          );
           if (!ok) {
             return null;
           }
@@ -327,9 +396,13 @@ export class PortalControllerRuntime {
 
   destroy(): void {
     this.requestDragButtonActive(false);
-    this.Module._free(this.stateBasePtr);
-    this.Module._free(this.inputsPtr);
-    this.Module._free(this.resultPtr);
+    const selfAny = this as any;
+    if (selfAny.sampleInPtr) {
+      this.Module._free(selfAny.sampleInPtr);
+    }
+    if (selfAny.sampleOutPtr) {
+      this.Module._free(selfAny.sampleOutPtr);
+    }
     this.Module._free(this.headPosePtr);
     this.Module._free(this.ctrlPosePtr);
     this.Module._free(this.outPosePtr);
@@ -338,17 +411,32 @@ export class PortalControllerRuntime {
 
   ingestPacket(state: ControllerState): void {
     this.lastPacketNs = state.timestampNs;
-    this.lastPacketMs = performance.now();
+    this.lastPacketMs = typeof performance !== 'undefined' && typeof performance.now === 'function'
+      ? performance.now()
+      : Date.now();
 
     this.setWandMode(state.wandMode);
 
-    // NEW: update runtime when interaction mode changes
-    if (typeof state.interactionMode === 'number' && state.interactionMode !== this.interactionMode) {
+    // Update runtime when interaction mode changes
+    if (
+      typeof state.interactionMode === 'number' &&
+      state.interactionMode !== this.interactionMode
+    ) {
       this.applyInteractionMode(state.interactionMode);
     }
 
-    const tNs = state.timestampNs || Math.floor(performance.now() * 1e6);
-    this.poseSmoother.addSample(
+    const tNs =
+      state.timestampNs != null
+        ? state.timestampNs
+        : Math.floor(
+            (typeof performance !== 'undefined' && typeof performance.now === 'function'
+              ? performance.now()
+              : Date.now()) * 1e6,
+          );
+
+    // Right-hand pose and buttons (primary stream body)
+    const right = GLOBAL_HAND_STATES.right;
+    right.smoother.addSample(
       state.position.x,
       state.position.y,
       state.position.z,
@@ -358,10 +446,43 @@ export class PortalControllerRuntime {
       state.quaternion.w,
       tNs,
     );
+    right.buttonState = {
+      trigger: state.buttons.trigger,
+      squeeze: state.buttons.squeeze,
+      action1: state.buttons.action1,
+      action2: state.buttons.action2,
+      stickClick: state.buttons.stick,
+      menu: state.buttons.menu,
+    };
 
+    // Optional left-hand tail (dual-tracked v4 packets)
+    if (state.left) {
+      const left = GLOBAL_HAND_STATES.left;
+      left.smoother.addSample(
+        state.left.position.x,
+        state.left.position.y,
+        state.left.position.z,
+        state.left.quaternion.x,
+        state.left.quaternion.y,
+        state.left.quaternion.z,
+        state.left.quaternion.w,
+        tNs,
+      );
+      left.buttonState = {
+        trigger: state.left.buttons.trigger,
+        squeeze: state.left.buttons.squeeze,
+        action1: state.left.buttons.action1,
+        action2: state.left.buttons.action2,
+        stickClick: state.left.buttons.stick,
+        menu: state.left.buttons.menu,
+      };
+    }
+
+    // Session-level flags (mirrored to both hands for now)
     this.flags.aimModeEnabled = state.flags.aim;
     this.flags.armStretchEnabled = state.flags.stretch;
 
+    // Legacy global buttonState kept for callers that inspect active-hand buttons
     this.buttonState = {
       trigger: state.buttons.trigger,
       squeeze: state.buttons.squeeze,
@@ -370,9 +491,8 @@ export class PortalControllerRuntime {
       stickClick: state.buttons.stick,
       menu: state.buttons.menu,
     };
-    this.flags.squeezePressed = state.buttons.squeeze;
 
-    // NEW: track virtual camera drag button request (held = requested)
+    // Track virtual camera drag button request (right-hand driven in Stage 4)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     this.buttonDragRequested = !!(state.buttons as any).cameraDrag;
   }
@@ -422,54 +542,122 @@ export class PortalControllerRuntime {
     return this.dualTrackedRequested;
   }
 
-  updateFrame(nowNs: number, headPose: HeadPoseInput): PortalControllerUpdate | null {
+  updateFrame(
+    nowNs: number,
+    headPose: HeadPoseInput,
+  ): PortalControllerUpdate | null {
     if (this.lastPacketNs == null) {
       return null;
     }
 
-    const predicted =
-      this.poseSmoother.predict(nowNs) ??
-      (this.lastSmoothedPose ??
-        [
-          0, 0, 0,
-          0, 0, 0, 1,
-        ]);
+    const result: PortalControllerUpdate = {
+      byHand: {
+        left: { finalPose: null, unblendedPose: null },
+        right: { finalPose: null, unblendedPose: null },
+      },
+      stretchAmount: 0,
+      headWeight: 0,
+      aimWeight: 0,
+      cameraFovDeg: 0,
+    };
 
-    this.lastSmoothedPose = predicted;
+    const sessionPtr = this.getSessionPtr();
+    const sampleOutPtr = this.getSampleOutPtr();
 
-    this.writeInputs(predicted, headPose, nowNs);
+    // Always submit the right hand
+    const predictedRight = this.predictPoseForHand('right', nowNs);
+    this.writeInputsToSample('right', PortalHandEnum.Right, predictedRight, headPose, nowNs);
     this.applyDynamicConfig();
 
-    this.Module._portal_wasm_update(this.inputsPtr, this.statePtr, this.resultPtr);
-
-    const finalPose = this.readPose(this.resultPtr + OFF_RESULT_FINAL_POSE);
-    const unblendedPose = this.readPose(this.resultPtr + OFF_RESULT_UNBLENDED_POSE);
-    const stretchAmount = this.F32[(this.resultPtr + OFF_RESULT_STRETCH_AMOUNT) >> 2];
-    const headWeight = this.F32[(this.resultPtr + OFF_RESULT_HEAD_WEIGHT) >> 2];
-    const aimWeight = this.F32[(this.resultPtr + OFF_RESULT_AIM_WEIGHT) >> 2];
-    const cameraFovDegRaw = this.Module._portal_wasm_get_camera_fov_deg(this.statePtr);
-    const cameraFovDeg =
-      Number.isFinite(cameraFovDegRaw) && cameraFovDegRaw > 0 ? cameraFovDegRaw : 0;
-
-    // NEW: keep last unblended for display-delta callback
-    this.lastUnblendedPose = unblendedPose;
-
-    if (this.displayLockPending) {
-      this.commitDisplayLock(headPose, unblendedPose);
+    let ok = this.Module._portal_wasm_pose_session_submit_sample(
+      sessionPtr,
+      this.getSampleInPtr(),
+      sampleOutPtr,
+    );
+    if (!ok) {
+      return null;
     }
 
-    // NEW: update/compute camera drag increments
-    const cameraDrag = this.computeCameraDrag(nowNs, headPose, unblendedPose, aimWeight);
+    let resultPtrInner = this.resultPtr;
+    let finalPose = this.readPose(resultPtrInner + OFF_RESULT_FINAL_POSE);
+    let unblendedPose = this.readPose(
+      resultPtrInner + OFF_RESULT_UNBLENDED_POSE,
+    );
+    GLOBAL_HAND_STATES.right.lastUnblendedPose = unblendedPose;
+    result.byHand.right.finalPose = finalPose;
+    result.byHand.right.unblendedPose = unblendedPose;
 
-    return {
-      finalPose,
-      unblendedPose,
-      stretchAmount,
-      headWeight,
-      aimWeight,
-      cameraFovDeg,
-      cameraDrag,
-    };
+    // Session-level aggregates (identical for all hands)
+    result.stretchAmount =
+      this.F32[(resultPtrInner + OFF_RESULT_STRETCH_AMOUNT) >> 2];
+    result.headWeight =
+      this.F32[
+        (sampleOutPtr + OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT) >> 2
+      ];
+    result.aimWeight =
+      this.F32[(sampleOutPtr + OFF_SAMPLE_OUT_AIM_MODE_WEIGHT) >> 2];
+    result.cameraFovDeg =
+      this.F32[(sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2];
+
+    // Optionally submit left-hand when dual-tracked is requested
+    if (this.dualTrackedRequested) {
+      const predictedLeft = this.predictPoseForHand('left', nowNs);
+      this.writeInputsToSample(
+        'left',
+        PortalHandEnum.Left,
+        predictedLeft,
+        headPose,
+        nowNs,
+      );
+      this.applyDynamicConfig();
+      ok = this.Module._portal_wasm_pose_session_submit_sample(
+        sessionPtr,
+        this.getSampleInPtr(),
+        sampleOutPtr,
+      );
+      if (ok) {
+        resultPtrInner = this.resultPtr;
+        finalPose = this.readPose(resultPtrInner + OFF_RESULT_FINAL_POSE);
+        unblendedPose = this.readPose(
+          resultPtrInner + OFF_RESULT_UNBLENDED_POSE,
+        );
+        GLOBAL_HAND_STATES.left.lastUnblendedPose = unblendedPose;
+        result.byHand.left.finalPose = finalPose;
+        result.byHand.left.unblendedPose = unblendedPose;
+
+        // Aggregates updated (should be identical across hands)
+        result.stretchAmount =
+          this.F32[(resultPtrInner + OFF_RESULT_STRETCH_AMOUNT) >> 2];
+        result.headWeight =
+          this.F32[
+            (sampleOutPtr + OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT) >> 2
+          ];
+        result.aimWeight =
+          this.F32[
+            (sampleOutPtr + OFF_SAMPLE_OUT_AIM_MODE_WEIGHT) >> 2
+          ];
+        result.cameraFovDeg =
+          this.F32[
+            (sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2
+          ];
+      }
+    }
+
+    const rightUnblended = result.byHand.right.unblendedPose;
+    if (this.displayLockPending && rightUnblended) {
+      this.commitDisplayLock(headPose, rightUnblended);
+    }
+
+    const cameraDrag = rightUnblended
+      ? this.computeCameraDrag(nowNs, headPose, rightUnblended, result.aimWeight)
+      : undefined;
+    if (cameraDrag) {
+      result.cameraDrag = cameraDrag;
+    }
+
+    this.lastUnblendedPose = rightUnblended ?? null;
+
+    return result;
   }
 
   handleOrientationReset(): void {
@@ -481,11 +669,26 @@ export class PortalControllerRuntime {
     this.displayLockPending = false;
     this.displayLockHeadPose = null;
     this.displayLockCtrlPose = null;
-    this.Module._portal_wasm_set_display_lock_calibration(this.statePtr, 0, 0, 0);
+    const sessionPtr = this.getSessionPtr();
+    if (sessionPtr) {
+      this.Module._portal_wasm_pose_session_clear_display_lock(sessionPtr);
+    }
   }
 
   handleDisconnect(): void {
-    this.poseSmoother.reset();
+    for (const hand of HAND_IDS) {
+      GLOBAL_HAND_STATES[hand].smoother.reset();
+      GLOBAL_HAND_STATES[hand].lastSmoothedPose = null;
+      GLOBAL_HAND_STATES[hand].lastUnblendedPose = null;
+      GLOBAL_HAND_STATES[hand].buttonState = {
+        trigger: false,
+        squeeze: false,
+        action1: false,
+        action2: false,
+        stickClick: false,
+        menu: false,
+      };
+    }
     this.lastSmoothedPose = null;
     this.lastPacketNs = null;
     this.lastPacketMs = null;
@@ -494,8 +697,11 @@ export class PortalControllerRuntime {
     this.displayLockHeadPose = null;
     this.displayLockCtrlPose = null;
 
-    // NEW: tear down active drag
-    try { this.dragHandle?.end(); } catch {}
+    try {
+      this.dragHandle?.end();
+    } catch {
+      // ignore
+    }
     this.activeDragMode = 'none';
     this.buttonDragRequested = false;
     this.aimDragRequested = false;
@@ -504,7 +710,10 @@ export class PortalControllerRuntime {
   }
 
   hasRecentPacket(nowMs: number): boolean {
-    return this.lastPacketMs != null && nowMs - this.lastPacketMs <= DISPLAY_LOCK_TIMEOUT_MS;
+    return (
+      this.lastPacketMs != null &&
+      nowMs - this.lastPacketMs <= DISPLAY_LOCK_TIMEOUT_MS
+    );
   }
 
   getActiveHand(): ActiveHand {
@@ -515,17 +724,57 @@ export class PortalControllerRuntime {
     return this.wandMode;
   }
 
-  private writeInputs(pose: PoseArray, headPose: HeadPoseInput, nowNs: number): void {
-    const basePosePtr = this.inputsPtr + OFF_INPUTS_RAW_LENS_POSE;
+  private getSessionPtr(): number {
+    return (this as any).sessionPtr as number;
+  }
+
+  private getSampleInPtr(): number {
+    return (this as any).sampleInPtr as number;
+  }
+
+  private getSampleOutPtr(): number {
+    return (this as any).sampleOutPtr as number;
+  }
+
+  private getStatePtrForHand(hand: HandId): number {
+    if (hand === 'right') {
+      return this.statePtr;
+    }
+    return (this as any).stateLeftPtr as number;
+  }
+
+  private predictPoseForHand(hand: HandId, nowNs: number): PoseArray {
+    const state = GLOBAL_HAND_STATES[hand];
+    const predicted =
+      state.smoother.predict(nowNs) ??
+      (state.lastSmoothedPose ?? [0, 0, 0, 0, 0, 0, 1]);
+    state.lastSmoothedPose = predicted;
+    return predicted;
+  }
+
+  private writeInputsToSample(
+    hand: HandId,
+    handEnum: PortalHandEnum,
+    pose: PoseArray,
+    headPose: HeadPoseInput,
+    nowNs: number,
+  ): void {
+    const sampleInPtr = this.getSampleInPtr();
+    // Write enum portal_hand hand
+    this.I32[(sampleInPtr + OFF_SAMPLE_IN_HAND) >> 2] = handEnum;
+
+    const inputsPtr = this.inputsPtr;
+
+    const basePosePtr = inputsPtr + OFF_INPUTS_RAW_LENS_POSE;
     this.writePose(basePosePtr, {
       position: { x: pose[0], y: pose[1], z: pose[2] },
       orientation: { x: pose[3], y: pose[4], z: pose[5], w: pose[6] },
     });
 
-    const screenCenterPtr = this.inputsPtr + OFF_INPUTS_SCREEN_CENTER_OFFSET;
+    const screenCenterPtr = inputsPtr + OFF_INPUTS_SCREEN_CENTER_OFFSET;
     this.writeVec3(screenCenterPtr, { x: 0, y: 0, z: 0 });
 
-    const headPtr = this.inputsPtr + OFF_INPUTS_HEAD;
+    const headPtr = inputsPtr + OFF_INPUTS_HEAD;
     this.U8[headPtr + OFF_HEAD_VALID] = 1;
     const headPosePortal: PortalPose = {
       position: { ...headPose.position },
@@ -540,47 +789,92 @@ export class PortalControllerRuntime {
     this.F32[(fovPtr >> 2) + 2] = DEFAULT_HALF_FOV_RAD;
     this.F32[(fovPtr >> 2) + 3] = -DEFAULT_HALF_FOV_RAD;
 
-    const deltaPtr = this.inputsPtr + OFF_INPUTS_DELTA;
+    const deltaPtr = inputsPtr + OFF_INPUTS_DELTA;
     this.U8[deltaPtr + OFF_DELTA_VALID] = this.deltaTargetValid ? 1 : 0;
     if (this.deltaTargetValid) {
       this.writePose(deltaPtr + OFF_DELTA_POSE, this.deltaTargetPose);
     }
 
-    const flagsPtr = this.inputsPtr + OFF_INPUTS_FLAGS;
+    const flagsPtr = inputsPtr + OFF_INPUTS_FLAGS;
     this.U8[flagsPtr + 0] = this.flags.aimModeEnabled ? 1 : 0;
     this.U8[flagsPtr + 1] = this.flags.armStretchEnabled ? 1 : 0;
     this.U8[flagsPtr + 2] = this.displayLockActive ? 1 : 0;
     this.U8[flagsPtr + 3] = this.displayLockPending ? 1 : 0;
     this.U8[flagsPtr + 4] = this.ephemeralSwapActive ? 1 : 0;
     this.U8[flagsPtr + 5] = this.dualModeOpposed ? 1 : 0;
-    this.U8[flagsPtr + 6] = this.flags.squeezePressed ? 1 : 0;
+    const handState = GLOBAL_HAND_STATES[hand];
+    this.U8[flagsPtr + 6] = handState.buttonState.squeeze ? 1 : 0;
 
-    this.F32[(this.inputsPtr + OFF_INPUTS_TRIGGER) >> 2] = this.buttonState.trigger ? 1 : 0;
-    this.F32[(this.inputsPtr + OFF_INPUTS_SQUEEZE) >> 2] = this.buttonState.squeeze ? 1 : 0;
-    this.F32[(this.inputsPtr + OFF_INPUTS_NEUTRAL_ROLL) >> 2] = this.neutralRollDeg;
-    this.F32[(this.inputsPtr + OFF_INPUTS_NEUTRAL_PITCH) >> 2] = this.neutralPitchDeg;
-    this.F32[(this.inputsPtr + OFF_INPUTS_NEUTRAL_YAW) >> 2] = this.neutralYawDeg;
-    this.F32[(this.inputsPtr + OFF_INPUTS_HAND_TO_HEAD) >> 2] = ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
-    this.I32[(this.inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] =
-      this.activeHand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
-    this.F64[(this.inputsPtr + OFF_INPUTS_TIME_NOW) >> 3] = nowNs * 1e-9;
+    this.F32[(inputsPtr + OFF_INPUTS_TRIGGER) >> 2] =
+      handState.buttonState.trigger ? 1 : 0;
+    this.F32[(inputsPtr + OFF_INPUTS_SQUEEZE) >> 2] =
+      handState.buttonState.squeeze ? 1 : 0;
+    this.F32[(inputsPtr + OFF_INPUTS_NEUTRAL_ROLL) >> 2] =
+      this.neutralRollDeg;
+    this.F32[(inputsPtr + OFF_INPUTS_NEUTRAL_PITCH) >> 2] =
+      this.neutralPitchDeg;
+    this.F32[(inputsPtr + OFF_INPUTS_NEUTRAL_YAW) >> 2] =
+      this.neutralYawDeg;
+    this.F32[(inputsPtr + OFF_INPUTS_HAND_TO_HEAD) >> 2] =
+      ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
+    this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] =
+      this.activeHand === 'right'
+        ? PortalHandEnum.Right
+        : PortalHandEnum.Left;
+    this.F64[(inputsPtr + OFF_INPUTS_TIME_NOW) >> 3] = nowNs * 1e-9;
   }
 
   private applyStaticConfig(): void {
-    this.Module._portal_wasm_set_roll_config(
-      this.statePtr,
-      DEFAULT_YAW_ROLL_AMPLIFY,
-      DEFAULT_ROLL_ZERO_OFFSET_DEG,
-      DEFAULT_ROLL_AMPLIFY_START_DEG,
-    );
-    this.Module._portal_wasm_set_fov_defaults(
+    const sessionPtr = this.getSessionPtr();
+
+    const tuningPtr = this.Module._malloc(SIZEOF_PORTAL_POSE_SESSION_TUNING);
+    const base = tuningPtr >> 2;
+    // fov_head_deg, fov_arm_stretch_deg, fov_aim_deg
+    this.F32[base + 0] = 90;
+    this.F32[base + 1] = 60;
+    this.F32[base + 2] = 60;
+    // max_arm_distance_m, stretch_min_dist_m, stretch_lerp_range_m, arm_scaling, torso_distance_proportion
+    this.F32[base + 3] = ANDROID_PLAYER_MAX_ARM_DISTANCE;
+    this.F32[base + 4] = ANDROID_PLAYER_ARM_STRETCH_MIN_DIST;
+    this.F32[base + 5] = ANDROID_PLAYER_ARM_STRETCH_LERP_RANGE;
+    this.F32[base + 6] = ANDROID_PLAYER_ARM_SCALING;
+    this.F32[base + 7] = FIXED_DISPLAY_TORSO_DISTANCE_PROPORTION;
+    this.Module._portal_wasm_pose_session_apply_tuning(sessionPtr, tuningPtr);
+    this.Module._free(tuningPtr);
+
+    const rollCfgPtr = this.Module._malloc(SIZEOF_PORTAL_ROLL_CONFIG);
+    const rb = rollCfgPtr >> 2;
+    this.F32[rb + 0] = DEFAULT_YAW_ROLL_AMPLIFY;
+    this.F32[rb + 1] = DEFAULT_ROLL_ZERO_OFFSET_DEG;
+    this.F32[rb + 2] = DEFAULT_ROLL_AMPLIFY_START_DEG;
+    this.Module._portal_wasm_pose_session_set_roll_config(sessionPtr, rollCfgPtr);
+    this.Module._free(rollCfgPtr);
+
+    // Apply FOV and arm params per-hand
+    const leftStatePtr = this.getStatePtrForHand('left');
+    this.Module._portal_wasm_pose_state_set_fov_defaults(
       this.statePtr,
       90,
       60,
       60,
     );
-    this.Module._portal_wasm_set_arm_params(
+    this.Module._portal_wasm_pose_state_set_fov_defaults(
+      leftStatePtr,
+      90,
+      60,
+      60,
+    );
+
+    this.Module._portal_wasm_pose_state_set_arm_params(
       this.statePtr,
+      ANDROID_PLAYER_MAX_ARM_DISTANCE,
+      ANDROID_PLAYER_ARM_STRETCH_MIN_DIST,
+      ANDROID_PLAYER_ARM_STRETCH_LERP_RANGE,
+      ANDROID_PLAYER_ARM_SCALING,
+      FIXED_DISPLAY_TORSO_DISTANCE_PROPORTION,
+    );
+    this.Module._portal_wasm_pose_state_set_arm_params(
+      leftStatePtr,
       ANDROID_PLAYER_MAX_ARM_DISTANCE,
       ANDROID_PLAYER_ARM_STRETCH_MIN_DIST,
       ANDROID_PLAYER_ARM_STRETCH_LERP_RANGE,
@@ -591,78 +885,100 @@ export class PortalControllerRuntime {
 
   private applyInteractionMode(mode: number): void {
     this.interactionMode = mode;
-    if (mode === INTERACTION_MODE_DUAL_AXIS_GAMEPAD || mode === INTERACTION_MODE_DUALSHOCK_GAMEPAD) {
+
+    let amplify = DEFAULT_YAW_ROLL_AMPLIFY;
+    if (
+      mode === INTERACTION_MODE_DUAL_AXIS_GAMEPAD ||
+      mode === INTERACTION_MODE_DUALSHOCK_GAMEPAD
+    ) {
       // Gamepad-style modes: neutral at 0/0/-90 and no roll amplification
       this.neutralRollDeg = 0.0;
       this.neutralPitchDeg = 0.0;
       this.neutralYawDeg = -90.0;
-      this.Module._portal_wasm_set_roll_config(
-        this.statePtr,
-        1.0, // force roll amplification scale to 1.0
-        DEFAULT_ROLL_ZERO_OFFSET_DEG,
-        DEFAULT_ROLL_AMPLIFY_START_DEG,
-      );
+      amplify = 1.0;
     } else if (mode === INTERACTION_MODE_OPENXR_QUEST) {
-      // OpenXR Quest mode: neutral at 0/0/0 and no roll amplification
+      // OpenXR Quest mode: controller pose already aligned
       this.neutralRollDeg = 120.0;
       this.neutralPitchDeg = 180.0;
       this.neutralYawDeg = 180.0;
-      this.Module._portal_wasm_set_roll_config(
-        this.statePtr,
-        1.0,
-        DEFAULT_ROLL_ZERO_OFFSET_DEG,
-        DEFAULT_ROLL_AMPLIFY_START_DEG,
-      );
+      amplify = 1.0;
     } else {
       // BASE: keep existing constants and default roll amplification
       this.neutralRollDeg = CONTROLLER_NEUTRAL_ROLL_DEG;
       this.neutralPitchDeg = CONTROLLER_NEUTRAL_PITCH_DEG;
       this.neutralYawDeg = CONTROLLER_NEUTRAL_YAW_DEG;
-      this.Module._portal_wasm_set_roll_config(
-        this.statePtr,
-        DEFAULT_YAW_ROLL_AMPLIFY,
-        DEFAULT_ROLL_ZERO_OFFSET_DEG,
-        DEFAULT_ROLL_AMPLIFY_START_DEG,
-      );
+      amplify = DEFAULT_YAW_ROLL_AMPLIFY;
     }
+
+    const rollCfgPtr = this.Module._malloc(SIZEOF_PORTAL_ROLL_CONFIG);
+    const base = rollCfgPtr >> 2;
+    this.F32[base + 0] = amplify;
+    this.F32[base + 1] = DEFAULT_ROLL_ZERO_OFFSET_DEG;
+    this.F32[base + 2] = DEFAULT_ROLL_AMPLIFY_START_DEG;
+    this.Module._portal_wasm_pose_session_set_roll_config(
+      this.getSessionPtr(),
+      rollCfgPtr,
+    );
+    this.Module._free(rollCfgPtr);
   }
 
   private applyDynamicConfig(): void {
-    if (this.altHandOffsetValid) {
-      this.writeVec3(this.vecPtr, this.altHandOffset);
-      this.Module._portal_wasm_set_alt_hand_offset(this.statePtr, 1, this.vecPtr);
-    } else {
-      this.Module._portal_wasm_set_alt_hand_offset(this.statePtr, 0, 0);
-    }
+    const rightStatePtr = this.getStatePtrForHand('right');
+    const leftStatePtr = this.getStatePtrForHand('left');
 
     if (this.deltaTargetValid) {
       this.writePose(this.ctrlPosePtr, this.deltaTargetPose);
-      this.Module._portal_wasm_set_delta_target(this.statePtr, 1, this.ctrlPosePtr);
-    } else {
-      this.Module._portal_wasm_set_delta_target(this.statePtr, 0, 0);
-    }
-
-    if (this.displayLockActive && this.displayLockHeadPose && this.displayLockCtrlPose) {
-      this.writePose(this.headPosePtr, this.displayLockHeadPose);
-      this.writePose(this.ctrlPosePtr, this.displayLockCtrlPose);
-      this.Module._portal_wasm_set_display_lock_calibration(
-        this.statePtr,
-        this.headPosePtr,
+      this.Module._portal_wasm_pose_state_set_delta_target(
+        rightStatePtr,
+        1,
         this.ctrlPosePtr,
-        this.displayLockAnchorM,
       );
-    } else if (!this.displayLockPending) {
-      this.Module._portal_wasm_set_display_lock_calibration(this.statePtr, 0, 0, 0);
+      this.Module._portal_wasm_pose_state_set_delta_target(
+        leftStatePtr,
+        1,
+        this.ctrlPosePtr,
+      );
+    } else {
+      this.Module._portal_wasm_pose_state_set_delta_target(
+        rightStatePtr,
+        0,
+        0,
+      );
+      this.Module._portal_wasm_pose_state_set_delta_target(
+        leftStatePtr,
+        0,
+        0,
+      );
     }
   }
 
-  public setCameraLock(hand: 'left' | 'right', valid: boolean, offset?: PortalPose | null): void {
-    const handEnum = hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+  public setCameraLock(
+    hand: 'left' | 'right',
+    valid: boolean,
+    offset?: PortalPose | null,
+  ): void {
+    const handEnum =
+      hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+    const statePtr = this.getStatePtrForHand(hand);
+    if (!statePtr) {
+      return;
+    }
+
     if (valid && offset) {
       this.writePose(this.ctrlPosePtr, offset);
-      this.Module._portal_wasm_set_camera_lock(this.statePtr, handEnum, 1, this.ctrlPosePtr);
+      this.Module._portal_wasm_pose_state_set_camera_lock(
+        statePtr,
+        handEnum,
+        1,
+        this.ctrlPosePtr,
+      );
     } else {
-      this.Module._portal_wasm_set_camera_lock(this.statePtr, handEnum, 0, 0);
+      this.Module._portal_wasm_pose_state_set_camera_lock(
+        statePtr,
+        handEnum,
+        0,
+        0,
+      );
     }
   }
 
@@ -671,11 +987,17 @@ export class PortalControllerRuntime {
     headPose: PortalPose,
     currentPose: PortalPose,
   ): PortalPose | null {
-    const handEnum = hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+    const handEnum =
+      hand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+    const statePtr = this.getStatePtrForHand(hand);
+    if (!statePtr) {
+      return null;
+    }
+
     this.writePose(this.headPosePtr, headPose);
     this.writePose(this.ctrlPosePtr, currentPose);
-    const ok = this.Module._portal_wasm_update_camera_locked_pose(
-      this.statePtr,
+    const ok = this.Module._portal_wasm_pose_state_update_camera_locked_pose(
+      statePtr,
       handEnum,
       this.headPosePtr,
       this.ctrlPosePtr,
@@ -709,7 +1031,12 @@ export class PortalControllerRuntime {
     }
   }
 
-  private computeCameraDrag(nowNs: number, headPose: HeadPoseInput, unblendedPose: PortalPose, aimWeight: number): CameraDragIncrements | undefined {
+  private computeCameraDrag(
+    nowNs: number,
+    headPose: HeadPoseInput,
+    unblendedPose: PortalPose,
+    aimWeight: number,
+  ): CameraDragIncrements | undefined {
     if (!this.dragHandle) {
       this.requestDragButtonActive(false);
       return undefined;
@@ -736,7 +1063,11 @@ export class PortalControllerRuntime {
     if (desired !== this.activeDragMode) {
       // Switch modes.
       if (this.activeDragMode !== 'none') {
-        try { this.dragHandle.end(); } catch {}
+        try {
+          this.dragHandle.end();
+        } catch {
+          // ignore
+        }
       }
       this.activeDragMode = desired;
       if (this.activeDragMode !== 'none') {
@@ -787,7 +1118,10 @@ export class PortalControllerRuntime {
     }
   }
 
-  private commitDisplayLock(headPose: HeadPoseInput, ctrlPose: PortalPose): void {
+  private commitDisplayLock(
+    headPose: HeadPoseInput,
+    ctrlPose: PortalPose,
+  ): void {
     this.displayLockPending = false;
     this.displayLockActive = true;
     this.displayLockHeadPose = {
@@ -798,14 +1132,55 @@ export class PortalControllerRuntime {
       position: { ...ctrlPose.position },
       orientation: { ...ctrlPose.orientation },
     };
-    this.writePose(this.headPosePtr, this.displayLockHeadPose);
-    this.writePose(this.ctrlPosePtr, this.displayLockCtrlPose);
-    this.Module._portal_wasm_set_display_lock_calibration(
-      this.statePtr,
-      this.headPosePtr,
-      this.ctrlPosePtr,
-      this.displayLockAnchorM,
+
+    const sessionPtr = this.getSessionPtr();
+    if (!sessionPtr) {
+      return;
+    }
+
+    const calPtr = this.Module._malloc(SIZEOF_PORTAL_DISPLAY_LOCK_CALIBRATION);
+
+    // Head pose
+    this.writePose(
+      calPtr + OFF_DISPLAY_LOCK_CAL_HEAD_POSE,
+      this.displayLockHeadPose,
     );
+
+    // Right-hand controller pose at calibration time
+    const rightPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT;
+    this.writePose(rightPosePtr, this.displayLockCtrlPose);
+
+    // Left-hand pose unused for now (identity)
+    const leftPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT;
+    this.writePose(leftPosePtr, {
+      position: { x: 0, y: 0, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+    });
+
+    // ctrl_valid[2]
+    const ctrlValidPtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_VALID;
+    this.U8[ctrlValidPtr + 0] = 1; // right
+    this.U8[ctrlValidPtr + 1] = 0; // left
+
+    // calibrating_hand enum
+    const handEnum =
+      this.activeHand === 'left' ? PortalHandEnum.Left : PortalHandEnum.Right;
+    this.I32[
+      (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
+    ] = handEnum;
+
+    // anchor_m and hand_to_head_height_m
+    this.F32[(calPtr + OFF_DISPLAY_LOCK_CAL_ANCHOR_M) >> 2] =
+      this.displayLockAnchorM;
+    this.F32[
+      (calPtr + OFF_DISPLAY_LOCK_CAL_HAND_TO_HEAD_HEIGHT_M) >> 2
+    ] = ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
+
+    this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+      sessionPtr,
+      calPtr,
+    );
+    this.Module._free(calPtr);
   }
 
   private writePose(ptr: number, pose: PortalPose): void {
