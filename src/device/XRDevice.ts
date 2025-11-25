@@ -111,6 +111,8 @@ function resolveActiveWandState(mode: number): ActiveWandState {
     case 4: // BLE_WAND_DUAL_MIRRORED
     case 5: // BLE_WAND_DUAL_OPPOSED
       return 'both';
+	case 6: // BLE_WAND_DUAL_TRACKED
+		return 'both';
     default:
       return 'right';
   }
@@ -1405,6 +1407,7 @@ export class XRDevice {
       const runtime = await this.ensurePortalControllerRuntime();
       runtime.ingestPacket(state);
       runtime.setWandMode(state.wandMode);
+		runtime.setDualTrackedRequested(state.dualTrackedRequested === true);
     } catch (error) {
       console.error('[XRDevice] Failed to process controller state', error);
     }

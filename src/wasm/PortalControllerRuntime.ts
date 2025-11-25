@@ -168,6 +168,7 @@ export class PortalControllerRuntime {
   private lastUnblendedPose: PortalPose | null = null;
   private lastPacketNs: number | null = null;
   private lastPacketMs: number | null = null;
+  private dualTrackedRequested = false;
 
   private activeHand: ActiveHand = 'right';
   private wandMode: number = 0;
@@ -367,6 +368,14 @@ export class PortalControllerRuntime {
     }
   }
 
+  setDualTrackedRequested(enabled: boolean): void {
+    this.dualTrackedRequested = !!enabled;
+  }
+
+  getDualTrackedRequested(): boolean {
+    return this.dualTrackedRequested;
+  }
+
   updateFrame(nowNs: number, headPose: HeadPoseInput): PortalControllerUpdate | null {
     if (this.lastPacketNs == null) {
       return null;
@@ -393,7 +402,8 @@ export class PortalControllerRuntime {
     const headWeight = this.F32[(this.resultPtr + OFF_RESULT_HEAD_WEIGHT) >> 2];
     const aimWeight = this.F32[(this.resultPtr + OFF_RESULT_AIM_WEIGHT) >> 2];
     const cameraFovDegRaw = this.Module._portal_wasm_get_camera_fov_deg(this.statePtr);
-    const cameraFovDeg = Number.isFinite(cameraFovDegRaw) && cameraFovDegRaw > 0 ? cameraFovDegRaw : 0;
+    const cameraFovDeg =
+      Number.isFinite(cameraFovDegRaw) && cameraFovDegRaw > 0 ? cameraFovDegRaw : 0;
 
     // NEW: keep last unblended for display-delta callback
     this.lastUnblendedPose = unblendedPose;
