@@ -693,12 +693,14 @@ export class PortalControllerRuntime {
     const rightUnblended = result.byHand.right.unblendedPose;
     const leftUnblended = result.byHand.left.unblendedPose;
     if (this.displayLockPending && rightUnblended) {
-      // Only use left pose for calibration if we have real tracking data
-      // (smoother returns non-null when it has >= 2 samples)
-      const leftHasRealData =
-        GLOBAL_HAND_STATES.left.smoother.predict(nowNs) !== null;
+      // In dual-tracked mode we always want to feed any available left-hand
+      // unblended pose into the display-lock calibration so the portal core
+      // can compute the correct per-hand relative offsets. This mirrors the
+      // Android display_lock_commit_calibration behaviour and avoids falling
+      // back to the manual centering path that collapses both hands onto the
+      // same anchor when the left smoother has not fully warmed up.
       const useLeftForCalibration =
-        this.dualTrackedRequested && leftUnblended && leftHasRealData;
+        this.dualTrackedRequested && !!leftUnblended;
 
       this.commitDisplayLock(
         headPose,
@@ -721,8 +723,9 @@ export class PortalControllerRuntime {
     return result;
   }
 
-  handleOrientationReset(): void {
+  handleOrientationReset(calibratingHand: 'left' | 'right' = 'right'): void {
     this.displayLockPending = true;
+    this.displayLockCalibrationHand = calibratingHand;
   }
 
   clearDisplayLock(): void {
@@ -734,6 +737,9 @@ export class PortalControllerRuntime {
     if (sessionPtr) {
       this.Module._portal_wasm_pose_session_clear_display_lock(sessionPtr);
     }
+    // Reset per-hand relative offsets so future frames are not influenced by
+    // previous display-lock centering.
+    this.clearRelOffsets();
     this.syncSessionAltHandConfig();
   }
 
@@ -882,10 +888,7 @@ export class PortalControllerRuntime {
       this.neutralYawDeg;
     this.F32[(inputsPtr + OFF_INPUTS_HAND_TO_HEAD) >> 2] =
       ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
-    this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] =
-      this.activeHand === 'right'
-        ? PortalHandEnum.Right
-        : PortalHandEnum.Left;
+    this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] = handEnum;
     this.F64[(inputsPtr + OFF_INPUTS_TIME_NOW) >> 3] = nowNs * 1e-9;
   }
 
@@ -1294,56 +1297,115 @@ export class PortalControllerRuntime {
       return;
     }
 
-    const calPtr = this.Module._malloc(SIZEOF_PORTAL_DISPLAY_LOCK_CALIBRATION);
+    const calPtr = this.Module._malloc(
+      SIZEOF_PORTAL_DISPLAY_LOCK_CALIBRATION,
+    );
 
-    // Head pose
+    // Common head/anchor fields used for all calibration requests.
     this.writePose(
       calPtr + OFF_DISPLAY_LOCK_CAL_HEAD_POSE,
       this.displayLockHeadPose,
     );
-
-    // Controller poses at calibration time
-    // ctrl_pose_world[0] = RIGHT (PORTAL_HAND_RIGHT=0), ctrl_pose_world[1] = LEFT (PORTAL_HAND_LEFT=1)
-    const rightPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT;
-    const leftPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT;
-
-    this.writePose(rightPosePtr, rightCtrlPose);
-    if (leftCtrlPose) {
-      this.writePose(leftPosePtr, leftCtrlPose);
-    } else {
-      this.writePose(leftPosePtr, {
-        position: { x: 0, y: 0, z: 0 },
-        orientation: { x: 0, y: 0, z: 0, w: 1 },
-      });
-    }
-
-    // ctrl_valid[0] = right valid, ctrl_valid[1] = left valid
-    const ctrlValidPtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_VALID;
-    this.U8[ctrlValidPtr + 0] = 1; // right always valid
-    this.U8[ctrlValidPtr + 1] = leftCtrlPose ? 1 : 0; // left valid only if provided
-
-    // calibrating_hand enum
-    const handEnum =
-      this.activeHand === 'left' ? PortalHandEnum.Left : PortalHandEnum.Right;
-    this.I32[
-      (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
-    ] = handEnum;
-
-    // anchor_m and hand_to_head_height_m
     this.F32[(calPtr + OFF_DISPLAY_LOCK_CAL_ANCHOR_M) >> 2] =
       this.displayLockAnchorM;
     this.F32[
       (calPtr + OFF_DISPLAY_LOCK_CAL_HAND_TO_HEAD_HEIGHT_M) >> 2
     ] = ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
 
-    this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
-      sessionPtr,
-      calPtr,
-    );
-    this.Module._free(calPtr);
+    const rightPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT;
+    const leftPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT;
+    const ctrlValidPtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_VALID;
 
-    // Apply centering shift to make hands symmetric on screen (matches Android)
-    this.applyCenteringShift(headPose, rightCtrlPose, leftCtrlPose);
+    const hasDualTrackedCalibration =
+      this.dualTrackedRequested && !!leftCtrlPose;
+
+    if (hasDualTrackedCalibration && leftCtrlPose) {
+      // Dual-tracked mode: pass BOTH controller poses and per-hand validity to
+      // the portal session in a single calibration call. The core will compute
+      // the correct per-hand rel_offsets so the non-calibrating hand stays
+      // visually fixed when the calibrating hand recenters, matching Android.
+      this.writePose(rightPosePtr, rightCtrlPose);
+      this.writePose(leftPosePtr, leftCtrlPose);
+
+      // ctrl_valid[RIGHT], ctrl_valid[LEFT]
+      this.U8[ctrlValidPtr + 0] = 1;
+      this.U8[ctrlValidPtr + 1] = 1;
+
+      const calibratingHandEnum =
+        this.displayLockCalibrationHand === 'left'
+          ? PortalHandEnum.Left
+          : PortalHandEnum.Right;
+      this.I32[
+        (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
+      ] = calibratingHandEnum;
+
+      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+        sessionPtr,
+        calPtr,
+      );
+    } else {
+      // Single-controller / mirrored modes: calibrate BOTH portal hands from
+      // the same physical wand by submitting two independent one-hand
+      // calibrations. This mirrors android_ble_controller.c where dual-tracked
+      // is disabled: no manual rel_offset math is needed here.
+
+      // Right hand calibration
+      this.writePose(rightPosePtr, rightCtrlPose);
+      this.writePose(leftPosePtr, {
+        position: { x: 0, y: 0, z: 0 },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      });
+      this.U8[ctrlValidPtr + 0] = 1; // right valid
+      this.U8[ctrlValidPtr + 1] = 0; // left invalid
+      this.I32[
+        (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
+      ] = PortalHandEnum.Right;
+      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+        sessionPtr,
+        calPtr,
+      );
+
+      // Left hand calibration
+      this.writePose(leftPosePtr, rightCtrlPose);
+      this.writePose(rightPosePtr, {
+        position: { x: 0, y: 0, z: 0 },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      });
+      this.U8[ctrlValidPtr + 0] = 0; // right invalid
+      this.U8[ctrlValidPtr + 1] = 1; // left valid
+      this.I32[
+        (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
+      ] = PortalHandEnum.Left;
+      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+        sessionPtr,
+        calPtr,
+      );
+    }
+
+    this.Module._free(calPtr);
+  }
+
+  private clearRelOffsets(): void {
+    const rightStatePtr = this.getStatePtrForHand('right');
+    const leftStatePtr = this.getStatePtrForHand('left');
+
+    if (rightStatePtr) {
+      this.Module._portal_wasm_pose_state_set_rel_offset(
+        rightStatePtr,
+        PortalHandEnum.Right,
+        0,
+        0,
+      );
+    }
+
+    if (leftStatePtr) {
+      this.Module._portal_wasm_pose_state_set_rel_offset(
+        leftStatePtr,
+        PortalHandEnum.Left,
+        0,
+        0,
+      );
+    }
   }
 
   /**

@@ -121,6 +121,22 @@ export function isOrientationResetPacket(buffer: ArrayBuffer | null | undefined)
   return packetType === PACKET_ORIENTATION_RESET;
 }
 
+/**
+ * Parse the wand ID from an orientation reset packet.
+ * Returns 'right' (default) or 'left' based on the packet's wand ID byte.
+ * Matches Android BlePeripheralService.kt behavior:
+ *   - byte[1] = 0 → LEFT
+ *   - byte[1] = 1 → RIGHT (default if omitted)
+ */
+export function parseOrientationResetWand(buffer: ArrayBuffer | null | undefined): 'left' | 'right' {
+  if (!buffer || !(buffer instanceof ArrayBuffer) || buffer.byteLength < 2) {
+    return 'right'; // Default to RIGHT when sender omits wand id
+  }
+  const view = new DataView(buffer);
+  const wandId = view.getUint8(1);
+  return wandId === 0 ? 'left' : 'right';
+}
+
 const BLE_WAND_DUAL_TRACKED = 6;
 
 export function parseControllerState(buffer: ArrayBuffer | null | undefined): ControllerState | null {

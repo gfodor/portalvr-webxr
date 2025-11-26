@@ -497,7 +497,7 @@ export class XRDevice {
   private readonly configPromise: Promise<PortalEmulatorConfig>;
   // Stereo config changes are persisted immediately but only applied once on startup to
   // avoid disturbing the active render pipeline mid-session.
-  private pendingOrientationReset = false;
+  private pendingOrientationReset: 'left' | 'right' | null = null;
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
   private lastControllerPacketMs: number | null = null;
@@ -1488,15 +1488,15 @@ export class XRDevice {
 	this.updateControllerPromptUI();
   };
 
-  private handleOrientationReset = () => {
+  private handleOrientationReset = (calibratingHand: 'left' | 'right' = 'right') => {
     this.faceTrackingRecenterPending = true;
 	this.hasSeenOrientationResetOnce = true;
     // Clear existing display lock first before requesting new calibration
     this.portalControllerRuntime?.clearDisplayLock();
     if (this.portalControllerRuntime) {
-      this.portalControllerRuntime.handleOrientationReset();
+      this.portalControllerRuntime.handleOrientationReset(calibratingHand);
     } else {
-      this.pendingOrientationReset = true;
+      this.pendingOrientationReset = calibratingHand;
     }
     // Also clear camera offsets (but keep yaw/pitch nudges) on orientation reset.
     this.portalPoseCamera?.handleOrientationReset();
@@ -1767,8 +1767,8 @@ export class XRDevice {
         .then((runtime) => {
           this.portalControllerRuntime = runtime;
           if (this.pendingOrientationReset) {
-            runtime.handleOrientationReset();
-            this.pendingOrientationReset = false;
+            runtime.handleOrientationReset(this.pendingOrientationReset);
+            this.pendingOrientationReset = null;
           }
           if (this.lastControllerState) {
             runtime.setWandMode(this.lastControllerState.wandMode);
@@ -3691,9 +3691,9 @@ export class XRDevice {
 				this.handleControllerConnectionChange(connected);
 				userOnConnection?.(connected);
 			},
-			onOrientationReset: () => {
-				this.handleOrientationReset();
-				userOnOrientationReset?.();
+			onOrientationReset: (calibratingHand) => {
+				this.handleOrientationReset(calibratingHand);
+				userOnOrientationReset?.(calibratingHand);
 			},
 			onSignalingStatus: (status) => {
 				this.emitControllerSearchStatus(status);

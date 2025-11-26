@@ -10,6 +10,7 @@ import {
   parseControllerState,
   type ControllerState,
   isOrientationResetPacket,
+  parseOrientationResetWand,
   PACKET_HANGUP,
 } from './controllerParser.js';
 
@@ -28,8 +29,8 @@ export interface WebRTCControllerStreamOptions {
   onControllerState?: (state: ControllerState) => void;
   /** Called when the data channel connection changes state. */
   onConnectionChange?: (connected: boolean) => void;
-  /** Called when an orientation-reset packet is received. */
-  onOrientationReset?: () => void;
+  /** Called when an orientation-reset packet is received. Includes which hand triggered the reset. */
+  onOrientationReset?: (calibratingHand: 'left' | 'right') => void;
   /** Called when the underlying SIGCF status updates. */
   onSignalingStatus?: (status: SIGCFStatusSnapshot) => void;
 }
@@ -44,7 +45,7 @@ export class WebRTCControllerStreamer {
   private readonly enableLocalPath: boolean;
   private readonly onControllerState?: (state: ControllerState) => void;
   private readonly onConnectionChange?: (connected: boolean) => void;
-  private readonly onOrientationReset?: () => void;
+  private readonly onOrientationReset?: (calibratingHand: 'left' | 'right') => void;
   private readonly onSignalingStatus?: (status: SIGCFStatusSnapshot) => void;
 
   private sigcf: SIGCF | null = null;
@@ -160,8 +161,9 @@ export class WebRTCControllerStreamer {
       this.sigcf.on('msg', (_peer: string, data: any) => {
         if (data instanceof ArrayBuffer) {
           if (isOrientationResetPacket(data)) {
-            this.log('received orientation reset packet');
-            this.onOrientationReset?.();
+            const calibratingHand = parseOrientationResetWand(data);
+            this.log(`received orientation reset packet (hand=${calibratingHand})`);
+            this.onOrientationReset?.(calibratingHand);
             return;
           }
           const parsed = parseControllerState(data);
