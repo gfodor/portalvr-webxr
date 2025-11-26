@@ -1408,6 +1408,18 @@ export class XRDevice {
       runtime.ingestPacket(state);
       runtime.setWandMode(state.wandMode);
 		runtime.setDualTrackedRequested(state.dualTrackedRequested === true);
+
+		if (state.flags?.aim && state.dualTrackedRequested && runtime) {
+		const rightDrag = !!(state.buttons as any).cameraDrag;
+		const leftDrag = !!state.left?.buttons.cameraDrag;
+		if (leftDrag && !rightDrag) {
+			runtime.setAimActiveHand('left');
+		} else if (rightDrag && !leftDrag) {
+			runtime.setAimActiveHand('right');
+		}
+		} else if (!state.flags?.aim && runtime) {
+		runtime.clearAimActiveHand();
+		}
     } catch (error) {
       console.error('[XRDevice] Failed to process controller state', error);
     }
@@ -1479,6 +1491,8 @@ export class XRDevice {
   private handleOrientationReset = () => {
     this.faceTrackingRecenterPending = true;
 	this.hasSeenOrientationResetOnce = true;
+    // Clear existing display lock first before requesting new calibration
+    this.portalControllerRuntime?.clearDisplayLock();
     if (this.portalControllerRuntime) {
       this.portalControllerRuntime.handleOrientationReset();
     } else {
@@ -1819,6 +1833,18 @@ export class XRDevice {
     if (anyConnected) {
       this[P_DEVICE].primaryInputMode = 'controller';
     }
+
+	if (prevState !== next && next !== 'none') {
+		const wandMode = this.lastControllerState?.wandMode ?? 0;
+		const dualTracked = !!this.lastControllerState?.dualTrackedRequested;
+		if (!dualTracked && (wandMode === 4 || wandMode === 5)) {
+		const runtime = this.portalControllerRuntime;
+		if (runtime) {
+			const headPosePortal = this.createCurrentHeadPortalPose();
+			runtime.setAltHandSpawnFromHead(headPosePortal, 0.25);
+		}
+		}
+	}
 
     if (next === 'none') {
       this.lastControllerPoseByHand.left = null;
@@ -2367,6 +2393,14 @@ export class XRDevice {
     this.syncCameraLockToRuntime('left');
     this.syncCameraLockToRuntime('right');
   }
+
+	public setExplicitAimHand(hand: 'left' | 'right'): void {
+	this.portalControllerRuntime?.setAimActiveHand(hand);
+	}
+
+	public clearExplicitAimHand(): void {
+	this.portalControllerRuntime?.clearAimActiveHand();
+	}
 
   private createCurrentHeadPortalPose(): PortalPose {
     return {

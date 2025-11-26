@@ -43,7 +43,11 @@ export class PoseSmoother {
   private readonly rotY: OneEuroFilter;
   private readonly rotZ: OneEuroFilter;
 
-  constructor(displayHz = 90, private readonly latencyFrames = 0) {
+  constructor(
+    displayHz = 90,
+    private readonly latencyFrames = 0,
+    private readonly enableOutlierRejection = true,
+  ) {
     const freq = Math.max(1, displayHz);
     this.euroX = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
     this.euroY = new OneEuroFilter(freq, 1.0, 50.0, 1.0);
@@ -96,24 +100,28 @@ export class PoseSmoother {
     let posZ = pz;
 
     if (this.buffer.length > 0) {
-      const maxLinVel = 15;
-      const maxLinAcc = 50;
-
       const last = this.buffer[this.buffer.length - 1];
-      const dt = Math.max((tNs - last.tNs) * 1e-9, 1e-9);
-      const dx = px - last.x;
-      const dy = py - last.y;
-      const dz = pz - last.z;
-      const linVel = Math.hypot(dx, dy, dz) / dt;
-      const linAcc = Math.abs(linVel - this.lastVelocity) / dt;
 
-      const rejectPosition = tNs !== last.tNs && (linVel >= maxLinVel || linAcc >= maxLinAcc);
-      if (rejectPosition) {
-        posX = last.x;
-        posY = last.y;
-        posZ = last.z;
-      } else {
-        this.lastVelocity = linVel;
+      // Outlier rejection for position (can be disabled for controller tracking)
+      if (this.enableOutlierRejection) {
+        const maxLinVel = 15;
+        const maxLinAcc = 50;
+
+        const dt = Math.max((tNs - last.tNs) * 1e-9, 1e-9);
+        const dx = px - last.x;
+        const dy = py - last.y;
+        const dz = pz - last.z;
+        const linVel = Math.hypot(dx, dy, dz) / dt;
+        const linAcc = Math.abs(linVel - this.lastVelocity) / dt;
+
+        const rejectPosition = tNs !== last.tNs && (linVel >= maxLinVel || linAcc >= maxLinAcc);
+        if (rejectPosition) {
+          posX = last.x;
+          posY = last.y;
+          posZ = last.z;
+        } else {
+          this.lastVelocity = linVel;
+        }
       }
 
       const dot = qx * last.qx + qy * last.qy + qz * last.qz + qw * last.qw;

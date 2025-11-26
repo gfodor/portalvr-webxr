@@ -2,6 +2,7 @@ import type { PortalPoseModuleInstance } from './portal-pose/portal_pose.js';
 import { loadPortalPoseModule, type PortalPoseLoadOptions } from './PortalPoseLoader.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
 import { PoseSmoother, PoseSmootherMode, type PoseArray } from '../head/PoseSmoother.js';
+import { quat, vec3 } from 'gl-matrix';
 
 interface PortalPose {
   position: { x: number; y: number; z: number };
@@ -107,20 +108,19 @@ const OFF_AIM_HAND_CFG_EXPLICIT_SOURCE_VALID = 0; // bool
 const OFF_AIM_HAND_CFG_EXPLICIT_SOURCE = 4; // enum portal_hand (int)
 const OFF_AIM_HAND_CFG_DUAL_TRACKED_ENABLED = 8; // bool
 
-// display-lock calibration: posef + posef[2] + bool[2] + enum + 2 floats
+// display-lock calibration: posef + posef[2] + bool[2] + (2 pad) + enum + 2 floats
 const SIZEOF_PORTAL_DISPLAY_LOCK_CALIBRATION = 100;
 const OFF_DISPLAY_LOCK_CAL_HEAD_POSE = 0;
 const OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT =
-  OFF_DISPLAY_LOCK_CAL_HEAD_POSE + SIZEOF_PORTAL_POSEF;
+  OFF_DISPLAY_LOCK_CAL_HEAD_POSE + SIZEOF_PORTAL_POSEF; // 28
 const OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT =
-  OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT + SIZEOF_PORTAL_POSEF;
+  OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT + SIZEOF_PORTAL_POSEF; // 56
 const OFF_DISPLAY_LOCK_CAL_CTRL_VALID =
-  OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT + SIZEOF_PORTAL_POSEF; // bool[2]
-const OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND = OFF_DISPLAY_LOCK_CAL_CTRL_VALID + 2; // enum
-const OFF_DISPLAY_LOCK_CAL_ANCHOR_M =
-  OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND + 4; // float
-const OFF_DISPLAY_LOCK_CAL_HAND_TO_HEAD_HEIGHT_M =
-  OFF_DISPLAY_LOCK_CAL_ANCHOR_M + FLOAT_SIZE; // float
+  OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT + SIZEOF_PORTAL_POSEF; // 84, bool[2]
+// 2 bytes padding at offset 86-87 for enum alignment
+const OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND = 88; // enum portal_hand (4-byte aligned)
+const OFF_DISPLAY_LOCK_CAL_ANCHOR_M = 92; // float
+const OFF_DISPLAY_LOCK_CAL_HAND_TO_HEAD_HEIGHT_M = 96; // float
 
 // Existing portal_pose_inputs / portal_pose_result offsets
 const OFF_INPUTS_RAW_LENS_POSE = 0;
@@ -198,7 +198,8 @@ const HAND_IDS: HandId[] = ['right', 'left'];
 
 const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
   right: {
-    smoother: new PoseSmoother(90),
+    // Disable outlier rejection for controllers - fast arm movements can exceed thresholds
+    smoother: new PoseSmoother(90, 0, false),
     lastSmoothedPose: null,
     buttonState: {
       trigger: false,
@@ -211,7 +212,8 @@ const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
     lastUnblendedPose: null,
   },
   left: {
-    smoother: new PoseSmoother(90),
+    // Disable outlier rejection for controllers - fast arm movements can exceed thresholds
+    smoother: new PoseSmoother(90, 0, false),
     lastSmoothedPose: null,
     buttonState: {
       trigger: false,
@@ -305,6 +307,15 @@ export class PortalControllerRuntime {
   private altHandOffsetValid = false;
   private readonly altHandOffset = { x: 0, y: 0, z: 0 };
 
+  private explicitAimHand: HandId | null = null;
+  private currentPoseModeBlend = { headWeight: 1, aimWeight: 0 };
+
+  private dragSource: HandId | null = null;
+  private lastButtonDragRight = false;
+  private lastButtonDragLeft = false;
+
+  private displayLockCalibrationHand: HandId = 'right';
+
   private deltaTargetValid = false;
   private readonly deltaTargetPose: PortalPose = {
     position: { x: 0, y: 0, z: 0 },
@@ -364,12 +375,15 @@ export class PortalControllerRuntime {
       if (typeof DragCtor === 'function') {
         this.dragHandle = new DragCtor() as PortalCameraDragHandle;
         this.dragHandle.setDisplayDeltaCallback(() => {
-          if (!this.lastUnblendedPose) {
+          const hand: HandId = this.dragSource ?? 'right';
+          const pose = GLOBAL_HAND_STATES[hand].lastUnblendedPose;
+          if (!pose) {
             return null;
           }
-          this.writePose(this.ctrlPosePtr, this.lastUnblendedPose);
+          this.writePose(this.ctrlPosePtr, pose);
+          const statePtr = this.getStatePtrForHand(hand);
           const ok = this.Module._portal_wasm_pose_state_compute_display_delta(
-            this.statePtr,
+            statePtr,
             this.ctrlPosePtr,
             this.vecPtr,
           );
@@ -392,6 +406,9 @@ export class PortalControllerRuntime {
     this.applyStaticConfig();
     // Ensure neutral orientation and roll config reflect default BASE behavior
     this.applyInteractionMode(INTERACTION_MODE_BASE);
+    // Initialise session-level alt-hand and aim-hand configuration
+    this.syncSessionAltHandConfig();
+    this.syncSessionPoseModeConfig();
   }
 
   destroy(): void {
@@ -492,9 +509,31 @@ export class PortalControllerRuntime {
       menu: state.buttons.menu,
     };
 
-    // Track virtual camera drag button request (right-hand driven in Stage 4)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.buttonDragRequested = !!(state.buttons as any).cameraDrag;
+    const rightDrag = !!(state.buttons as any).cameraDrag;
+    const leftDrag = !!state.left?.buttons.cameraDrag;
+    const dualTracked = !!state.dualTrackedRequested;
+
+    if (!dualTracked) {
+      // Single-hand / legacy dual modes: right hand is always the drag source when pressed.
+      this.dragSource = rightDrag ? 'right' : null;
+    } else {
+      // Dual-tracked: sticky selection between hands based on press edges.
+      if (rightDrag && !this.lastButtonDragRight) {
+        this.dragSource = 'right';
+      } else if (leftDrag && !this.lastButtonDragLeft) {
+        this.dragSource = 'left';
+      } else if (this.dragSource === 'right' && !rightDrag) {
+        this.dragSource = null;
+      } else if (this.dragSource === 'left' && !leftDrag) {
+        this.dragSource = null;
+      }
+    }
+
+    this.lastButtonDragRight = rightDrag;
+    this.lastButtonDragLeft = leftDrag;
+
+    // Expose whether any drag button is currently active to the camera-drag pipeline.
+    this.buttonDragRequested = this.dragSource != null;
   }
 
   setWandMode(mode: number): void {
@@ -536,6 +575,8 @@ export class PortalControllerRuntime {
 
   setDualTrackedRequested(enabled: boolean): void {
     this.dualTrackedRequested = !!enabled;
+    this.syncSessionAltHandConfig();
+    this.syncSessionPoseModeConfig();
   }
 
   getDualTrackedRequested(): boolean {
@@ -599,6 +640,9 @@ export class PortalControllerRuntime {
     result.cameraFovDeg =
       this.F32[(sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2];
 
+    this.currentPoseModeBlend.headWeight = result.headWeight;
+    this.currentPoseModeBlend.aimWeight = result.aimWeight;
+
     // Optionally submit left-hand when dual-tracked is requested
     if (this.dualTrackedRequested) {
       const predictedLeft = this.predictPoseForHand('left', nowNs);
@@ -640,12 +684,29 @@ export class PortalControllerRuntime {
           this.F32[
             (sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2
           ];
+
+        this.currentPoseModeBlend.headWeight = result.headWeight;
+        this.currentPoseModeBlend.aimWeight = result.aimWeight;
       }
     }
 
     const rightUnblended = result.byHand.right.unblendedPose;
+    const leftUnblended = result.byHand.left.unblendedPose;
     if (this.displayLockPending && rightUnblended) {
-      this.commitDisplayLock(headPose, rightUnblended);
+      // Only use left pose for calibration if we have real tracking data
+      // (smoother returns non-null when it has >= 2 samples)
+      const leftHasRealData =
+        GLOBAL_HAND_STATES.left.smoother.predict(nowNs) !== null;
+      const useLeftForCalibration =
+        this.dualTrackedRequested && leftUnblended && leftHasRealData;
+
+      this.commitDisplayLock(
+        headPose,
+        rightUnblended,
+        useLeftForCalibration ? leftUnblended : null,
+      );
+      // Ensure alt-hand offsets are disabled while display-lock is active.
+      this.syncSessionAltHandConfig();
     }
 
     const cameraDrag = rightUnblended
@@ -673,6 +734,7 @@ export class PortalControllerRuntime {
     if (sessionPtr) {
       this.Module._portal_wasm_pose_session_clear_display_lock(sessionPtr);
     }
+    this.syncSessionAltHandConfig();
   }
 
   handleDisconnect(): void {
@@ -705,6 +767,9 @@ export class PortalControllerRuntime {
     this.activeDragMode = 'none';
     this.buttonDragRequested = false;
     this.aimDragRequested = false;
+    this.dragSource = null;
+    this.lastButtonDragRight = false;
+    this.lastButtonDragLeft = false;
     this.lastUnblendedPose = null;
     this.requestDragButtonActive(false);
   }
@@ -1015,6 +1080,91 @@ export class PortalControllerRuntime {
     }
   }
 
+  public setAltHandSpawnFromHead(headPose: PortalPose, baselineM = 0.25): void {
+    this.writePose(this.headPosePtr, headPose);
+    this.Module._portal_wasm_compute_alt_hand_spawn_offset(
+      this.headPosePtr,
+      baselineM,
+      this.vecPtr,
+    );
+    const base = this.vecPtr >> 2;
+    this.altHandOffset.x = this.F32[base + 0];
+    this.altHandOffset.y = this.F32[base + 1];
+    this.altHandOffset.z = this.F32[base + 2];
+    this.altHandOffsetValid = true;
+    this.syncSessionAltHandConfig();
+  }
+
+  private syncSessionAltHandConfig(): void {
+    const sessionPtr = this.getSessionPtr();
+    if (!sessionPtr) {
+      return;
+    }
+
+    const cfgPtr = this.Module._malloc(SIZEOF_PORTAL_ALT_HAND_CONFIG);
+
+    // offset_world (vec3f)
+    const vecBase = (cfgPtr + OFF_ALT_HAND_CFG_OFFSET_WORLD) >> 2;
+    this.F32[vecBase + 0] = this.altHandOffset.x;
+    this.F32[vecBase + 1] = this.altHandOffset.y;
+    this.F32[vecBase + 2] = this.altHandOffset.z;
+
+    const offsetValid =
+      this.altHandOffsetValid &&
+      !this.displayLockActive &&
+      !this.dualTrackedRequested;
+
+    this.U8[cfgPtr + OFF_ALT_HAND_CFG_OFFSET_VALID] = offsetValid ? 1 : 0;
+    this.U8[cfgPtr + OFF_ALT_HAND_CFG_DISPLAY_LOCK_ACTIVE] =
+      this.displayLockActive ? 1 : 0;
+    this.U8[cfgPtr + OFF_ALT_HAND_CFG_DUAL_TRACKED_ENABLED] =
+      this.dualTrackedRequested ? 1 : 0;
+
+    this.Module._portal_wasm_pose_session_update_alt_hand_offsets(
+      sessionPtr,
+      cfgPtr,
+    );
+    this.Module._free(cfgPtr);
+  }
+
+  private syncSessionPoseModeConfig(): void {
+    const sessionPtr = this.getSessionPtr();
+    if (!sessionPtr) {
+      return;
+    }
+
+    const cfgPtr = this.Module._malloc(SIZEOF_PORTAL_AIM_HAND_CONFIG);
+
+    const sourceHand: HandId =
+      this.explicitAimHand ?? this.activeHand ?? 'right';
+    const sourceEnum =
+      sourceHand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
+
+    // explicit_source_valid
+    this.U8[cfgPtr + OFF_AIM_HAND_CFG_EXPLICIT_SOURCE_VALID] = 1;
+    // explicit_source enum
+    this.I32[(cfgPtr + OFF_AIM_HAND_CFG_EXPLICIT_SOURCE) >> 2] = sourceEnum;
+    // dual_tracked_enabled
+    this.U8[cfgPtr + OFF_AIM_HAND_CFG_DUAL_TRACKED_ENABLED] =
+      this.dualTrackedRequested ? 1 : 0;
+
+    this.Module._portal_wasm_pose_session_set_aim_hand_config(
+      sessionPtr,
+      cfgPtr,
+    );
+    this.Module._free(cfgPtr);
+  }
+
+  public setAimActiveHand(hand: HandId): void {
+    this.explicitAimHand = hand;
+    this.syncSessionPoseModeConfig();
+  }
+
+  public clearAimActiveHand(): void {
+    this.explicitAimHand = null;
+    this.syncSessionPoseModeConfig();
+  }
+
   private requestDragButtonActive(active: boolean): void {
     if (!this.dragButtonSetter) {
       return;
@@ -1060,6 +1210,10 @@ export class PortalControllerRuntime {
       desired = 'button';
     }
 
+    const sourceHand: HandId = this.dragSource ?? 'right';
+    const sourcePose =
+      GLOBAL_HAND_STATES[sourceHand].lastUnblendedPose ?? unblendedPose;
+
     if (desired !== this.activeDragMode) {
       // Switch modes.
       if (this.activeDragMode !== 'none') {
@@ -1070,12 +1224,12 @@ export class PortalControllerRuntime {
         }
       }
       this.activeDragMode = desired;
-      if (this.activeDragMode !== 'none') {
+      if (this.activeDragMode !== 'none' && sourcePose) {
         try {
           this.dragHandle.begin({
             controllerPose: {
-              position: { ...unblendedPose.position },
-              orientation: { ...unblendedPose.orientation },
+              position: { ...sourcePose.position },
+              orientation: { ...sourcePose.orientation },
             },
             cameraQuat: { ...headPose.orientation },
             baseUiYawRad: this.externalUiYawRad,
@@ -1090,28 +1244,29 @@ export class PortalControllerRuntime {
 
     this.requestDragButtonActive(this.activeDragMode === 'button');
 
-    if (this.activeDragMode === 'none') {
+    if (this.activeDragMode === 'none' || !sourcePose) {
       return undefined;
     }
 
     try {
       const res = this.dragHandle.compute({
         controllerPose: {
-          position: { ...unblendedPose.position },
-          orientation: { ...unblendedPose.orientation },
+          position: { ...sourcePose.position },
+          orientation: { ...sourcePose.orientation },
         },
         nowSeconds: nowNs * 1e-9,
       });
       if (!res) {
         return undefined;
       }
+
       return {
         incY: res.incY ?? 0,
         incYaw: res.incYaw ?? 0,
         incPitch: res.incPitch ?? 0,
         incX: res.incX ?? 0,
         incZ: res.incZ ?? 0,
-        mode: this.activeDragMode === 'aim' ? 'aim' : 'button',
+        mode: this.activeDragMode,
       };
     } catch {
       return undefined;
@@ -1120,7 +1275,8 @@ export class PortalControllerRuntime {
 
   private commitDisplayLock(
     headPose: HeadPoseInput,
-    ctrlPose: PortalPose,
+    rightCtrlPose: PortalPose,
+    leftCtrlPose: PortalPose | null,
   ): void {
     this.displayLockPending = false;
     this.displayLockActive = true;
@@ -1129,8 +1285,8 @@ export class PortalControllerRuntime {
       orientation: { ...headPose.orientation },
     };
     this.displayLockCtrlPose = {
-      position: { ...ctrlPose.position },
-      orientation: { ...ctrlPose.orientation },
+      position: { ...rightCtrlPose.position },
+      orientation: { ...rightCtrlPose.orientation },
     };
 
     const sessionPtr = this.getSessionPtr();
@@ -1146,21 +1302,25 @@ export class PortalControllerRuntime {
       this.displayLockHeadPose,
     );
 
-    // Right-hand controller pose at calibration time
+    // Controller poses at calibration time
+    // ctrl_pose_world[0] = RIGHT (PORTAL_HAND_RIGHT=0), ctrl_pose_world[1] = LEFT (PORTAL_HAND_LEFT=1)
     const rightPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_RIGHT;
-    this.writePose(rightPosePtr, this.displayLockCtrlPose);
-
-    // Left-hand pose unused for now (identity)
     const leftPosePtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_POSE_LEFT;
-    this.writePose(leftPosePtr, {
-      position: { x: 0, y: 0, z: 0 },
-      orientation: { x: 0, y: 0, z: 0, w: 1 },
-    });
 
-    // ctrl_valid[2]
+    this.writePose(rightPosePtr, rightCtrlPose);
+    if (leftCtrlPose) {
+      this.writePose(leftPosePtr, leftCtrlPose);
+    } else {
+      this.writePose(leftPosePtr, {
+        position: { x: 0, y: 0, z: 0 },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      });
+    }
+
+    // ctrl_valid[0] = right valid, ctrl_valid[1] = left valid
     const ctrlValidPtr = calPtr + OFF_DISPLAY_LOCK_CAL_CTRL_VALID;
-    this.U8[ctrlValidPtr + 0] = 1; // right
-    this.U8[ctrlValidPtr + 1] = 0; // left
+    this.U8[ctrlValidPtr + 0] = 1; // right always valid
+    this.U8[ctrlValidPtr + 1] = leftCtrlPose ? 1 : 0; // left valid only if provided
 
     // calibrating_hand enum
     const handEnum =
@@ -1181,6 +1341,142 @@ export class PortalControllerRuntime {
       calPtr,
     );
     this.Module._free(calPtr);
+
+    // Apply centering shift to make hands symmetric on screen (matches Android)
+    this.applyCenteringShift(headPose, rightCtrlPose, leftCtrlPose);
+  }
+
+  /**
+   * Calculates and applies a horizontal centering shift so both hands appear
+   * symmetric on screen. This matches the Android implementation.
+   */
+  private applyCenteringShift(
+    headPose: HeadPoseInput,
+    rightCtrlPose: PortalPose,
+    leftCtrlPose: PortalPose | null,
+  ): void {
+    const sessionPtr = this.getSessionPtr();
+    if (!sessionPtr) {
+      return;
+    }
+
+    const PORTAL_FIXED_DISPLAY_HAND_SEPARATION = 0.12;
+
+    // Determine primary/secondary based on active hand
+    const primaryIsRight = this.activeHand === 'right';
+    const primaryPose = primaryIsRight ? rightCtrlPose : (leftCtrlPose ?? rightCtrlPose);
+    const secondaryPose = primaryIsRight ? leftCtrlPose : rightCtrlPose;
+
+    // Base X position for primary hand
+    const sep = PORTAL_FIXED_DISPLAY_HAND_SEPARATION;
+    const primaryBaseX = (primaryIsRight ? 1.0 : -1.0) * sep;
+
+    let shiftX = 0;
+
+    if (secondaryPose) {
+      // Calculate vector from primary to secondary in world space
+      const diffWorld: vec3 = vec3.fromValues(
+        secondaryPose.position.x - primaryPose.position.x,
+        secondaryPose.position.y - primaryPose.position.y,
+        secondaryPose.position.z - primaryPose.position.z,
+      );
+
+      // Transform to head/local space by rotating with head quaternion inverse
+      const headQuat: quat = quat.fromValues(
+        headPose.orientation.x,
+        headPose.orientation.y,
+        headPose.orientation.z,
+        headPose.orientation.w,
+      );
+      const headQuatInv: quat = quat.create();
+      quat.conjugate(headQuatInv, headQuat);
+
+      const vLocal: vec3 = vec3.create();
+      vec3.transformQuat(vLocal, diffWorld, headQuatInv);
+
+      // Calculate centering shift
+      shiftX = -primaryBaseX - vLocal[0] * 0.5;
+    }
+
+    // Apply shift to both hands via set_rel_offset
+    const primaryOffsetPose: PortalPose = {
+      position: { x: shiftX, y: 0, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+    };
+    const rightHandEnum = PortalHandEnum.Right;
+    const leftHandEnum = PortalHandEnum.Left;
+
+    // Set right hand rel_offset
+    const rightStatePtr = this.getStatePtrForHand('right');
+    if (primaryIsRight) {
+      // Right is primary - just apply centering shift
+      this.writePose(this.ctrlPosePtr, primaryOffsetPose);
+    } else if (leftCtrlPose) {
+      // Right is secondary - apply relative offset + centering shift
+      const diffWorld: vec3 = vec3.fromValues(
+        rightCtrlPose.position.x - leftCtrlPose.position.x,
+        rightCtrlPose.position.y - leftCtrlPose.position.y,
+        rightCtrlPose.position.z - leftCtrlPose.position.z,
+      );
+      const headQuat: quat = quat.fromValues(
+        headPose.orientation.x,
+        headPose.orientation.y,
+        headPose.orientation.z,
+        headPose.orientation.w,
+      );
+      const headQuatInv: quat = quat.create();
+      quat.conjugate(headQuatInv, headQuat);
+      const vLocal: vec3 = vec3.create();
+      vec3.transformQuat(vLocal, diffWorld, headQuatInv);
+      this.writePose(this.ctrlPosePtr, {
+        position: { x: vLocal[0] + shiftX, y: vLocal[1], z: vLocal[2] },
+        orientation: { x: 0, y: 0, z: 0, w: 1 },
+      });
+    } else {
+      this.writePose(this.ctrlPosePtr, primaryOffsetPose);
+    }
+    this.Module._portal_wasm_pose_state_set_rel_offset(
+      rightStatePtr,
+      rightHandEnum,
+      1,
+      this.ctrlPosePtr,
+    );
+
+    // Set left hand rel_offset
+    if (leftCtrlPose) {
+      const leftStatePtr = this.getStatePtrForHand('left');
+      if (!primaryIsRight) {
+        // Left is primary - just apply centering shift
+        this.writePose(this.ctrlPosePtr, primaryOffsetPose);
+      } else {
+        // Left is secondary - apply relative offset + centering shift
+        const diffWorld: vec3 = vec3.fromValues(
+          leftCtrlPose.position.x - rightCtrlPose.position.x,
+          leftCtrlPose.position.y - rightCtrlPose.position.y,
+          leftCtrlPose.position.z - rightCtrlPose.position.z,
+        );
+        const headQuat: quat = quat.fromValues(
+          headPose.orientation.x,
+          headPose.orientation.y,
+          headPose.orientation.z,
+          headPose.orientation.w,
+        );
+        const headQuatInv: quat = quat.create();
+        quat.conjugate(headQuatInv, headQuat);
+        const vLocal: vec3 = vec3.create();
+        vec3.transformQuat(vLocal, diffWorld, headQuatInv);
+        this.writePose(this.ctrlPosePtr, {
+          position: { x: vLocal[0] + shiftX, y: vLocal[1], z: vLocal[2] },
+          orientation: { x: 0, y: 0, z: 0, w: 1 },
+        });
+      }
+      this.Module._portal_wasm_pose_state_set_rel_offset(
+        leftStatePtr,
+        leftHandEnum,
+        1,
+        this.ctrlPosePtr,
+      );
+    }
   }
 
   private writePose(ptr: number, pose: PortalPose): void {
