@@ -76,6 +76,10 @@ import {
 import { type SIGCFStatusSnapshot } from '../webrtc/sigcf.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
 import {
+  TRACKING_REASON_SYSTEM_MENU,
+  INTERACTION_MODE_OPENXR_QUEST,
+} from '../webrtc/controllerParser.js';
+import {
   PortalControllerRuntime,
   type PortalPose,
 } from '../wasm/PortalControllerRuntime.js';
@@ -246,6 +250,7 @@ const DEFAULT_CONFIG_SETTINGS = {
 };
 
 type ControllerSwipeVariant = 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+export type ControllerPromptStatus = 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
 
 export interface DevUIConstructor {
   new (xrDevice: XRDevice): DevUI;
@@ -257,7 +262,7 @@ export interface DevUI {
   get devUIContainer(): HTMLDivElement;
   setControllerConnected(connected: boolean): void;
 	setControllerPromptStatus(
-		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
+		status: ControllerPromptStatus,
 		swipeVariant?: ControllerSwipeVariant,
 	): void;
 }
@@ -1727,12 +1732,17 @@ export class XRDevice {
 	return true;
 	}
 
-	private computeControllerPromptStatus(): 'qr' | 'tracking-issues' | 'swipe' | 'hidden' {
+	private computeControllerPromptStatus(): ControllerPromptStatus {
 	if (!this.isControllerConnected) {
 		return 'qr';
 	}
 	const trackingStable = this.isTrackingStableFromState(this.lastControllerState);
 	if (!trackingStable) {
+		// Check if tracking issues are due to system menu / focus lost
+		const trackingReason = this.lastControllerState?.trackingReason ?? 0;
+		if (trackingReason === TRACKING_REASON_SYSTEM_MENU) {
+			return 'focus-lost';
+		}
 		return 'tracking-issues';
 	}
 	if (!this.hasSeenOrientationResetOnce) {

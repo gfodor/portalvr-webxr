@@ -12,6 +12,7 @@ import { VERSION } from './version.js';
 import { DevUIRoot } from './components/DevUIRoot.js';
 
 type SwipeVariant = 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+type ControllerPromptStatus = 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
 
 const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
 const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
@@ -24,7 +25,7 @@ export class DevUI {
 	private reactRoot: Root | null = null;
 	private readonly xrDevice: XRDevice;
 	private controllerConnected = false;
-	private controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden' = 'qr';
+	private controllerPrompt: ControllerPromptStatus = 'qr';
 	private swipeVariant: SwipeVariant = 'base';
 
 	constructor(xrDevice: XRDevice) {
@@ -67,7 +68,7 @@ export class DevUI {
 	}
 
 	public setControllerPromptStatus(
-		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
+		status: ControllerPromptStatus,
 		swipeVariant?: SwipeVariant,
 	): void {
 		if (this.controllerPrompt === status && (status !== 'swipe' || (swipeVariant == null || swipeVariant === this.swipeVariant))) {

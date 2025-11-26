@@ -11,6 +11,22 @@ const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02, 0x03]);
 const TRACKING_STATE_MASK = 0x03;
 const TRACKING_REASON_MASK = 0x0f;
 
+// Tracking state values (byte 59 in v2+ packets)
+export const TRACKING_STATE_UNKNOWN = 0x00;
+export const TRACKING_STATE_TRACKING = 0x01;
+export const TRACKING_STATE_LIMITED = 0x02;
+export const TRACKING_STATE_NOT_TRACKING = 0x03;
+
+// Tracking reason values (byte 60 in v2+ packets)
+export const TRACKING_REASON_NONE = 0x00;
+export const TRACKING_REASON_EXCESSIVE_MOTION = 0x01;
+export const TRACKING_REASON_INSUFFICIENT_FEATURES = 0x02;
+export const TRACKING_REASON_INSUFFICIENT_LIGHT = 0x03;
+export const TRACKING_REASON_RELOCALIZING = 0x04;
+export const TRACKING_REASON_INITIALIZING = 0x05;
+export const TRACKING_REASON_BAD_STATE = 0x06;
+export const TRACKING_REASON_SYSTEM_MENU = 0x07; // Focus lost indicator
+
 // Packet sizes (bytes)
 const PACKET_STATE_SIZE_V4 = 111; // v4: right body + tracking + interaction + trackpad tail + left-hand tail
 const PACKET_STATE_SIZE_V3 = 67; // v3: right body + tracking + interaction + trackpad tail

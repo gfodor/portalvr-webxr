@@ -19,7 +19,7 @@ export type PortalQrPromptProps = {
 	deviceId: string;
 	// Old prop `visible` is replaced by `status`. Keep it optional for back-compat but unused now.
 	visible?: boolean;
-	status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
+	status: 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
 	swipeVariant?: 'base' | 'recenter' | 'trackpad' | 'quest-stick';
 	searchCountdownSeconds?: number | null;
 	isSearchingActively?: boolean;
@@ -137,17 +137,19 @@ export function PortalQrPrompt({
 	const title =
 		status === 'qr'
 			? `Scan to pair ${deviceName}`
-			: status === 'tracking-issues'
-				? isOpenxrQuest
-					? 'Tracking or connection issue. If it persists, check the headset for notifications.'
-					: 'Tracking issues, hold the controller still and ensure camera is clear.'
-				: swipeVariant === 'recenter'
-					? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
-					: swipeVariant === 'trackpad'
-						? 'Click the controller trackpad to calibrate the controller.'
-						: swipeVariant === 'quest-stick'
-							? 'To calibrate, click the stick on each controller.'
-							: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
+			: status === 'focus-lost'
+				? 'Controller app lost focus. Try clicking the system/Oculus/Meta button or checking the headset.'
+				: status === 'tracking-issues'
+					? isOpenxrQuest
+						? 'Tracking or connection issue. If it persists, check the headset for notifications.'
+						: 'Tracking issues, hold the controller still and ensure camera is clear.'
+					: swipeVariant === 'recenter'
+						? 'To recenter, hold the gamepad facing forward and press the Recenter button.'
+						: swipeVariant === 'trackpad'
+							? 'Click the controller trackpad to calibrate the controller.'
+							: swipeVariant === 'quest-stick'
+								? 'Press and hold the system/Oculus/Meta button to recenter your controllers.'
+								: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt
 		? 'portal-qr-pill portal-qr-pill--swipe'

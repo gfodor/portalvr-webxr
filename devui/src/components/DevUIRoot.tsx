@@ -26,7 +26,7 @@ import {
 
 type DevUIRootProps = {
 	xrDevice: XRDevice;
-	controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
+	controllerPrompt: 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
 	swipeVariant?: 'base' | 'recenter' | 'trackpad' | 'quest-stick';
 };
 
