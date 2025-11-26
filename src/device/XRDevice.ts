@@ -2248,6 +2248,14 @@ export class XRDevice {
 		update.cameraDrag,
 		);
     }
+
+    // Apply momentum-based camera increments (decaying after BUTTON drag release)
+    // This mirrors HeadPoseProvider.predictedPose() which applies momentum each frame
+    if (update.cameraMomentum) {
+		this.portalPoseCamera?.applyCameraDragIncrements(
+		update.cameraMomentum,
+		);
+    }
   }
 
   private applyControllerPose(

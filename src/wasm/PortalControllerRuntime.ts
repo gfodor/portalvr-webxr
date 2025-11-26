@@ -61,6 +61,8 @@ interface PortalControllerUpdate {
   headWeight: number;
   stretchAmount: number;
   cameraDrag?: CameraDragIncrements;
+  /** Momentum-based increments to apply when no active drag (decaying after BUTTON drag release) */
+  cameraMomentum?: CameraDragIncrements;
   cameraFovDeg: number;
 }
 
@@ -170,6 +172,16 @@ const DEFAULT_HALF_FOV_RAD = Math.PI / 4;
 const DISPLAY_LOCK_TIMEOUT_MS = 1500;
 
 const AIM_ENTER_W = 0.999;
+
+// Momentum constants from HeadPoseProvider.kt
+const MOMENTUM_LINEAR_TAU_S = 0.25;   // translation decay time constant
+const MOMENTUM_ANGULAR_TAU_S = 0.20;  // yaw/pitch decay time constant
+const MOMENTUM_MIN_LINEAR_SPEED = 0.02;   // m/s threshold to stop
+const MOMENTUM_MIN_ANGULAR_SPEED = 0.05;  // rad/s threshold to stop
+
+// Stick dead zone thresholds for momentum cancellation (from BlePeripheralService.kt)
+const STICK_DEADZONE_MAG = 0.12;   // radial magnitude threshold
+const STICK_DEADZONE_AXIS = 0.08;  // per-axis threshold
 
 const enum PortalHandEnum {
   Right = 0,
@@ -315,6 +327,27 @@ export class PortalControllerRuntime {
   private lastButtonDragLeft = false;
 
   private displayLockCalibrationHand: HandId = 'right';
+
+  // Momentum state for camera drag (ported from HeadPoseProvider.kt)
+  private hasMomentum = false;
+  private momentumVelX = 0;
+  private momentumVelY = 0;
+  private momentumVelZ = 0;
+  private momentumVelYaw = 0;
+  private momentumVelPitch = 0;
+  private lastMomentumNs = 0;
+  // Track recent drag increments (smoothed) for velocity estimation on release
+  private readonly lastButtonDragLocalInc = [0, 0, 0, 0, 0]; // [incY, incYaw, incPitch, incX, incZ]
+  // Track current drag hand for late-grab handoff
+  private currentDragHand: HandId | null = null;
+
+  // State for momentum cancellation triggers (stick dead zone exit, trigger/grip engagement)
+  private prevRightStickOutsideDeadZone = false;
+  private prevLeftStickOutsideDeadZone = false;
+  private prevRightTrigger = false;
+  private prevRightSqueeze = false;
+  private prevLeftTrigger = false;
+  private prevLeftSqueeze = false;
 
   private deltaTargetValid = false;
   private readonly deltaTargetPose: PortalPose = {
@@ -534,6 +567,55 @@ export class PortalControllerRuntime {
 
     // Expose whether any drag button is currently active to the camera-drag pipeline.
     this.buttonDragRequested = this.dragSource != null;
+
+    // Momentum cancellation triggers (from BlePeripheralService.kt lines 981-1006)
+    // Cancel momentum when stick exits dead zone or trigger/grip is engaged while no drag button is held
+    if (this.hasMomentum && !rightDrag && !leftDrag) {
+      // Check stick dead zone exit (rising edge: was inside, now outside)
+      const rightStickMag = Math.hypot(state.joystick.x, state.joystick.y);
+      const rightStickActive =
+        rightStickMag > STICK_DEADZONE_MAG ||
+        Math.abs(state.joystick.x) > STICK_DEADZONE_AXIS ||
+        Math.abs(state.joystick.y) > STICK_DEADZONE_AXIS;
+
+      let leftStickActive = false;
+      if (state.left) {
+        const leftStickMag = Math.hypot(state.left.joystick.x, state.left.joystick.y);
+        leftStickActive =
+          leftStickMag > STICK_DEADZONE_MAG ||
+          Math.abs(state.left.joystick.x) > STICK_DEADZONE_AXIS ||
+          Math.abs(state.left.joystick.y) > STICK_DEADZONE_AXIS;
+      }
+
+      const stickExitedDeadZone =
+        (!this.prevRightStickOutsideDeadZone && rightStickActive) ||
+        (!this.prevLeftStickOutsideDeadZone && leftStickActive);
+
+      // Check trigger/grip engagement (rising edge)
+      const rightTriggerGripEdge =
+        (state.buttons.trigger && !this.prevRightTrigger) ||
+        (state.buttons.squeeze && !this.prevRightSqueeze);
+      const leftTriggerGripEdge = state.left
+        ? (state.left.buttons.trigger && !this.prevLeftTrigger) ||
+          (state.left.buttons.squeeze && !this.prevLeftSqueeze)
+        : false;
+
+      if (stickExitedDeadZone || rightTriggerGripEdge || leftTriggerGripEdge) {
+        this.cancelMomentum();
+      }
+
+      // Update previous stick state
+      this.prevRightStickOutsideDeadZone = rightStickActive;
+      this.prevLeftStickOutsideDeadZone = leftStickActive;
+    }
+
+    // Update previous trigger/grip state (always, for edge detection)
+    this.prevRightTrigger = state.buttons.trigger;
+    this.prevRightSqueeze = state.buttons.squeeze;
+    if (state.left) {
+      this.prevLeftTrigger = state.left.buttons.trigger;
+      this.prevLeftSqueeze = state.left.buttons.squeeze;
+    }
   }
 
   setWandMode(mode: number): void {
@@ -718,6 +800,13 @@ export class PortalControllerRuntime {
       result.cameraDrag = cameraDrag;
     }
 
+    // Apply camera drag momentum (decaying after BUTTON drag release)
+    // This should be applied BEFORE nudge smoothing, mirroring HeadPoseProvider.predictedPose()
+    const cameraMomentum = this.applyCameraDragMomentum(nowNs);
+    if (cameraMomentum) {
+      result.cameraMomentum = cameraMomentum;
+    }
+
     this.lastUnblendedPose = rightUnblended ?? null;
 
     return result;
@@ -776,8 +865,17 @@ export class PortalControllerRuntime {
     this.dragSource = null;
     this.lastButtonDragRight = false;
     this.lastButtonDragLeft = false;
+    this.currentDragHand = null;
     this.lastUnblendedPose = null;
     this.requestDragButtonActive(false);
+    this.cancelMomentum();
+    // Reset momentum cancellation state
+    this.prevRightStickOutsideDeadZone = false;
+    this.prevLeftStickOutsideDeadZone = false;
+    this.prevRightTrigger = false;
+    this.prevRightSqueeze = false;
+    this.prevLeftTrigger = false;
+    this.prevLeftSqueeze = false;
   }
 
   hasRecentPacket(nowMs: number): boolean {
@@ -1212,8 +1310,11 @@ export class PortalControllerRuntime {
       this.aimDragRequested = false;
     }
 
+    // Prefer AIM over BUTTON: pressing BUTTON while AIM-drag is active must NOT restore translations.
+    const aimDragActive = this.displayLockActive && this.aimDragRequested;
+    const previousMode = this.activeDragMode;
     let desired: DragMode = 'none';
-    if (this.aimDragRequested) {
+    if (aimDragActive) {
       desired = 'aim';
     } else if (this.buttonDragRequested) {
       desired = 'button';
@@ -1223,17 +1324,27 @@ export class PortalControllerRuntime {
     const sourcePose =
       GLOBAL_HAND_STATES[sourceHand].lastUnblendedPose ?? unblendedPose;
 
-    if (desired !== this.activeDragMode) {
-      // Switch modes.
-      if (this.activeDragMode !== 'none') {
+    if (desired !== previousMode) {
+      // Mode transition handling - mirrors HeadPoseProvider.kt updateCameraDrag()
+      if (previousMode === 'button' && desired === 'none') {
+        // BUTTON drag just ended: start momentum from the last observed increments
+        this.armMomentumOnButtonRelease(90); // Default 90Hz
+      } else {
+        // Any other transition cancels residual momentum
+        this.cancelMomentum();
+      }
+
+      // End previous drag session
+      if (previousMode !== 'none') {
         try {
           this.dragHandle.end();
         } catch {
           // ignore
         }
       }
-      this.activeDragMode = desired;
-      if (this.activeDragMode !== 'none' && sourcePose) {
+
+      // Begin new drag session if needed (late-grab: snapshot current controller pose as new baseline)
+      if (desired !== 'none' && sourcePose) {
         try {
           this.dragHandle.begin({
             controllerPose: {
@@ -1242,13 +1353,74 @@ export class PortalControllerRuntime {
             },
             cameraQuat: { ...headPose.orientation },
             baseUiYawRad: this.externalUiYawRad,
-            mode: this.activeDragMode === 'aim' ? 1 : 0,
+            mode: desired === 'aim' ? 1 : 0,
           });
+          this.currentDragHand = sourceHand;
         } catch {
           // If begin fails, disable drag this frame.
+          desired = 'none';
+        }
+      } else {
+        this.currentDragHand = null;
+      }
+
+      this.activeDragMode = desired;
+    } else if (this.activeDragMode === 'aim' && sourceHand !== this.currentDragHand) {
+      // Hand switching within AIM mode - re-snapshot baseline (mirrors HeadPoseProvider.kt lines 571-577)
+      // When the AIM source hand changes (driven by CAMERA_DRAG), re-snapshot the baseline
+      // so rotation-only drags remain stable and centered for the new hand.
+      this.cancelMomentum();
+      try {
+        this.dragHandle.end();
+      } catch {
+        // ignore
+      }
+      if (sourcePose) {
+        try {
+          this.dragHandle.begin({
+            controllerPose: {
+              position: { ...sourcePose.position },
+              orientation: { ...sourcePose.orientation },
+            },
+            cameraQuat: { ...headPose.orientation },
+            baseUiYawRad: this.externalUiYawRad,
+            mode: 1, // AIM mode
+          });
+          this.currentDragHand = sourceHand;
+        } catch {
           this.activeDragMode = 'none';
+          this.currentDragHand = null;
         }
       }
+    } else if (this.activeDragMode === 'button' && sourceHand !== this.currentDragHand) {
+      // Late-grab handoff for BUTTON mode - when one controller releases while other is held
+      // Re-snapshot baseline with the new hand so the remaining controller continues dragging seamlessly
+      this.cancelMomentum();
+      try {
+        this.dragHandle.end();
+      } catch {
+        // ignore
+      }
+      if (sourcePose) {
+        try {
+          this.dragHandle.begin({
+            controllerPose: {
+              position: { ...sourcePose.position },
+              orientation: { ...sourcePose.orientation },
+            },
+            cameraQuat: { ...headPose.orientation },
+            baseUiYawRad: this.externalUiYawRad,
+            mode: 0, // BUTTON mode
+          });
+          this.currentDragHand = sourceHand;
+        } catch {
+          this.activeDragMode = 'none';
+          this.currentDragHand = null;
+        }
+      }
+    } else {
+      // Same mode, same hand - update tracking
+      this.currentDragHand = sourceHand;
     }
 
     this.requestDragButtonActive(this.activeDragMode === 'button');
@@ -1269,16 +1441,205 @@ export class PortalControllerRuntime {
         return undefined;
       }
 
+      const incY = res.incY ?? 0;
+      const incYaw = res.incYaw ?? 0;
+      const incPitch = res.incPitch ?? 0;
+      const incX = res.incX ?? 0;
+      const incZ = res.incZ ?? 0;
+
+      // While BUTTON drag is active, remember the latest increments (with exponential smoothing)
+      // so we can seed momentum on release. Mirrors HeadPoseProvider.kt lines 614-623.
+      if (this.activeDragMode === 'button') {
+        const alpha = 0.3;
+        this.lastButtonDragLocalInc[0] += (incY - this.lastButtonDragLocalInc[0]) * alpha;
+        this.lastButtonDragLocalInc[1] += (incYaw - this.lastButtonDragLocalInc[1]) * alpha;
+        this.lastButtonDragLocalInc[2] += (incPitch - this.lastButtonDragLocalInc[2]) * alpha;
+        this.lastButtonDragLocalInc[3] += (incX - this.lastButtonDragLocalInc[3]) * alpha;
+        this.lastButtonDragLocalInc[4] += (incZ - this.lastButtonDragLocalInc[4]) * alpha;
+      }
+
       return {
-        incY: res.incY ?? 0,
-        incYaw: res.incYaw ?? 0,
-        incPitch: res.incPitch ?? 0,
-        incX: res.incX ?? 0,
-        incZ: res.incZ ?? 0,
+        incY,
+        incYaw,
+        incPitch,
+        incX,
+        incZ,
         mode: this.activeDragMode,
       };
     } catch {
       return undefined;
+    }
+  }
+
+  /**
+   * Capture final drag velocity when BUTTON drag ends, to seed momentum.
+   * Mirrors HeadPoseProvider.kt armMomentumOnButtonRelease()
+   */
+  private armMomentumOnButtonRelease(targetPoseHz: number): void {
+    // Build approximate per-second velocities from the final BUTTON-drag increments
+    const incY = this.lastButtonDragLocalInc[0];
+    const incYaw = this.lastButtonDragLocalInc[1];
+    const incPitch = this.lastButtonDragLocalInc[2];
+    const incX = this.lastButtonDragLocalInc[3];
+    const incZ = this.lastButtonDragLocalInc[4];
+
+    const linMagSqFrame = incX * incX + incY * incY + incZ * incZ;
+    const angMagSqFrame = incYaw * incYaw + incPitch * incPitch;
+
+    if (linMagSqFrame === 0 && angMagSqFrame === 0) {
+      // Nothing was moving when drag ended
+      this.hasMomentum = false;
+      this.momentumVelX = 0;
+      this.momentumVelY = 0;
+      this.momentumVelZ = 0;
+      this.momentumVelYaw = 0;
+      this.momentumVelPitch = 0;
+      this.lastMomentumNs = 0;
+      return;
+    }
+
+    const hz = Math.max(30, Math.min(144, targetPoseHz));
+    // Scale down the release velocity slightly to avoid the "burst" feeling
+    const releaseDamping = 0.8;
+    const scalar = hz * releaseDamping;
+
+    this.momentumVelX = incX * scalar;
+    this.momentumVelY = incY * scalar;
+    this.momentumVelZ = incZ * scalar;
+    this.momentumVelYaw = incYaw * scalar;
+    this.momentumVelPitch = incPitch * scalar;
+
+    const linSpeedSq =
+      this.momentumVelX * this.momentumVelX +
+      this.momentumVelY * this.momentumVelY +
+      this.momentumVelZ * this.momentumVelZ;
+    const angSpeedSq =
+      this.momentumVelYaw * this.momentumVelYaw +
+      this.momentumVelPitch * this.momentumVelPitch;
+
+    if (
+      linSpeedSq < MOMENTUM_MIN_LINEAR_SPEED * MOMENTUM_MIN_LINEAR_SPEED &&
+      angSpeedSq < MOMENTUM_MIN_ANGULAR_SPEED * MOMENTUM_MIN_ANGULAR_SPEED
+    ) {
+      this.hasMomentum = false;
+      this.momentumVelX = 0;
+      this.momentumVelY = 0;
+      this.momentumVelZ = 0;
+      this.momentumVelYaw = 0;
+      this.momentumVelPitch = 0;
+      this.lastMomentumNs = 0;
+      return;
+    }
+
+    this.hasMomentum = true;
+    this.lastMomentumNs =
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now() * 1e6
+        : Date.now() * 1e6;
+  }
+
+  /**
+   * Integrate momentum velocities and apply exponential decay.
+   * Returns increments to apply to camera offsets.
+   * Mirrors HeadPoseProvider.kt applyCameraDragMomentum()
+   */
+  private applyCameraDragMomentum(nowNs: number): CameraDragIncrements | null {
+    if (!this.hasMomentum) {
+      return null;
+    }
+
+    // If user has started any new drag, cancel momentum immediately
+    if (this.activeDragMode !== 'none' || this.buttonDragRequested || this.aimDragRequested) {
+      this.cancelMomentum();
+      return null;
+    }
+
+    if (this.lastMomentumNs === 0) {
+      this.lastMomentumNs = nowNs;
+      return null;
+    }
+
+    const dtSec = Math.max(0, (nowNs - this.lastMomentumNs) * 1e-9);
+    if (dtSec <= 0) {
+      return null;
+    }
+    this.lastMomentumNs = nowNs;
+
+    const dtClamped = Math.min(dtSec, 0.25);
+    const linearDecay =
+      MOMENTUM_LINEAR_TAU_S > 0
+        ? Math.exp(-dtClamped / MOMENTUM_LINEAR_TAU_S)
+        : 0;
+    const angularDecay =
+      MOMENTUM_ANGULAR_TAU_S > 0
+        ? Math.exp(-dtClamped / MOMENTUM_ANGULAR_TAU_S)
+        : 0;
+
+    // Integrate displacement this tick
+    const localDx = this.momentumVelX * dtSec;
+    const localDy = this.momentumVelY * dtSec;
+    const localDz = this.momentumVelZ * dtSec;
+    const dYaw = this.momentumVelYaw * dtSec;
+    const dPitch = this.momentumVelPitch * dtSec;
+
+    // Apply exponential decay to velocities
+    this.momentumVelX *= linearDecay;
+    this.momentumVelY *= linearDecay;
+    this.momentumVelZ *= linearDecay;
+    this.momentumVelYaw *= angularDecay;
+    this.momentumVelPitch *= angularDecay;
+
+    const linSpeedSq =
+      this.momentumVelX * this.momentumVelX +
+      this.momentumVelY * this.momentumVelY +
+      this.momentumVelZ * this.momentumVelZ;
+    const angSpeedSq =
+      this.momentumVelYaw * this.momentumVelYaw +
+      this.momentumVelPitch * this.momentumVelPitch;
+
+    if (
+      linSpeedSq < MOMENTUM_MIN_LINEAR_SPEED * MOMENTUM_MIN_LINEAR_SPEED &&
+      angSpeedSq < MOMENTUM_MIN_ANGULAR_SPEED * MOMENTUM_MIN_ANGULAR_SPEED
+    ) {
+      this.hasMomentum = false;
+    }
+
+    // Return increments to apply
+    const hasMovement =
+      Math.abs(localDx) > 1e-6 ||
+      Math.abs(localDy) > 1e-6 ||
+      Math.abs(localDz) > 1e-6 ||
+      Math.abs(dYaw) > 1e-6 ||
+      Math.abs(dPitch) > 1e-6;
+
+    if (!hasMovement) {
+      return null;
+    }
+
+    return {
+      incY: localDy,
+      incYaw: dYaw,
+      incPitch: dPitch,
+      incX: localDx,
+      incZ: localDz,
+      mode: 'button',
+    };
+  }
+
+  /**
+   * Cancel any active momentum immediately.
+   * Mirrors HeadPoseProvider.kt cancelMomentum()
+   */
+  public cancelMomentum(): void {
+    this.hasMomentum = false;
+    this.momentumVelX = 0;
+    this.momentumVelY = 0;
+    this.momentumVelZ = 0;
+    this.momentumVelYaw = 0;
+    this.momentumVelPitch = 0;
+    this.lastMomentumNs = 0;
+    for (let i = 0; i < this.lastButtonDragLocalInc.length; i++) {
+      this.lastButtonDragLocalInc[i] = 0;
     }
   }
 

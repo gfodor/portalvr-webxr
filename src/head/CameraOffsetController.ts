@@ -1,10 +1,10 @@
 import type { Vec3Like } from '../types/geometry.js';
 
-export const Y_OFFSET_MIN = 0.0;
+export const Y_OFFSET_MIN = -0.5;
 export const Y_OFFSET_MAX = 1.5;
 
-const TAU_OFFSET_SECONDS = 0.05;
-const TAU_PITCH_SECONDS = 0.05;
+const TAU_OFFSET_SECONDS = 0.02;
+const TAU_PITCH_SECONDS = 0.02;
 const PITCH_LIMIT_RAD = (77.5 * Math.PI) / 180;
 
 function clamp(value: number, min: number, max: number): number {
