@@ -282,6 +282,7 @@ export class AdbControllerStreamer {
   private async cleanup(): Promise<void> {
     const transport = this.transport;
     const adb = this.adb;
+    const wasProvidedAdb = adb === this.initialAdb;
     this.transport = null;
     this.adb = null;
 
@@ -293,7 +294,8 @@ export class AdbControllerStreamer {
       }
     }
 
-    if (adb) {
+    // Only close ADB connections we created via factory, not ones passed in
+    if (adb && !wasProvidedAdb) {
       try {
         await adb.close();
       } catch (err: any) {

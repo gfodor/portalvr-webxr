@@ -233,7 +233,11 @@ function ensureObjectUrl(asset: EmbeddedAssetDescriptor, mimeOverride?: string):
     asset.objectUrl = ensureDataUrl(asset);
     return asset.objectUrl;
   }
-  const blob = new Blob([ensureBytes(asset)], { type: mimeOverride ?? asset.mime });
+  const bytes = ensureBytes(asset);
+  // Create a fresh ArrayBuffer to satisfy TS5 BlobPart type requirements
+  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(arrayBuffer).set(bytes);
+  const blob = new Blob([arrayBuffer], { type: mimeOverride ?? asset.mime });
   asset.objectUrl = creator.createObjectURL?.(blob) ?? null;
   if (!asset.objectUrl) {
     asset.objectUrl = ensureDataUrl(asset);

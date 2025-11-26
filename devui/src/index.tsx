@@ -64,6 +64,8 @@ export class DevUI {
 		if (imode === INTERACTION_MODE_DUAL_AXIS_GAMEPAD) return 'recenter';
 		if (imode === INTERACTION_MODE_DUALSHOCK_GAMEPAD) return 'trackpad';
 		if (imode === INTERACTION_MODE_OPENXR_QUEST) return 'quest-stick';
+		// If connected via ADB (Quest USB), default to quest-stick variant
+		if ((this.xrDevice as any)?.isAdbControllerStreamingActive?.()) return 'quest-stick';
 		return 'base';
 	}
 

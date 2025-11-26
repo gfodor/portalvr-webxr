@@ -85,7 +85,8 @@ export function DevUIRoot({
 		},
 		onConnectionChange: (connected: boolean) => {
 			setIsAdbConnected(connected);
-			(xrDevice as any).handleControllerConnectionChange?.(connected);
+			// Pass fromAdb=true so XRDevice knows this is an ADB connection
+			(xrDevice as any).handleControllerConnectionChange?.(connected, true);
 		},
 	}), [xrDevice]);
 

@@ -252,12 +252,9 @@ export function useQuestUsbDetection(
 				window.clearTimeout(exhaustedPromptTimeoutRef.current);
 				exhaustedPromptTimeoutRef.current = null;
 			}
-			// Clean up ADB streamer when disabled
-			if (adbStreamerRef.current) {
-				void adbStreamerRef.current.dispose();
-				adbStreamerRef.current = null;
-				setAdbStreamer(null);
-			}
+			// Don't dispose ADB streamer when disabled if it's actively connected
+			// The streamer should keep running to maintain the controller connection
+			// Only dispose on unmount (handled in a separate effect)
 			return;
 		}
 
@@ -272,6 +269,16 @@ export function useQuestUsbDetection(
 
 		if (!manager) {
 			setState({ kind: 'unsupported', reason: 'no-webusb' });
+			return;
+		}
+
+		// If we already have an active ADB streamer that is connected,
+		// we already have permission and don't need to re-check or show the permission dialog
+		const existingStreamer = adbStreamerRef.current;
+		if (existingStreamer && existingStreamer.isConnected()) {
+			setHasPermission(true);
+			// Also mark quest as detected so we don't re-probe
+			questDetectedRef.current = true;
 			return;
 		}
 
@@ -1219,12 +1226,24 @@ async function launchControllerWithRetries(
 				'force-stop',
 				CONTROLLER_PKG_NAME,
 			]);
+			// Modify the launch URL to use ADB binding type instead of SIGCF
+			const adbLaunchUrl = (() => {
+				try {
+					const url = new URL(controllerLaunchUrl);
+					url.searchParams.set('service_type', 'adb');
+					return url.toString();
+				} catch {
+					// If URL parsing fails, append the parameter manually
+					const separator = controllerLaunchUrl.includes('?') ? '&' : '?';
+					return `${controllerLaunchUrl}${separator}service_type=adb`;
+				}
+			})();
 			logDebug('Sending launch intent', {
 				component: `${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity`,
 				action: 'android.intent.action.VIEW',
-				data: controllerLaunchUrl,
+				data: adbLaunchUrl,
 			});
-			const quotedUrl = controllerLaunchUrl.replace(/'/g, "'\\''");
+			const quotedUrl = adbLaunchUrl.replace(/'/g, "'\\''");
 			const intentCmd =
 				`am start -n ${CONTROLLER_PKG_NAME}/.xr.XrHeadsetActivity ` +
 				`-a android.intent.action.VIEW -d '${quotedUrl}'`;

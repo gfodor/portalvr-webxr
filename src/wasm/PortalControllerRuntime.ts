@@ -568,6 +568,18 @@ export class PortalControllerRuntime {
     // Expose whether any drag button is currently active to the camera-drag pipeline.
     this.buttonDragRequested = this.dragSource != null;
 
+    // Aim hand selection: when aim mode is engaged in dual-tracked mode, use the drag source hand.
+    // This ensures the hand doing camera drag is also the one used for aiming.
+    if (state.flags.aim && dualTracked) {
+      if (this.dragSource && this.explicitAimHand !== this.dragSource) {
+        this.explicitAimHand = this.dragSource;
+        this.syncSessionPoseModeConfig();
+      }
+    } else if (!state.flags.aim && this.explicitAimHand !== null) {
+      this.explicitAimHand = null;
+      this.syncSessionPoseModeConfig();
+    }
+
     // Momentum cancellation triggers (from BlePeripheralService.kt lines 981-1006)
     // Cancel momentum when stick exits dead zone or trigger/grip is engaged while no drag button is held
     if (this.hasMomentum && !rightDrag && !leftDrag) {
@@ -965,7 +977,18 @@ export class PortalControllerRuntime {
     }
 
     const flagsPtr = inputsPtr + OFF_INPUTS_FLAGS;
-    this.U8[flagsPtr + 0] = this.flags.aimModeEnabled ? 1 : 0;
+    // Aim mode: per-hand enable based on explicit aim hand selection (mirrors Android logic)
+    let aimEnabled = this.flags.aimModeEnabled;
+    if (this.dualTrackedRequested) {
+      if (this.explicitAimHand !== null) {
+        // Only the explicitly selected hand drives Aim when dual-tracked
+        aimEnabled = this.flags.aimModeEnabled && (hand === this.explicitAimHand);
+      } else if (hand === 'left') {
+        // Legacy default: only the right hand drives Aim when no selection exists
+        aimEnabled = false;
+      }
+    }
+    this.U8[flagsPtr + 0] = aimEnabled ? 1 : 0;
     this.U8[flagsPtr + 1] = this.flags.armStretchEnabled ? 1 : 0;
     this.U8[flagsPtr + 2] = this.displayLockActive ? 1 : 0;
     this.U8[flagsPtr + 3] = this.displayLockPending ? 1 : 0;

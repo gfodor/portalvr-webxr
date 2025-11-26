@@ -538,6 +538,7 @@ export class XRDevice {
   private lastCanvasZoomScale = 1;
 	private isControllerConnected = false;
 	private hasSeenOrientationResetOnce = false;
+	private isAdbConnection = false;
   private canvasContainerWasFullscreen = false;
   private pendingImmersiveFullscreenMount = false;
   private pointerLookListenersAttached = false;
@@ -1414,19 +1415,8 @@ export class XRDevice {
       const runtime = await this.ensurePortalControllerRuntime();
       runtime.ingestPacket(state);
       runtime.setWandMode(state.wandMode);
-		runtime.setDualTrackedRequested(state.dualTrackedRequested === true);
-
-		if (state.flags?.aim && state.dualTrackedRequested && runtime) {
-		const rightDrag = !!(state.buttons as any).cameraDrag;
-		const leftDrag = !!state.left?.buttons.cameraDrag;
-		if (leftDrag && !rightDrag) {
-			runtime.setAimActiveHand('left');
-		} else if (rightDrag && !leftDrag) {
-			runtime.setAimActiveHand('right');
-		}
-		} else if (!state.flags?.aim && runtime) {
-		runtime.clearAimActiveHand();
-		}
+      runtime.setDualTrackedRequested(state.dualTrackedRequested === true);
+      // Note: Aim hand selection is now handled inside ingestPacket based on dragSource
     } catch (error) {
       console.error('[XRDevice] Failed to process controller state', error);
     }
@@ -1471,8 +1461,9 @@ export class XRDevice {
 	this.updateControllerPromptUI();
   };
 
-  private handleControllerConnectionChange = (connected: boolean) => {
+  private handleControllerConnectionChange = (connected: boolean, fromAdb = false) => {
 	this.isControllerConnected = connected;
+	this.isAdbConnection = connected && fromAdb;
     this[P_DEVICE].devui?.setControllerConnected(connected);
 
 	if (connected) {
@@ -1738,6 +1729,10 @@ export class XRDevice {
 	if (!this.isControllerConnected) {
 		return 'qr';
 	}
+	// Show calibration prompt until user performs first orientation reset
+	if (!this.hasSeenOrientationResetOnce) {
+		return 'swipe';
+	}
 	const trackingStable = this.isTrackingStableFromState(this.lastControllerState);
 	if (!trackingStable) {
 		// Check if tracking issues are due to system menu / focus lost
@@ -1747,15 +1742,21 @@ export class XRDevice {
 		}
 		return 'tracking-issues';
 	}
-	if (!this.hasSeenOrientationResetOnce) {
-		return 'swipe';
-	}
 	return 'hidden';
 	}
 
 	private updateControllerPromptUI(): void {
 	const status = this.computeControllerPromptStatus();
-	this[P_DEVICE].devui?.setControllerPromptStatus(status);
+	// Compute swipe variant based on interaction mode or ADB connection
+	let swipeVariant: ControllerSwipeVariant | undefined;
+	if (status === 'swipe') {
+		const imode = this.lastControllerState?.interactionMode ?? 0;
+		if (imode === INTERACTION_MODE_OPENXR_QUEST || this.adbStreamer || this.isAdbConnection) {
+			swipeVariant = 'quest-stick';
+		}
+		// Other variants (recenter, trackpad) are inferred by DevUI based on interaction mode
+	}
+	this[P_DEVICE].devui?.setControllerPromptStatus(status, swipeVariant);
 	}
 
   private emitControllerSearchStatus(status: SIGCFStatusSnapshot | null): void {
@@ -3772,7 +3773,10 @@ export class XRDevice {
     this.webrtcStreamer?.setUserInputMonitoringEnabled(false);
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
-    this.handleControllerConnectionChange(false);
+    // Only mark as disconnected if ADB isn't active
+    if (!this.adbStreamer) {
+      this.handleControllerConnectionChange(false);
+    }
     this.emitControllerSearchStatus(null);
   }
 
@@ -3786,12 +3790,14 @@ export class XRDevice {
       void this.adbStreamer.dispose();
     }
 
+    // Set the ADB streamer BEFORE disabling WebRTC so the check in
+    // disableWebRTCControllerStreaming knows not to mark as disconnected
+    this.adbStreamer = streamer;
+
     // Disable WebRTC when using ADB
     if (this.webrtcStreamer) {
       this.disableWebRTCControllerStreaming();
     }
-
-    this.adbStreamer = streamer;
 
     // Note: The streamer's callbacks should already be set up by the caller
     // to call handleControllerState, handleOrientationReset, etc.
