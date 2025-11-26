@@ -341,13 +341,9 @@ export class PortalControllerRuntime {
   // Track current drag hand for late-grab handoff
   private currentDragHand: HandId | null = null;
 
-  // State for momentum cancellation triggers (stick dead zone exit, trigger/grip engagement)
+  // State for momentum cancellation triggers (stick dead zone exit)
   private prevRightStickOutsideDeadZone = false;
   private prevLeftStickOutsideDeadZone = false;
-  private prevRightTrigger = false;
-  private prevRightSqueeze = false;
-  private prevLeftTrigger = false;
-  private prevLeftSqueeze = false;
 
   private deltaTargetValid = false;
   private readonly deltaTargetPose: PortalPose = {
@@ -580,8 +576,8 @@ export class PortalControllerRuntime {
       this.syncSessionPoseModeConfig();
     }
 
-    // Momentum cancellation triggers (from BlePeripheralService.kt lines 981-1006)
-    // Cancel momentum when stick exits dead zone or trigger/grip is engaged while no drag button is held
+    // Momentum cancellation triggers
+    // Cancel momentum when stick exits dead zone while no drag button is held
     if (this.hasMomentum && !rightDrag && !leftDrag) {
       // Check stick dead zone exit (rising edge: was inside, now outside)
       const rightStickMag = Math.hypot(state.joystick.x, state.joystick.y);
@@ -603,30 +599,13 @@ export class PortalControllerRuntime {
         (!this.prevRightStickOutsideDeadZone && rightStickActive) ||
         (!this.prevLeftStickOutsideDeadZone && leftStickActive);
 
-      // Check trigger/grip engagement (rising edge)
-      const rightTriggerGripEdge =
-        (state.buttons.trigger && !this.prevRightTrigger) ||
-        (state.buttons.squeeze && !this.prevRightSqueeze);
-      const leftTriggerGripEdge = state.left
-        ? (state.left.buttons.trigger && !this.prevLeftTrigger) ||
-          (state.left.buttons.squeeze && !this.prevLeftSqueeze)
-        : false;
-
-      if (stickExitedDeadZone || rightTriggerGripEdge || leftTriggerGripEdge) {
+      if (stickExitedDeadZone) {
         this.cancelMomentum();
       }
 
       // Update previous stick state
       this.prevRightStickOutsideDeadZone = rightStickActive;
       this.prevLeftStickOutsideDeadZone = leftStickActive;
-    }
-
-    // Update previous trigger/grip state (always, for edge detection)
-    this.prevRightTrigger = state.buttons.trigger;
-    this.prevRightSqueeze = state.buttons.squeeze;
-    if (state.left) {
-      this.prevLeftTrigger = state.left.buttons.trigger;
-      this.prevLeftSqueeze = state.left.buttons.squeeze;
     }
   }
 
@@ -884,10 +863,6 @@ export class PortalControllerRuntime {
     // Reset momentum cancellation state
     this.prevRightStickOutsideDeadZone = false;
     this.prevLeftStickOutsideDeadZone = false;
-    this.prevRightTrigger = false;
-    this.prevRightSqueeze = false;
-    this.prevLeftTrigger = false;
-    this.prevLeftSqueeze = false;
   }
 
   hasRecentPacket(nowMs: number): boolean {
