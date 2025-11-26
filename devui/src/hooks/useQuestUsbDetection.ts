@@ -301,7 +301,8 @@ export function useQuestUsbDetection(
 					setState({ kind: 'needs-permission' });
 				}
 			} catch (error) {
-				if (!cancelled) {
+				// Swallow transient USB errors - retry will handle them
+				if (!cancelled && !isTransientUsbError(error)) {
 					setState({ kind: 'error', message: formatError(error) });
 				}
 			}
@@ -380,7 +381,8 @@ export function useQuestUsbDetection(
 					});
 				}
 			} catch (error) {
-				if (!cancelled && !questDetectedRef.current) {
+				// Swallow transient USB errors - retry will handle them
+				if (!cancelled && !questDetectedRef.current && !isTransientUsbError(error)) {
 					setState({ kind: 'error', message: formatError(error) });
 				}
 			} finally {
@@ -555,7 +557,8 @@ export function useQuestUsbDetection(
 					}
 				}
 			} catch (error) {
-				if (!unmountedRef.current && enabledRef.current) {
+				// Swallow transient USB errors - retry will handle them
+				if (!unmountedRef.current && enabledRef.current && !isTransientUsbError(error)) {
 					logDebug('Controller pipeline error', error);
 					safeSetState({
 						kind: 'error',
@@ -651,7 +654,10 @@ export function useQuestUsbDetection(
 				setState({ kind: 'needs-permission' });
 				return;
 			}
-			setState({ kind: 'error', message: formatError(error) });
+			// Swallow transient USB errors - retry will handle them
+			if (!isTransientUsbError(error)) {
+				setState({ kind: 'error', message: formatError(error) });
+			}
 		}
 	}, [enabled, manager]);
 
@@ -1386,6 +1392,12 @@ function sleep(ms: number): Promise<void> {
 
 function isUserCancellation(error: unknown): boolean {
 	return error instanceof DOMException && error.name === 'NotFoundError';
+}
+
+function isTransientUsbError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const msg = error.message.toLowerCase();
+	return msg.includes('transferin') || msg.includes('transfer error');
 }
 
 function formatError(error: unknown): string {
