@@ -474,6 +474,12 @@ ${buildFontFaceDeclaration()}
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
+.portal-qr-pill__hint {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-top: var(--portal-spacing-xs);
+}
+
 .portal-qr-pill__search-button {
   padding: var(--portal-spacing-xs) var(--portal-spacing-md);
   border: 1px solid rgba(255, 255, 255, 0.4);

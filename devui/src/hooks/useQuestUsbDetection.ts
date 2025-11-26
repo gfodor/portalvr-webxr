@@ -28,11 +28,11 @@ const POLL_INTERVAL_MS = 4000;
 const PROXIMITY_CLOSE_ACTION = 'com.oculus.vrpowermanager.prox_close';
 const CONTROLLER_PKG_NAME = 'io.portalvr.controller';
 const CONTROLLER_APK_REMOTE_PATH = '/data/local/tmp/io.portalvr.controller.apk';
-const MAX_CONTROLLER_LAUNCH_ATTEMPTS = 3;
+const MAX_CONTROLLER_LAUNCH_ATTEMPTS = 5;
 const CONTROLLER_LAUNCH_RETRY_DELAY_MS = 4000;
 const REPO_BASE_URL = 'https://repo.portalvr.io';
 const REPO_INDEX_PATH = '/index-v2.json';
-const MAX_SOCKET_ATTEMPTS = 3;
+const MAX_SOCKET_ATTEMPTS = 2;
 const SOCKET_RETRY_DELAY_MS = 1000;
 const ADB_SOCKET_NAME = 'localabstract:PORTALVR-ADB';
 
@@ -323,10 +323,13 @@ export function useQuestUsbDetection(
 		let cancelled = false;
 		let timeoutId: number | null = null;
 		let running = false;
+		let retryImmediately = false;
 
 		const schedule = () => {
 			if (!cancelled && !questDetectedRef.current && typeof window !== 'undefined') {
-				timeoutId = window.setTimeout(runPoll, POLL_INTERVAL_MS);
+				const delay = retryImmediately ? 0 : POLL_INTERVAL_MS;
+				retryImmediately = false;
+				timeoutId = window.setTimeout(runPoll, delay);
 			}
 		};
 
@@ -381,8 +384,10 @@ export function useQuestUsbDetection(
 					});
 				}
 			} catch (error) {
-				// Swallow transient USB errors - retry will handle them
-				if (!cancelled && !questDetectedRef.current && !isTransientUsbError(error)) {
+				// Swallow transient USB errors and retry immediately
+				if (isTransientUsbError(error)) {
+					retryImmediately = true;
+				} else if (!cancelled && !questDetectedRef.current) {
 					setState({ kind: 'error', message: formatError(error) });
 				}
 			} finally {
@@ -1217,7 +1222,7 @@ async function launchControllerWithRetries(
 		setState({
 			kind: 'controller-setup',
 			phase: 'launching',
-			message: `Launching controller (${attempt}/${MAX_CONTROLLER_LAUNCH_ATTEMPTS})...`,
+			message: 'Connecting...',
 			progressPct: null,
 			attempts: attempt,
 			showRetryPrompt: false,
@@ -1397,7 +1402,12 @@ function isUserCancellation(error: unknown): boolean {
 function isTransientUsbError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	const msg = error.message.toLowerCase();
-	return msg.includes('transferin') || msg.includes('transfer error');
+	return (
+		msg.includes('transferin') ||
+		msg.includes('transferout') ||
+		msg.includes('transfer error') ||
+		msg.includes('device was disconnected')
+	);
 }
 
 function formatError(error: unknown): string {

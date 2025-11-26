@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import qrcodeGenerator from 'qrcode-generator';
 import { ASSET_SWIPE_CALIBRATION } from '../generated/assets.js';
 import {
@@ -76,13 +76,15 @@ export function PortalQrPrompt({
 	const questDetectedViaUsb =
 		questUsb.state.kind === 'quest-detected' ||
 		questUsb.state.kind === 'controller-setup';
-	const waitingQuestDetected =
+	const waitingForUsbAuth =
 		questUsb.state.kind === 'waiting' &&
 		typeof questUsb.state.message === 'string' &&
-		questUsb.state.message.toLowerCase().includes('quest detected over usb');
+		(questUsb.state.message.toLowerCase().includes('quest detected over usb') ||
+		 questUsb.state.message.toLowerCase().includes('usb link ready') ||
+		 questUsb.state.message.toLowerCase().includes('usb debugging'));
 	const showPhoneSection = !(
 		questDetectedViaUsb ||
-		waitingQuestDetected ||
+		waitingForUsbAuth ||
 		questUsb.state.kind === 'controller-setup' ||
 		questUsb.state.kind === 'error'
 	);
@@ -173,7 +175,8 @@ export function PortalQrPrompt({
 		? 'portal-qr-pill portal-qr-pill--swipe'
 		: 'portal-qr-pill';
 
-	const showFooter = status === 'qr';
+	// Hide footer (Searching...) when Quest is detected via USB - that's only for SIGCF
+	const showFooter = status === 'qr' && !questDetectedViaUsb && !waitingForUsbAuth;
 
 	return (
 		<aside className={containerClassName} role="status" aria-live="polite">
@@ -238,6 +241,8 @@ type QuestUsbInstructionsProps = {
 	onManualRetry: () => void;
 };
 
+const USB_APPROVAL_DELAY_MS = 3000;
+
 function QuestUsbInstructions({
 	questState,
 	onRequestPermission,
@@ -248,10 +253,23 @@ function QuestUsbInstructions({
 	const showButton = questState.kind === 'needs-permission';
 
 	const isWaitingForPermission = questState.kind === 'requesting-permission';
-	const showUsbApprovalPrompt =
+	const needsUsbApproval =
 		questState.kind === 'waiting' &&
 		typeof questState.message === 'string' &&
 		questState.message.toLowerCase().includes('quest detected over usb');
+
+	// Delay showing the USB approval prompt by 3 seconds to avoid flashing it briefly
+	const [showUsbApprovalPrompt, setShowUsbApprovalPrompt] = useState(false);
+	useEffect(() => {
+		if (!needsUsbApproval) {
+			setShowUsbApprovalPrompt(false);
+			return;
+		}
+		const timer = setTimeout(() => {
+			setShowUsbApprovalPrompt(true);
+		}, USB_APPROVAL_DELAY_MS);
+		return () => clearTimeout(timer);
+	}, [needsUsbApproval]);
 
 	const handleRequest = () => {
 		void onRequestPermission();
@@ -317,6 +335,7 @@ function QuestUsbInstructions({
 								alt="Quest USB permission prompt showing the 'Always allow from this computer' checkbox"
 									className="portal-qr-pill__permission-img"
 								/>
+							<span className="portal-qr-pill__hint">Stuck? Try re-plugging in.</span>
 							</div>
 						) : questState.kind === 'error' && statusLabel === ADB_BUSY_MESSAGE ? (
 							<div className="portal-qr-pill__error-callout">{ADB_BUSY_MESSAGE}</div>
