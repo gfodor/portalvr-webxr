@@ -74,7 +74,12 @@ import {
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
 import { type SIGCFStatusSnapshot } from '../webrtc/sigcf.js';
+import { AdbControllerStreamer } from '../adb/AdbControllerStreamer.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
+import {
+  TRACKING_REASON_SYSTEM_MENU,
+  INTERACTION_MODE_OPENXR_QUEST,
+} from '../webrtc/controllerParser.js';
 import {
   PortalControllerRuntime,
   type PortalPose,
@@ -111,6 +116,8 @@ function resolveActiveWandState(mode: number): ActiveWandState {
     case 4: // BLE_WAND_DUAL_MIRRORED
     case 5: // BLE_WAND_DUAL_OPPOSED
       return 'both';
+	case 6: // BLE_WAND_DUAL_TRACKED
+		return 'both';
     default:
       return 'right';
   }
@@ -243,6 +250,9 @@ const DEFAULT_CONFIG_SETTINGS = {
 	connectToControllerViaLan: true,
 };
 
+type ControllerSwipeVariant = 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+export type ControllerPromptStatus = 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
+
 export interface DevUIConstructor {
   new (xrDevice: XRDevice): DevUI;
 }
@@ -252,7 +262,10 @@ export interface DevUI {
   get devUICanvas(): HTMLCanvasElement;
   get devUIContainer(): HTMLDivElement;
   setControllerConnected(connected: boolean): void;
-	setControllerPromptStatus(status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden'): void;
+	setControllerPromptStatus(
+		status: ControllerPromptStatus,
+		swipeVariant?: ControllerSwipeVariant,
+	): void;
 }
 
 export interface SEMConstructor {
@@ -478,6 +491,7 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private adbStreamer: AdbControllerStreamer | null = null;
   private connectToControllerViaLan = true;
   private controllerSearchStatus: SIGCFStatusSnapshot | null = null;
   private readonly controllerSearchListeners = new Set<(status: SIGCFStatusSnapshot | null) => void>();
@@ -490,7 +504,7 @@ export class XRDevice {
   private readonly configPromise: Promise<PortalEmulatorConfig>;
   // Stereo config changes are persisted immediately but only applied once on startup to
   // avoid disturbing the active render pipeline mid-session.
-  private pendingOrientationReset = false;
+  private pendingOrientationReset: 'left' | 'right' | null = null;
   private lastControllerState: ControllerState | null = null;
   private activeWandState: ActiveWandState = 'none';
   private lastControllerPacketMs: number | null = null;
@@ -524,6 +538,7 @@ export class XRDevice {
   private lastCanvasZoomScale = 1;
 	private isControllerConnected = false;
 	private hasSeenOrientationResetOnce = false;
+	private isAdbConnection = false;
   private canvasContainerWasFullscreen = false;
   private pendingImmersiveFullscreenMount = false;
   private pointerLookListenersAttached = false;
@@ -1400,6 +1415,8 @@ export class XRDevice {
       const runtime = await this.ensurePortalControllerRuntime();
       runtime.ingestPacket(state);
       runtime.setWandMode(state.wandMode);
+      runtime.setDualTrackedRequested(state.dualTrackedRequested === true);
+      // Note: Aim hand selection is now handled inside ingestPacket based on dragSource
     } catch (error) {
       console.error('[XRDevice] Failed to process controller state', error);
     }
@@ -1417,14 +1434,12 @@ export class XRDevice {
 			const dY = yNorm - (anyThis.__tpPrevYNorm ?? 0);
 			const dYaw = dX * TRACKPAD_YAW_RADIANS_PER_UNIT;
 			const dPitch = (-dY) * TRACKPAD_PITCH_RADIANS_PER_UNIT; // invert Y: upward drag => positive pitch
-			if (Math.abs(dYaw) > TRACKPAD_TOUCH_EPS || Math.abs(dPitch) > TRACKPAD_TOUCH_EPS) {
-				this.portalPoseCamera?.applyCameraDragIncrements({
-				incYaw: dYaw,
-				incPitch: dPitch,
-				incX: 0,
-				incY: 0,
-				incZ: 0,
-				});
+			// Feed through the existing pointer-look smoothing pipeline to avoid per-packet jitter.
+			const incYaw = this.clampPointerLookDelta(dYaw);
+			const incPitch = this.clampPointerLookDelta(dPitch);
+			if (Math.abs(incYaw) > TRACKPAD_TOUCH_EPS || Math.abs(incPitch) > TRACKPAD_TOUCH_EPS) {
+				this.pointerLookPendingYaw += incYaw;
+				this.pointerLookPendingPitch += incPitch;
 			}
 			}
 			anyThis.__tpPrevXNorm = xNorm;
@@ -1446,11 +1461,14 @@ export class XRDevice {
 	this.updateControllerPromptUI();
   };
 
-  private handleControllerConnectionChange = (connected: boolean) => {
+  private handleControllerConnectionChange = (connected: boolean, fromAdb = false) => {
 	this.isControllerConnected = connected;
+	this.isAdbConnection = connected && fromAdb;
     this[P_DEVICE].devui?.setControllerConnected(connected);
 
-    if (!connected) {
+	if (connected) {
+		this.tryAutoAcquirePointerLock();
+	} else {
 		// Reset per-connection state
 		this.hasSeenOrientationResetOnce = false;
       this.portalControllerRuntime?.handleDisconnect();
@@ -1468,14 +1486,18 @@ export class XRDevice {
 	this.updateControllerPromptUI();
   };
 
-  private handleOrientationReset = () => {
+  private handleOrientationReset = (calibratingHand: 'left' | 'right' = 'right') => {
     this.faceTrackingRecenterPending = true;
 	this.hasSeenOrientationResetOnce = true;
+    // Clear existing display lock first before requesting new calibration
+    this.portalControllerRuntime?.clearDisplayLock();
     if (this.portalControllerRuntime) {
-      this.portalControllerRuntime.handleOrientationReset();
+      this.portalControllerRuntime.handleOrientationReset(calibratingHand);
     } else {
-      this.pendingOrientationReset = true;
+      this.pendingOrientationReset = calibratingHand;
     }
+    // Also clear camera offsets (but keep yaw/pitch nudges) on orientation reset.
+    this.portalPoseCamera?.handleOrientationReset();
 	this.updateControllerPromptUI();
   };
 
@@ -1703,23 +1725,38 @@ export class XRDevice {
 	return true;
 	}
 
-	private computeControllerPromptStatus(): 'qr' | 'tracking-issues' | 'swipe' | 'hidden' {
+	private computeControllerPromptStatus(): ControllerPromptStatus {
 	if (!this.isControllerConnected) {
 		return 'qr';
 	}
-	const trackingStable = this.isTrackingStableFromState(this.lastControllerState);
-	if (!trackingStable) {
-		return 'tracking-issues';
-	}
+	// Show calibration prompt until user performs first orientation reset
 	if (!this.hasSeenOrientationResetOnce) {
 		return 'swipe';
+	}
+	const trackingStable = this.isTrackingStableFromState(this.lastControllerState);
+	if (!trackingStable) {
+		// Check if tracking issues are due to system menu / focus lost
+		const trackingReason = this.lastControllerState?.trackingReason ?? 0;
+		if (trackingReason === TRACKING_REASON_SYSTEM_MENU) {
+			return 'focus-lost';
+		}
+		return 'tracking-issues';
 	}
 	return 'hidden';
 	}
 
 	private updateControllerPromptUI(): void {
 	const status = this.computeControllerPromptStatus();
-	this[P_DEVICE].devui?.setControllerPromptStatus(status);
+	// Compute swipe variant based on interaction mode or ADB connection
+	let swipeVariant: ControllerSwipeVariant | undefined;
+	if (status === 'swipe') {
+		const imode = this.lastControllerState?.interactionMode ?? 0;
+		if (imode === INTERACTION_MODE_OPENXR_QUEST || this.adbStreamer || this.isAdbConnection) {
+			swipeVariant = 'quest-stick';
+		}
+		// Other variants (recenter, trackpad) are inferred by DevUI based on interaction mode
+	}
+	this[P_DEVICE].devui?.setControllerPromptStatus(status, swipeVariant);
 	}
 
   private emitControllerSearchStatus(status: SIGCFStatusSnapshot | null): void {
@@ -1743,8 +1780,8 @@ export class XRDevice {
         .then((runtime) => {
           this.portalControllerRuntime = runtime;
           if (this.pendingOrientationReset) {
-            runtime.handleOrientationReset();
-            this.pendingOrientationReset = false;
+            runtime.handleOrientationReset(this.pendingOrientationReset);
+            this.pendingOrientationReset = null;
           }
           if (this.lastControllerState) {
             runtime.setWandMode(this.lastControllerState.wandMode);
@@ -1809,6 +1846,18 @@ export class XRDevice {
     if (anyConnected) {
       this[P_DEVICE].primaryInputMode = 'controller';
     }
+
+	if (prevState !== next && next !== 'none') {
+		const wandMode = this.lastControllerState?.wandMode ?? 0;
+		const dualTracked = !!this.lastControllerState?.dualTrackedRequested;
+		if (!dualTracked && (wandMode === 4 || wandMode === 5)) {
+		const runtime = this.portalControllerRuntime;
+		if (runtime) {
+			const headPosePortal = this.createCurrentHeadPortalPose();
+			runtime.setAltHandSpawnFromHead(headPosePortal, 0.25);
+		}
+		}
+	}
 
     if (next === 'none') {
       this.lastControllerPoseByHand.left = null;
@@ -1948,21 +1997,64 @@ export class XRDevice {
     const left = controllers[XRHandedness.Left];
     const right = controllers[XRHandedness.Right];
 
-    const axisX = clampAxis(state.joystick.x);
-    const axisY = clampAxis(state.joystick.y);
-    const thumbstickTouched =
-      Math.abs(axisX) > THUMBSTICK_TOUCH_EPSILON ||
-      Math.abs(axisY) > THUMBSTICK_TOUCH_EPSILON ||
+	// Base (right-hand) joystick values and touch state from the main packet body.
+	const rightAxisX = clampAxis(state.joystick.x);
+	const rightAxisY = clampAxis(state.joystick.y);
+	const rightThumbstickTouched =
+		Math.abs(rightAxisX) > THUMBSTICK_TOUCH_EPSILON ||
+		Math.abs(rightAxisY) > THUMBSTICK_TOUCH_EPSILON ||
       state.buttons.stick;
 
+	// By default (non dual-tracked modes), left-hand uses the same data as right-hand,
+	// preserving existing mirrored/opposed behaviour.
+	let leftState: ControllerState = state;
+	let leftAxisX = rightAxisX;
+	let leftAxisY = rightAxisY;
+	let leftThumbstickTouched = rightThumbstickTouched;
+
+	// In dual-tracked mode with a valid left-hand tail, drive the left controller from
+	// the left-hand buttons/joystick instead of mirroring the right-hand values.
+	if (state.dualTrackedRequested && state.left) {
+		const leftJoyX = clampAxis(state.left.joystick.x);
+		const leftJoyY = clampAxis(state.left.joystick.y);
+
+		leftAxisX = leftJoyX;
+		leftAxisY = leftJoyY;
+		leftThumbstickTouched =
+		Math.abs(leftJoyX) > THUMBSTICK_TOUCH_EPSILON ||
+		Math.abs(leftJoyY) > THUMBSTICK_TOUCH_EPSILON ||
+		state.left.buttons.stick;
+
+		// Shallow clone the controller state, swapping in left-hand input for buttons/joystick.
+		leftState = {
+		...state,
+		buttons: state.left.buttons,
+		joystick: state.left.joystick,
+		};
+	}
+
     if (activeState === 'left' || activeState === 'both') {
-      this.applyButtonsToController(left, state, XRHandedness.Left, thumbstickTouched, axisX, axisY);
+		this.applyButtonsToController(
+		left,
+		leftState,
+		XRHandedness.Left,
+		leftThumbstickTouched,
+		leftAxisX,
+		leftAxisY,
+		);
     } else if (left) {
       this.resetControllerState(left);
     }
 
     if (activeState === 'right' || activeState === 'both') {
-      this.applyButtonsToController(right, state, XRHandedness.Right, thumbstickTouched, axisX, axisY);
+		this.applyButtonsToController(
+		right,
+		state,
+		XRHandedness.Right,
+		rightThumbstickTouched,
+		rightAxisX,
+		rightAxisY,
+		);
     } else if (right) {
       this.resetControllerState(right);
     }
@@ -2066,44 +2158,92 @@ export class XRDevice {
     }
 
     if (update.cameraFovDeg > 0) {
-      const clampedFovDeg = Math.min(Math.max(update.cameraFovDeg, 1), 179);
+		const clampedFovDeg = Math.min(
+		Math.max(update.cameraFovDeg, 1),
+		179,
+		);
       const newFovyRad = degreesToRadians(clampedFovDeg);
       if (Number.isFinite(newFovyRad) && newFovyRad > 0) {
         this.fovy = newFovyRad;
       }
     }
 
-    let leftPose: PortalPose | null = null;
-    let rightPose: PortalPose | null = null;
+	const wandMode = this.lastControllerState?.wandMode ?? 0;
+	const dualTracked = !!this.lastControllerState?.dualTrackedRequested;
+	const activeState = this.activeWandState;
 
-    switch (this.activeWandState) {
+	// Start from per-hand results coming from the portal session.
+	let leftPose: PortalPose | null = update.byHand.left.finalPose
+		? this.clonePortalPose(update.byHand.left.finalPose)
+		: null;
+	let rightPose: PortalPose | null = update.byHand.right.finalPose
+		? this.clonePortalPose(update.byHand.right.finalPose)
+		: null;
+
+	if (!dualTracked) {
+		switch (activeState) {
       case 'both': {
-        const wandMode = this.lastControllerState?.wandMode ?? 0;
-        const submode: 'mirrored' | 'opposed' = wandMode === 5 ? 'opposed' : 'mirrored';
-        if (this.lastDualSubmode !== submode) {
+			const submode: 'mirrored' | 'opposed' =
+			wandMode === 5 ? 'opposed' : 'mirrored';
+			if (this.lastDualSubmode !== submode) {
           this.lastDualSubmode = submode;
           this.dualOpposedNeutral = null;
+			}
+
+			const dominantSource = rightPose ?? leftPose;
+			if (dominantSource) {
+			const dominantPose = this.clonePortalPose(dominantSource);
+			rightPose = dominantPose;
+			const offhand = this.computeDualOffhandPose(
+				dominantPose,
+				headPose,
+				submode,
+			);
+			leftPose =
+				offhand ?? this.clonePortalPose(dominantPose);
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			break;
         }
-        const dominantPose = this.clonePortalPose(update.finalPose);
-        rightPose = dominantPose;
-        const offhand = this.computeDualOffhandPose(dominantPose, headPose, submode);
-        leftPose = offhand ?? this.clonePortalPose(dominantPose);
-        break;
+		case 'left': {
+			const source = leftPose ?? rightPose;
+			if (source) {
+			leftPose = this.clonePortalPose(source);
+			rightPose = null;
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
       }
-      case 'left':
-        leftPose = this.clonePortalPose(update.finalPose);
-        this.lastDualSubmode = null;
-        this.dualOpposedNeutral = null;
-        break;
-      case 'right':
-        rightPose = this.clonePortalPose(update.finalPose);
-        this.lastDualSubmode = null;
-        this.dualOpposedNeutral = null;
-        break;
+		case 'right': {
+			const source = rightPose ?? leftPose;
+			if (source) {
+			rightPose = this.clonePortalPose(source);
+			leftPose = null;
+			} else {
+			leftPose = null;
+			rightPose = null;
+			}
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
+		}
       default:
+			leftPose = null;
+			rightPose = null;
+			this.lastDualSubmode = null;
+			this.dualOpposedNeutral = null;
+			break;
+		}
+	} else {
+		// Dual-tracked: rely directly on per-hand session results, no synthetic off-hand.
         this.lastDualSubmode = null;
         this.dualOpposedNeutral = null;
-        break;
     }
 
     const headPortalPose: PortalPose = {
@@ -2112,16 +2252,32 @@ export class XRDevice {
     };
 
     if (runtime) {
-      if (!leftPose && this.cameraLockState.left.active && this.lastControllerPoseByHand.left) {
-        const updated = runtime.updateCameraLockedPose('left', headPortalPose, this.lastControllerPoseByHand.left);
+		if (
+		!leftPose &&
+		this.cameraLockState.left.active &&
+		this.lastControllerPoseByHand.left
+		) {
+		const updated = runtime.updateCameraLockedPose(
+			'left',
+			headPortalPose,
+			this.lastControllerPoseByHand.left,
+		);
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           leftPose = lockedPose;
           this.lastControllerPoseByHand.left = lockedPose;
         }
       }
-      if (!rightPose && this.cameraLockState.right.active && this.lastControllerPoseByHand.right) {
-        const updated = runtime.updateCameraLockedPose('right', headPortalPose, this.lastControllerPoseByHand.right);
+		if (
+		!rightPose &&
+		this.cameraLockState.right.active &&
+		this.lastControllerPoseByHand.right
+		) {
+		const updated = runtime.updateCameraLockedPose(
+			'right',
+			headPortalPose,
+			this.lastControllerPoseByHand.right,
+		);
         if (updated) {
           const lockedPose = this.clonePortalPose(updated);
           rightPose = lockedPose;
@@ -2131,14 +2287,30 @@ export class XRDevice {
     }
 
     if (leftPose) {
-      this.applyControllerPose(controllers[XRHandedness.Left], leftPose);
+		this.applyControllerPose(
+		controllers[XRHandedness.Left],
+		leftPose,
+		);
     }
     if (rightPose) {
-      this.applyControllerPose(controllers[XRHandedness.Right], rightPose);
+		this.applyControllerPose(
+		controllers[XRHandedness.Right],
+		rightPose,
+		);
     }
 
     if (update.cameraDrag) {
-      this.portalPoseCamera?.applyCameraDragIncrements(update.cameraDrag);
+		this.portalPoseCamera?.applyCameraDragIncrements(
+		update.cameraDrag,
+		);
+    }
+
+    // Apply momentum-based camera increments (decaying after BUTTON drag release)
+    // This mirrors HeadPoseProvider.predictedPose() which applies momentum each frame
+    if (update.cameraMomentum) {
+		this.portalPoseCamera?.applyCameraDragIncrements(
+		update.cameraMomentum,
+		);
     }
   }
 
@@ -2285,6 +2457,14 @@ export class XRDevice {
     this.syncCameraLockToRuntime('left');
     this.syncCameraLockToRuntime('right');
   }
+
+	public setExplicitAimHand(hand: 'left' | 'right'): void {
+	this.portalControllerRuntime?.setAimActiveHand(hand);
+	}
+
+	public clearExplicitAimHand(): void {
+	this.portalControllerRuntime?.clearAimActiveHand();
+	}
 
   private createCurrentHeadPortalPose(): PortalPose {
     return {
@@ -2535,6 +2715,11 @@ export class XRDevice {
       return;
     }
     this.canvasContainerWasFullscreen = isFullscreen;
+
+	if (isFullscreen) {
+		this.tryAutoAcquirePointerLock();
+	}
+
     if (typeof window === 'undefined') {
       this.dispatchResizeForCanvasViewport();
       return;
@@ -2780,7 +2965,7 @@ export class XRDevice {
 
     this.pointerLookListenersAttached = true;
     this.pointerLookLastFlushMs = getNowMs();
-    this.requestPointerLockForCanvas();
+	// Do not auto-lock here; wait for controller connect/fullscreen or user click.
   }
 
   private disablePointerLookControlsForSession(): void {
@@ -2853,6 +3038,26 @@ export class XRDevice {
       // ignore legacy failures
     }
   }
+
+	private tryAutoAcquirePointerLock(): void {
+		if (this.pointerLockActive) {
+			return;
+		}
+		const session = this.activeSession;
+		const isImmersive = session && session[P_SESSION].mode === 'immersive-vr';
+		if (!isImmersive || !this.pointerLookListenersAttached || !this.portalPoseCamera) {
+			return;
+		}
+		if (!this.isControllerConnected) {
+			return;
+		}
+		const containerIsFullscreen = this.getActiveFullscreenElement() === this[P_DEVICE].canvasContainer;
+		if (!containerIsFullscreen) {
+			return;
+		}
+
+		this.requestPointerLockForCanvas();
+	}
 
   private syncPointerLockState(): void {
     if (typeof document === 'undefined') {
@@ -3550,9 +3755,9 @@ export class XRDevice {
 				this.handleControllerConnectionChange(connected);
 				userOnConnection?.(connected);
 			},
-			onOrientationReset: () => {
-				this.handleOrientationReset();
-				userOnOrientationReset?.();
+			onOrientationReset: (calibratingHand) => {
+				this.handleOrientationReset(calibratingHand);
+				userOnOrientationReset?.(calibratingHand);
 			},
 			onSignalingStatus: (status) => {
 				this.emitControllerSearchStatus(status);
@@ -3568,8 +3773,61 @@ export class XRDevice {
     this.webrtcStreamer?.setUserInputMonitoringEnabled(false);
     this.webrtcStreamer?.dispose();
     this.webrtcStreamer = null;
-    this.handleControllerConnectionChange(false);
+    // Only mark as disconnected if ADB isn't active
+    if (!this.adbStreamer) {
+      this.handleControllerConnectionChange(false);
+    }
     this.emitControllerSearchStatus(null);
+  }
+
+  /**
+   * Enable ADB-based controller streaming. This is used when Quest is connected via USB.
+   * When ADB streaming is active, WebRTC/SIGCF streaming should be disabled.
+   */
+  enableAdbControllerStreaming(streamer: AdbControllerStreamer) {
+    // Dispose any existing ADB streamer
+    if (this.adbStreamer && this.adbStreamer !== streamer) {
+      void this.adbStreamer.dispose();
+    }
+
+    // Set the ADB streamer BEFORE disabling WebRTC so the check in
+    // disableWebRTCControllerStreaming knows not to mark as disconnected
+    this.adbStreamer = streamer;
+
+    // Disable WebRTC when using ADB
+    if (this.webrtcStreamer) {
+      this.disableWebRTCControllerStreaming();
+    }
+
+    // Note: The streamer's callbacks should already be set up by the caller
+    // to call handleControllerState, handleOrientationReset, etc.
+    // If not already connected, the connection change callback will fire when connected.
+  }
+
+  /**
+   * Set up an externally-created ADB streamer to feed into XRDevice's controller handling.
+   * This wires up the streamer's callbacks to the device's internal handlers.
+   */
+  configureAdbControllerStreamer(streamer: AdbControllerStreamer) {
+    // Wire up callbacks - need to replace the streamer's callbacks
+    // Since the streamer is already created, we need a way to add our handlers
+    // For now, we just track it and rely on the DevUI to wire up the callbacks
+    this.enableAdbControllerStreaming(streamer);
+  }
+
+  disableAdbControllerStreaming() {
+    if (this.adbStreamer) {
+      void this.adbStreamer.dispose();
+      this.adbStreamer = null;
+      this.handleControllerConnectionChange(false);
+    }
+  }
+
+  /**
+   * Check if ADB controller streaming is currently active
+   */
+  isAdbControllerStreamingActive(): boolean {
+    return this.adbStreamer?.isConnected() ?? false;
   }
 
   onControllerSearchStatus(listener: (status: SIGCFStatusSnapshot | null) => void): () => void {
@@ -3593,6 +3851,11 @@ export class XRDevice {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const st: any = this.lastControllerState;
 	return st && typeof st.interactionMode === 'number' ? st.interactionMode : null;
+	}
+
+	public isDualTrackedMode(): boolean {
+		// wandMode 6 = BLE_WAND_DUAL_TRACKED
+		return this.lastControllerState?.wandMode === 6;
 	}
 
   private ensureDefaultWebRTCStreamer() {

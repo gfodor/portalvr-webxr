@@ -11,6 +11,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { VERSION } from './version.js';
 import { DevUIRoot } from './components/DevUIRoot.js';
 
+type SwipeVariant = 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+type ControllerPromptStatus = 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
+
+const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
+const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+const INTERACTION_MODE_OPENXR_QUEST = 0x10;
+
 export class DevUI {
 	public readonly version = VERSION;
 	private devUICanvasElement: HTMLCanvasElement | null = null;
@@ -18,8 +25,8 @@ export class DevUI {
 	private reactRoot: Root | null = null;
 	private readonly xrDevice: XRDevice;
 	private controllerConnected = false;
-	private controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden' = 'qr';
-	private swipeVariant: 'base' | 'recenter' | 'trackpad' = 'base';
+	private controllerPrompt: ControllerPromptStatus = 'qr';
+	private swipeVariant: SwipeVariant = 'base';
 
 	constructor(xrDevice: XRDevice) {
 		this.xrDevice = xrDevice;
@@ -51,17 +58,20 @@ export class DevUI {
 		this.renderReact();
 	}
 
-	private inferSwipeVariant(): 'base' | 'recenter' | 'trackpad' {
+	private inferSwipeVariant(): SwipeVariant {
 		// use optional chaining across package boundaries for safety
 		const imode: number = (this.xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
-		if (imode === 1) return 'recenter';
-		if (imode === 2) return 'trackpad';
+		if (imode === INTERACTION_MODE_DUAL_AXIS_GAMEPAD) return 'recenter';
+		if (imode === INTERACTION_MODE_DUALSHOCK_GAMEPAD) return 'trackpad';
+		if (imode === INTERACTION_MODE_OPENXR_QUEST) return 'quest-stick';
+		// If connected via ADB (Quest USB), default to quest-stick variant
+		if ((this.xrDevice as any)?.isAdbControllerStreamingActive?.()) return 'quest-stick';
 		return 'base';
 	}
 
 	public setControllerPromptStatus(
-		status: 'qr' | 'tracking-issues' | 'swipe' | 'hidden',
-		swipeVariant?: 'base' | 'recenter' | 'trackpad',
+		status: ControllerPromptStatus,
+		swipeVariant?: SwipeVariant,
 	): void {
 		if (this.controllerPrompt === status && (status !== 'swipe' || (swipeVariant == null || swipeVariant === this.swipeVariant))) {
 			return;

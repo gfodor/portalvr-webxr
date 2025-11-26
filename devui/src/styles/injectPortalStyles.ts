@@ -244,20 +244,40 @@ ${buildFontFaceDeclaration()}
 }
 
 .portal-help-dialog {
-  width: min(320px, 80vw);
+  width: min(400px, 80vw);
   background: var(--portal-color-card);
   color: var(--portal-color-text-primary);
   padding: var(--portal-spacing-lg);
   border-radius: var(--portal-radius-card);
-  text-align: center;
+  text-align: left;
   display: flex;
   flex-direction: column;
   gap: var(--portal-spacing-md);
 }
 
+.portal-help-dialog h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--portal-color-text-inverse);
+}
+
 .portal-help-text {
   font-size: 0.875rem;
   color: var(--portal-color-text-secondary);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-help-text p {
+  margin: 0;
+}
+
+.portal-help-text a {
+  color: var(--portal-color-accent);
+  text-decoration: underline;
 }
 
 .portal-qr-pill {
@@ -290,6 +310,57 @@ ${buildFontFaceDeclaration()}
   text-align: center;
 }
 
+.portal-qr-pill__usb-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--portal-spacing-xs);
+  max-width: 280px;
+}
+
+.portal-qr-pill__usb-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--portal-spacing-sm);
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.portal-qr-pill__controller-icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  color: #dfe8ff;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
+  align-self: center;
+}
+
+.portal-qr-pill__phone-row {
+  display: flex;
+  align-items: center;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-qr-pill__phone-icon {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
+}
+
+.portal-qr-pill__subtitle-line {
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.portal-qr-pill__separator {
+  font-size: 0.72rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  opacity: 0.6;
+  margin-top: var(--portal-spacing-xs);
+}
+
 .portal-qr-pill--swipe .portal-qr-pill__content {
   align-items: flex-start;
   text-align: left;
@@ -317,9 +388,96 @@ ${buildFontFaceDeclaration()}
   width: 100%;
 }
 
+.portal-qr-pill__usb-button {
+  padding: var(--portal-spacing-xs) var(--portal-spacing-lg);
+  border-radius: var(--portal-radius-button);
+  border: none;
+  background: var(--portal-color-text-inverse);
+  color: var(--portal-color-card);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.portal-qr-pill__usb-button--secondary {
+  background: #4c4f57;
+  color: #ffffff;
+}
+
+.portal-qr-pill__usb-button:hover:not(:disabled) {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.portal-qr-pill__usb-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .portal-qr-pill__search-status {
   font-size: 0.75rem;
   opacity: 0.85;
+}
+
+.portal-qr-pill__usb-status {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  text-align: center;
+}
+
+.portal-qr-pill__usb-status--success {
+  color: #8de1c6;
+}
+
+.portal-qr-pill__usb-status--error {
+  color: #ff9b9b;
+}
+
+.portal-qr-pill__usb-status--unsupported {
+  color: #9aa0ad;
+  font-size: 0.75rem;
+}
+
+.portal-qr-pill__retry-callout {
+  margin-top: var(--portal-spacing-sm);
+  color: #cfd4dc;
+  font-size: 0.8rem;
+  display: flex;
+  gap: var(--portal-spacing-sm);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex-wrap: wrap;
+}
+
+.portal-qr-pill__error-callout {
+  background: #2f2f2f;
+  color: #fff;
+  padding: var(--portal-spacing-sm) var(--portal-spacing-md);
+  border-radius: var(--portal-radius-card);
+  text-align: center;
+  line-height: 1.35;
+}
+
+.portal-qr-pill__permission-callout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-qr-pill__permission-img {
+  width: 240px;
+  max-width: 100%;
+  border-radius: var(--portal-radius-card);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.portal-qr-pill__hint {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-top: var(--portal-spacing-xs);
 }
 
 .portal-qr-pill__search-button {
@@ -348,6 +506,12 @@ ${buildFontFaceDeclaration()}
 .portal-qr-pill__subtitle {
   font-size: 0.75rem;
   opacity: 0.8;
+}
+
+.portal-qr-pill__code {
+  font-size: 0.75rem;
+  opacity: 0.85;
+  letter-spacing: 0.08em;
 }
 
 .portal-qr-pill__canvas,

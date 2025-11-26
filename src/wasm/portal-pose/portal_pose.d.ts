@@ -13,66 +13,29 @@ export interface PortalPoseModuleInstance {
   HEAPF64: Float64Array;
   _malloc(size: number): number;
   _free(ptr: number): void;
-  _portal_wasm_state_size(): number;
-  _portal_wasm_state_alignment(): number;
-  _portal_wasm_state_init(statePtr: number): void;
-  _portal_wasm_state_reset(statePtr: number): void;
-  _portal_wasm_set_roll_config(
-    statePtr: number,
-    amplify: number,
-    zeroOffsetDeg: number,
-    startDeg: number,
-  ): void;
-  _portal_wasm_set_alt_hand_offset(
-    statePtr: number,
-    valid: number,
-    offsetPtr: number,
-  ): void;
-  _portal_wasm_set_delta_target(
-    statePtr: number,
-    valid: number,
-    deltaPtr: number,
-  ): void;
-  _portal_wasm_set_camera_lock(
-    statePtr: number,
-    hand: number,
-    valid: number,
-    offsetPtr: number,
-  ): void;
-  _portal_wasm_set_display_lock_calibration(
-    statePtr: number,
-    headPtr: number,
-    ctrlPtr: number,
-    anchorMeters: number,
-  ): void;
-  _portal_wasm_set_fov_defaults(
-    statePtr: number,
-    headDeg: number,
-    stretchDeg: number,
-    aimDeg: number,
-  ): void;
-  _portal_wasm_set_arm_params(
-    statePtr: number,
-    maxArmDistance: number,
-    stretchMinDist: number,
-    stretchLerpRange: number,
-    armScaling: number,
-    torsoProportion: number,
-  ): void;
-  _portal_wasm_set_drag_button_active(active: number): void;
-  _portal_wasm_get_camera_fov_deg(statePtr: number): number;
-  _portal_wasm_update(inputsPtr: number, statePtr: number, resultPtr: number): void;
-  _portal_wasm_compute_display_delta(
-    statePtr: number,
-    controllerPosePtr: number,
-    outDeltaPtr: number,
-  ): number;
-  _portal_wasm_update_camera_locked_pose(
+  // State lifecycle
+  _portal_wasm_pose_state_size(): number;
+  _portal_wasm_pose_state_alignment(): number;
+  _portal_wasm_pose_state_init(statePtr: number): void;
+  _portal_wasm_pose_state_reset(statePtr: number): void;
+
+  // Controller-level toggle
+  _portal_wasm_controller_set_drag_button_active(active: number): void;
+
+  // Pose update
+  _portal_wasm_pose_update(inputsPtr: number, statePtr: number, resultPtr: number): void;
+  // Display-lock helpers
+  _portal_wasm_pose_state_update_camera_locked_pose(
     statePtr: number,
     hand: number,
     headPosePtr: number,
     currentPosePtr: number,
     outPosePtr: number,
+  ): number;
+  _portal_wasm_pose_state_compute_display_delta(
+    statePtr: number,
+    ctrlPosePtr: number,
+    outDeltaPtr: number,
   ): number;
   _portal_wasm_head_offset_calculate_nudge_delta(
     dx: number,
@@ -113,9 +76,10 @@ export interface PortalPoseModuleInstance {
     uiOffsetPtr: number,
     outPosePtr: number,
   ): void;
+  // Camera-drag helpers
   _portal_wasm_camera_drag_state_create(): number;
   _portal_wasm_camera_drag_state_destroy(statePtr: number): void;
-  _portal_wasm_camera_drag_reset(statePtr: number): void;
+  _portal_wasm_camera_drag_state_reset(statePtr: number): void;
   _portal_wasm_camera_drag_set_display_delta_cb(
     statePtr: number,
     callbackPtr: number,
@@ -137,6 +101,91 @@ export interface PortalPoseModuleInstance {
     outIncrementsPtr: number,
   ): number;
   _portal_wasm_camera_drag_end(statePtr: number): void;
+
+  // Session orchestration (multi-hand portal_pose_session)
+  _portal_wasm_pose_session_create(numHands: number): number;
+  _portal_wasm_pose_session_get_hand_state(sessionPtr: number, handEnum: number): number;
+  _portal_wasm_pose_session_apply_tuning(sessionPtr: number, tuningPtr: number): void;
+  _portal_wasm_pose_session_set_roll_config(sessionPtr: number, rollCfgPtr: number): void;
+  _portal_wasm_pose_session_update_alt_hand_offsets(
+    sessionPtr: number,
+    cfgPtr: number,
+  ): void;
+  _portal_wasm_pose_session_set_aim_hand_config(sessionPtr: number, cfgPtr: number): void;
+  _portal_wasm_pose_session_apply_display_lock_calibration(
+    sessionPtr: number,
+    calPtr: number,
+  ): void;
+  _portal_wasm_pose_session_clear_display_lock(sessionPtr: number): void;
+  _portal_wasm_dual_mode_synthesize_secondary_pose(
+    sessionPtr: number,
+    dualMode: number,
+    headPosePtr: number,
+    primaryHandEnum: number,
+    primaryPosePtr: number,
+    secondaryHandEnum: number,
+    outSecondaryPosePtr: number,
+  ): number;
+  _portal_wasm_pose_session_submit_sample(
+    sessionPtr: number,
+    sampleInPtr: number,
+    sampleOutPtr: number,
+  ): number;
+
+  // Pose-state setters (parity with native portal_pose_state_*)
+  _portal_wasm_pose_state_set_roll_config(statePtr: number, rollCfgPtr: number): void;
+  _portal_wasm_pose_state_set_delta_target(
+    statePtr: number,
+    valid: number,
+    deltaPosePtr: number,
+  ): void;
+  _portal_wasm_pose_state_set_camera_lock(
+    statePtr: number,
+    handEnum: number,
+    valid: number,
+    offsetPosePtr: number,
+  ): void;
+  _portal_wasm_pose_state_set_fov_defaults(
+    statePtr: number,
+    headDeg: number,
+    stretchDeg: number,
+    aimDeg: number,
+  ): void;
+  _portal_wasm_pose_state_set_arm_params(
+    statePtr: number,
+    maxArmDistanceM: number,
+    stretchMinDistM: number,
+    stretchLerpRangeM: number,
+    armScaling: number,
+    torsoProportion: number,
+  ): void;
+  _portal_wasm_pose_state_capture_camera_lock_from_world(
+    statePtr: number,
+    handEnum: number,
+    headPoseWorldPtr: number,
+    ctrlPoseWorldPtr: number,
+  ): void;
+  _portal_wasm_pose_state_set_rel_offset(
+    statePtr: number,
+    handEnum: number,
+    valid: number,
+    offsetHeadPtr: number,
+  ): void;
+
+  // Alt-hand spawn helper
+  _portal_wasm_compute_alt_hand_spawn_offset(
+    headPosePtr: number,
+    baselineMeters: number,
+    outOffsetPtr: number,
+  ): void;
+
+  // Camera-drag stretch tuning (parity with Android)
+  _portal_wasm_camera_drag_apply_stretch_params(
+    dragStatePtr: number,
+    stretchMinDistM: number,
+    stretchLerpRangeM: number,
+    armScaling: number,
+  ): void;
 }
 
 export default function PortalPoseModule(

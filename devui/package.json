@@ -12,7 +12,7 @@
 	],
 	"scripts": {
 		"prebuild": "node -p \"'export const VERSION = ' + JSON.stringify(require('./package.json').version) + ';'\" > src/version.ts",
-		"build": "node ./scripts/generate-assets.mjs && tsc && rollup -c"
+		"build": "node ./scripts/generate-assets.mjs && tsc && node ./scripts/copy-static-assets.mjs && rollup -c"
 	},
 	"repository": {
 		"type": "git",
@@ -26,6 +26,8 @@
 	},
 	"homepage": "https://portalvr.io",
 	"dependencies": {
+		"@yume-chan/adb": "^2.3.1",
+		"@yume-chan/adb-daemon-webusb": "^2.1.0",
 		"qrcode-generator": "^2.0.4",
 		"react": "^18.2.0",
 		"react-dom": "^18.2.0"

@@ -12,7 +12,10 @@ import {
 	portalConfigProvider,
 	type PortalEmulatorConfig,
 	updatePortalEmulatorConfig,
+	type AdbControllerStreamer,
+	type ControllerState,
 } from 'portalvr';
+import type { AdbControllerCallbacks } from '../hooks/useQuestUsbDetection.js';
 
 import { ensurePortalStyles } from '../styles/injectPortalStyles.js';
 import { PortalQrPrompt } from './PortalQrPrompt.js';
@@ -26,8 +29,8 @@ import {
 
 type DevUIRootProps = {
 	xrDevice: XRDevice;
-	controllerPrompt: 'qr' | 'tracking-issues' | 'swipe' | 'hidden';
-	swipeVariant?: 'base' | 'recenter' | 'trackpad';
+	controllerPrompt: 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
+	swipeVariant?: 'base' | 'recenter' | 'trackpad' | 'quest-stick';
 };
 
 type EmulatorSettingsState = {
@@ -40,6 +43,9 @@ type EmulatorSettingsState = {
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
 const AMAZON_3D_GLASSES_URL =
 	'https://www.amazon.com/INFICOLOR-3D-Compatible-Assassins-Revelations/dp/B005UZB7KM';
+const HOW_TO_PLAY_URL = 'https://youtu.be/g30wYsLU9AI';
+const DOCUMENTATION_URL = 'https://portalvr.io/docs';
+const INTERACTION_MODE_OPENXR_QUEST = 0x10;
 
 export function DevUIRoot({
 	xrDevice,
@@ -47,6 +53,7 @@ export function DevUIRoot({
 	swipeVariant = 'base',
 }: DevUIRootProps): JSX.Element {
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
+	const [isHelpOpen, setHelpOpen] = useState(false);
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
 		readSettings(portalConfigProvider.getConfigSync()),
 	);
@@ -61,8 +68,47 @@ export function DevUIRoot({
 	const [searchCountdownSeconds, setSearchCountdownSeconds] = useState<number | null>(null);
 	const [isActiveSearch, setIsActiveSearch] = useState(true);
 	const [isSigcfConnected, setIsSigcfConnected] = useState(false);
+	const [adbStreamer, setAdbStreamer] = useState<AdbControllerStreamer | null>(null);
+	const [isAdbConnected, setIsAdbConnected] = useState(false);
+
+	const lastInteractionMode = (xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
+	const isOpenxrQuest = lastInteractionMode === 0x10;
+
+	// ADB controller callbacks - wire to XRDevice handlers
+	const adbControllerCallbacks = useMemo<AdbControllerCallbacks>(() => ({
+		onControllerState: (state: ControllerState) => {
+			// Call XRDevice's internal handler
+			(xrDevice as any).handleControllerState?.(state);
+		},
+		onOrientationReset: (hand: 'left' | 'right') => {
+			(xrDevice as any).handleOrientationReset?.(hand);
+		},
+		onConnectionChange: (connected: boolean) => {
+			setIsAdbConnected(connected);
+			// Pass fromAdb=true so XRDevice knows this is an ADB connection
+			(xrDevice as any).handleControllerConnectionChange?.(connected, true);
+		},
+	}), [xrDevice]);
+
+	const handleAdbStreamerChange = useCallback((streamer: AdbControllerStreamer | null) => {
+		setAdbStreamer(streamer);
+		if (streamer) {
+			// Disable WebRTC when ADB is active
+			xrDevice.enableAdbControllerStreaming(streamer);
+		} else {
+			xrDevice.disableAdbControllerStreaming();
+		}
+	}, [xrDevice]);
+
+	const handleFirstControllerLaunch = useCallback(() => {
+		xrDevice.forceControllerSearchNow();
+		setIsActiveSearch(true);
+		setNextSearchAttemptAtMs(null);
+		setSearchCountdownSeconds(null);
+	}, [xrDevice]);
 
 	const scrimRef = useRef<HTMLDivElement | null>(null);
+	const helpScrimRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
 		ensurePortalStyles();
@@ -242,6 +288,32 @@ export function DevUIRoot({
 		[],
 	);
 
+	const closeHelpOnScrimClick = useCallback(
+		(event: MouseEvent<HTMLDivElement>) => {
+			if (event.target === helpScrimRef.current) {
+				setHelpOpen(false);
+			}
+		},
+		[],
+	);
+
+	const handleHelpClick = useCallback(() => {
+		const interactionMode = (xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
+		if (interactionMode === INTERACTION_MODE_OPENXR_QUEST) {
+			setHelpOpen(true);
+		} else {
+			window.open(HOW_TO_PLAY_URL, '_blank', 'noreferrer');
+		}
+	}, [xrDevice]);
+
+	const closeHelp = useCallback(() => {
+		setHelpOpen(false);
+	}, []);
+
+	const isDualTrackedMode = useCallback(() => {
+		return (xrDevice as any)?.isDualTrackedMode?.() ?? false;
+	}, [xrDevice]);
+
 	const deviceName = deviceLabel.name;
 	const deviceUiCode = deviceLabel.uiCode;
 	const deviceId = deviceLabel.id;
@@ -284,15 +356,14 @@ export function DevUIRoot({
 			</a>
 
 			<div className="portal-top-icons">
-				<a
+				<button
 					className="portal-icon-button"
-					href="https://youtu.be/g30wYsLU9AI"
-					target="_blank"
-					rel="noreferrer"
-					aria-label="Watch help video"
+					type="button"
+					aria-label="Help"
+					onClick={handleHelpClick}
 				>
 					<img src={ASSET_ICON_HELP} alt="" aria-hidden="true" />
-				</a>
+				</button>
 				<button
 					className="portal-icon-button"
 					type="button"
@@ -317,6 +388,11 @@ export function DevUIRoot({
 				onSearchNow={
 					showSearchButton ? handleSearchNow : undefined
 				}
+				controllerConnected={isSigcfConnected || isAdbConnected}
+				isOpenxrQuest={isOpenxrQuest}
+				onFirstControllerLaunch={handleFirstControllerLaunch}
+				adbControllerCallbacks={adbControllerCallbacks}
+				onAdbStreamerChange={handleAdbStreamerChange}
 			/>
 
 			<div
@@ -421,6 +497,54 @@ export function DevUIRoot({
 							type="button"
 							className="portal-close-button"
 							onClick={closeSettings}
+						>
+							Close
+						</button>
+
+					</div>
+				)}
+			</div>
+
+			<div
+				ref={helpScrimRef}
+				className="portal-settings-scrim"
+				aria-hidden={!isHelpOpen}
+				onClick={closeHelpOnScrimClick}
+			>
+				{isHelpOpen && (
+					<div className="portal-help-dialog" role="dialog" aria-modal="true">
+						<h2>Help</h2>
+						{isDualTrackedMode() ? (
+							<div className="portal-help-text">
+								<p>Press and hold system/Oculus/Meta button to recenter controllers.</p>
+								<p>Place your finger on either thumbstick to move the camera. Click in and hold either thumbstick to aim.</p>
+								<p>Turn your wrist as you reach forward to stretch farther.</p>
+								<p>
+									For more information, see the{' '}
+									<a href={DOCUMENTATION_URL} target="_blank" rel="noreferrer">
+										documentation
+									</a>
+									.
+								</p>
+							</div>
+						) : (
+							<div className="portal-help-text">
+								<p>Press and hold system/Oculus/Meta button to recenter controllers.</p>
+								<p>Place your finger on either thumbstick to move the camera. Press in the thumbstick and tilt it left or right to change hands. Press it in and tilt it up or down to zoom in or out.</p>
+								<p>Turn your wrist as you reach forward to stretch farther.</p>
+								<p>
+									For more information, see the{' '}
+									<a href={DOCUMENTATION_URL} target="_blank" rel="noreferrer">
+										documentation
+									</a>
+									.
+								</p>
+							</div>
+						)}
+						<button
+							type="button"
+							className="portal-close-button"
+							onClick={closeHelp}
 						>
 							Close
 						</button>

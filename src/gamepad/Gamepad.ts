@@ -30,8 +30,11 @@ export interface GamepadConfig {
   axes: (Axis | null)[];
 }
 
-interface VirtualGamepadHapticActuator extends GamepadHapticActuator {
+interface VirtualGamepadHapticActuator {
+  type: 'vibration';
   pulse(intensity: number, duration: number): Promise<boolean>;
+  playEffect(type: GamepadHapticEffectType, params?: GamepadEffectParameters): Promise<GamepadHapticsResult>;
+  reset(): Promise<GamepadHapticsResult>;
 }
 
 function createVirtualHapticActuators(
@@ -42,8 +45,10 @@ function createVirtualHapticActuators(
   }
   const length = Math.max(0, Math.floor(count));
   return Array.from({ length }, () => ({
-    type: 'vibration' as GamepadHapticActuatorType,
+    type: 'vibration' as const,
     pulse: () => Promise.resolve(true),
+    playEffect: () => Promise.resolve('complete' as GamepadHapticsResult),
+    reset: () => Promise.resolve('complete' as GamepadHapticsResult),
   }));
 }
 

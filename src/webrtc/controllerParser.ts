@@ -6,10 +6,30 @@
 export const PACKET_STATE = 0x10;
 export const PACKET_ORIENTATION_RESET = 0x7e;
 export const PACKET_HANGUP = 0x02;
-const PROTO_VERSION = 0x03;
-const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02]);
+const PROTO_VERSION = 0x04;
+const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02, 0x03]);
 const TRACKING_STATE_MASK = 0x03;
 const TRACKING_REASON_MASK = 0x0f;
+
+// Tracking state values (byte 59 in v2+ packets)
+export const TRACKING_STATE_UNKNOWN = 0x00;
+export const TRACKING_STATE_TRACKING = 0x01;
+export const TRACKING_STATE_LIMITED = 0x02;
+export const TRACKING_STATE_NOT_TRACKING = 0x03;
+
+// Tracking reason values (byte 60 in v2+ packets)
+export const TRACKING_REASON_NONE = 0x00;
+export const TRACKING_REASON_EXCESSIVE_MOTION = 0x01;
+export const TRACKING_REASON_INSUFFICIENT_FEATURES = 0x02;
+export const TRACKING_REASON_INSUFFICIENT_LIGHT = 0x03;
+export const TRACKING_REASON_RELOCALIZING = 0x04;
+export const TRACKING_REASON_INITIALIZING = 0x05;
+export const TRACKING_REASON_BAD_STATE = 0x06;
+export const TRACKING_REASON_SYSTEM_MENU = 0x07; // Focus lost indicator
+
+// Packet sizes (bytes)
+const PACKET_STATE_SIZE_V4 = 111; // v4: right body + tracking + interaction + trackpad tail + left-hand tail
+const PACKET_STATE_SIZE_V3 = 67; // v3: right body + tracking + interaction + trackpad tail
 
 // Button bit masks
 const BTN_ACTION_1 = 1; // bit 0
@@ -32,12 +52,14 @@ const U16_MAX_INV = 1 / 65535;
 export const INTERACTION_MODE_BASE = 0x0;
 export const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
 export const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
+export const INTERACTION_MODE_OPENXR_QUEST = 0x10;
 
-const INTERACTION_MODE_NAMES = [
-  'Base',
-  'Dual-Axis Gamepad',
-  'DualShock Gamepad',
-];
+const INTERACTION_MODE_NAMES: Record<number, string> = {
+  [INTERACTION_MODE_BASE]: 'Base',
+  [INTERACTION_MODE_DUAL_AXIS_GAMEPAD]: 'Dual-Axis Gamepad',
+  [INTERACTION_MODE_DUALSHOCK_GAMEPAD]: 'DualShock Gamepad',
+  [INTERACTION_MODE_OPENXR_QUEST]: 'OpenXR Quest',
+};
 
 export interface ControllerState {
   version: number;
@@ -57,6 +79,7 @@ export interface ControllerState {
   timestampNs: number;
   wandMode: number;
   wandModeName: string;
+  dualTrackedRequested: boolean; // NEW: true when v4 dual-tracked packets with left-hand tail are present
   // NEW: interaction mode propagated by BLE v3
   interactionMode: number;
   interactionModeName: string;
@@ -64,7 +87,7 @@ export interface ControllerState {
   receivedAt: number;
   trackingState: number;
   trackingReason: number;
-  // NEW: optional trackpad tail (present on v3 67-byte packets)
+  // NEW: optional trackpad tail (present on v3 67-byte packets and v4)
   trackpad?: {
     flags: number;
     xU16: number;
@@ -72,6 +95,23 @@ export interface ControllerState {
     xNorm: number; // 0..1
     yNorm: number; // 0..1
     touch0Down: boolean;
+  };
+  // NEW: optional v4 left-hand tail (dual-tracked mode)
+  left?: {
+    buttonsMask: number;
+    buttons: {
+      action1: boolean;
+      action2: boolean;
+      stick: boolean;
+      trigger: boolean;
+      squeeze: boolean;
+      menu: boolean;
+      cameraDrag: boolean;
+    };
+    joystick: { x: number; y: number };
+    position: { x: number; y: number; z: number };
+    quaternion: { x: number; y: number; z: number; w: number };
+    flags: number;
   };
 }
 
@@ -82,6 +122,7 @@ const WAND_MODE_NAMES = [
   'Left Ephemeral',
   'Dual Mirrored',
   'Dual Opposed',
+  'Dual Tracked',
 ];
 
 export function isOrientationResetPacket(buffer: ArrayBuffer | null | undefined): boolean {
@@ -96,24 +137,47 @@ export function isOrientationResetPacket(buffer: ArrayBuffer | null | undefined)
   return packetType === PACKET_ORIENTATION_RESET;
 }
 
+/**
+ * Parse the wand ID from an orientation reset packet.
+ * Returns 'right' (default) or 'left' based on the packet's wand ID byte.
+ * Matches Android BlePeripheralService.kt behavior:
+ *   - byte[1] = 0 → LEFT
+ *   - byte[1] = 1 → RIGHT (default if omitted)
+ */
+export function parseOrientationResetWand(buffer: ArrayBuffer | null | undefined): 'left' | 'right' {
+  if (!buffer || !(buffer instanceof ArrayBuffer) || buffer.byteLength < 2) {
+    return 'right'; // Default to RIGHT when sender omits wand id
+  }
+  const view = new DataView(buffer);
+  const wandId = view.getUint8(1);
+  return wandId === 0 ? 'left' : 'right';
+}
+
+const BLE_WAND_DUAL_TRACKED = 6;
+
 export function parseControllerState(buffer: ArrayBuffer | null | undefined): ControllerState | null {
   if (!buffer || !(buffer instanceof ArrayBuffer)) {
     return null;
   }
 
   if (buffer.byteLength < 59) {
-    console.warn(`Controller packet length ${buffer.byteLength} is smaller than the minimum supported 59 bytes.`);
+    console.warn(
+      `Controller packet length ${buffer.byteLength} is smaller than the minimum supported 59 bytes.`,
+    );
     return null;
   }
-  // include 67 as a known v3 packet size (flags + x_u16 + y_u16 tail)
+  // include known packet sizes, including v4 111-byte layout
   if (
-    buffer.byteLength !== 67 &&
+    buffer.byteLength !== PACKET_STATE_SIZE_V4 &&
+    buffer.byteLength !== PACKET_STATE_SIZE_V3 &&
     buffer.byteLength !== 62 &&
     buffer.byteLength !== 61 &&
     buffer.byteLength !== 59 &&
     buffer.byteLength !== 55
   ) {
-    console.warn(`Controller packet length ${buffer.byteLength} differs from known versions; parsing known fields only.`);
+    console.warn(
+      `Controller packet length ${buffer.byteLength} differs from known versions; parsing known fields only.`,
+    );
   }
 
   const view = new DataView(buffer);
@@ -196,16 +260,18 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     interactionMode = view.getUint8(offset++);
   }
 
-  // NEW: optional trackpad tail [flags][x_u16][y_u16]
+  // Optional trackpad tail [flags][x_u16][y_u16] (v3+)
   let trackpad: ControllerState['trackpad'] | undefined = undefined;
-  const remain = buffer.byteLength - offset;
-  if (remain >= 1) {
+  const trackpadRemain = buffer.byteLength - offset;
+  if (trackpadRemain >= 1) {
     const tpFlags = view.getUint8(offset++) & 0xff;
     let xU16 = 0;
     let yU16 = 0;
     if (buffer.byteLength - offset >= 4) {
-      xU16 = view.getUint16(offset, true); offset += 2;
-      yU16 = view.getUint16(offset, true); offset += 2;
+      xU16 = view.getUint16(offset, true);
+      offset += 2;
+      yU16 = view.getUint16(offset, true);
+      offset += 2;
     }
     const xNorm = xU16 * U16_MAX_INV;
     const yNorm = yU16 * U16_MAX_INV;
@@ -216,6 +282,73 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
       xNorm,
       yNorm,
       touch0Down: (tpFlags & TRACKPAD_FLAG_TOUCH0_DOWN) !== 0,
+    };
+  }
+
+  // Optional v4 left-hand tail for dual-tracked mode:
+  // [lpx, lpy, lpz] (3 floats)
+  // [lqx, lqy, lqz, lqw] (4 floats)
+  // leftButtonsMask (int32)
+  // leftJoyX, leftJoyY (2 floats)
+  // leftFlags (u8), lIsPrimary (u8), reserved[2] (u8,u8)
+  let left: ControllerState['left'] | undefined;
+  const leftTailBytes = PACKET_STATE_SIZE_V4 - PACKET_STATE_SIZE_V3;
+  if (
+    version >= 0x04 &&
+    buffer.byteLength >= PACKET_STATE_SIZE_V4 &&
+    buffer.byteLength - offset >= leftTailBytes
+  ) {
+    const lpx = view.getFloat32(offset, true);
+    offset += 4;
+    const lpy = view.getFloat32(offset, true);
+    offset += 4;
+    const lpz = view.getFloat32(offset, true);
+    offset += 4;
+
+    const lqx = view.getFloat32(offset, true);
+    offset += 4;
+    const lqy = view.getFloat32(offset, true);
+    offset += 4;
+    const lqz = view.getFloat32(offset, true);
+    offset += 4;
+    const lqw = view.getFloat32(offset, true);
+    offset += 4;
+
+    const leftButtonsMask = view.getInt32(offset, true);
+    offset += 4;
+
+    const leftJoyX = view.getFloat32(offset, true);
+    offset += 4;
+    const leftJoyY = view.getFloat32(offset, true);
+    offset += 4;
+
+    const leftFlags = view.getUint8(offset++) & 0xff;
+
+    // lIsPrimary (hand index / primary marker) – currently unused
+    if (buffer.byteLength - offset > 0) {
+      offset++;
+    }
+    // Reserved bytes (up to 2)
+    const reserved = Math.min(2, buffer.byteLength - offset);
+    offset += reserved;
+
+    const leftButtons = {
+      action1: !!(leftButtonsMask & BTN_ACTION_1),
+      action2: !!(leftButtonsMask & BTN_ACTION_2),
+      stick: !!(leftButtonsMask & BTN_STICK),
+      trigger: !!(leftButtonsMask & BTN_TRIGGER),
+      squeeze: !!(leftButtonsMask & BTN_SQUEEZE),
+      menu: !!(leftButtonsMask & BTN_MENU),
+      cameraDrag: !!(leftButtonsMask & BTN_CAMERA_DRAG),
+    };
+
+    left = {
+      buttonsMask: leftButtonsMask,
+      buttons: leftButtons,
+      joystick: { x: leftJoyX, y: leftJoyY },
+      position: { x: lpx, y: lpy, z: lpz },
+      quaternion: { x: lqx, y: lqy, z: lqz, w: lqw },
+      flags: leftFlags,
     };
   }
 
@@ -234,6 +367,9 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     stretch: !!(flagsRaw & FLAG_STRETCH),
   };
 
+  const dualTrackedRequested =
+    version >= 0x04 && wandMode === BLE_WAND_DUAL_TRACKED && !!left;
+
   return {
     version,
     sessionTimestampMs,
@@ -244,6 +380,7 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     timestampNs,
     wandMode,
     wandModeName: WAND_MODE_NAMES[wandMode] || 'Unknown',
+    dualTrackedRequested,
     interactionMode,
     interactionModeName: INTERACTION_MODE_NAMES[interactionMode] || 'Base',
     flags,
@@ -251,5 +388,6 @@ export function parseControllerState(buffer: ArrayBuffer | null | undefined): Co
     trackingState,
     trackingReason,
     trackpad,
+    left,
   };
 }

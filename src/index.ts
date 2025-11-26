@@ -14,6 +14,13 @@ export {
   setRuntimeAssetBaseUrl,
 } from './runtime/RuntimeAssetResolver.js';
 
+// shared portal config storage
+export {
+  getOrCreateRuntimeConfig,
+  persistStoredConfig,
+  readStoredConfig,
+} from './context/shared.js';
+
 // model
 export { XRDevice, XRDeviceConfig } from './device/XRDevice.js';
 export {
@@ -40,6 +47,16 @@ export {
   type WebRTCControllerStreamOptions,
 } from './webrtc/WebRTCControllerStreamer.js';
 export type { SIGCFStatusSnapshot } from './webrtc/sigcf.js';
+export type { ControllerState } from './webrtc/controllerParser.js';
+export {
+  AdbControllerStreamer,
+  type AdbControllerStreamOptions,
+} from './adb/AdbControllerStreamer.js';
+export {
+  AdbControllerTransport,
+  type AdbTransportOptions,
+  type AdbTransportStats,
+} from './adb/AdbControllerTransport.js';
 
 // Initialization
 export { XRSystem } from './initialization/XRSystem.js';
