@@ -888,7 +888,13 @@ export class PortalControllerRuntime {
       this.neutralYawDeg;
     this.F32[(inputsPtr + OFF_INPUTS_HAND_TO_HEAD) >> 2] =
       ANDROID_PLAYER_HAND_TO_HEAD_HEIGHT_METERS;
-    this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] = handEnum;
+    // In dual-tracked mode, active_hand must match the hand being submitted so
+    // the core looks up the correct rel_off index. In non-dual-tracked mode,
+    // active_hand determines anchor lateral placement and should match wand mode.
+    const activeHandValue = this.dualTrackedRequested
+      ? handEnum
+      : (this.activeHand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left);
+    this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] = activeHandValue;
     this.F64[(inputsPtr + OFF_INPUTS_TIME_NOW) >> 3] = nowNs * 1e-9;
   }
 
