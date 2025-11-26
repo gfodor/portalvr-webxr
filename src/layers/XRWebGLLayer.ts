@@ -214,7 +214,7 @@ export class XRWebGLLayer extends XRLayer {
       depthRenderbuffer = gl.createRenderbuffer();
       if (depthRenderbuffer) {
         gl.bindRenderbuffer(gl.RENDERBUFFER, depthRenderbuffer);
-        let attachment = gl.DEPTH_ATTACHMENT;
+        let attachment: number = gl.DEPTH_ATTACHMENT;
         let depthFormat: number = isWebGL2 && gl2 ? gl2.DEPTH_COMPONENT24 : gl.DEPTH_COMPONENT16;
 
         if (this._layerInit.stencil) {

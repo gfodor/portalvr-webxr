@@ -5,7 +5,9 @@ import {
 	useQuestUsbDetection,
 	ADB_BUSY_MESSAGE,
 	type QuestUsbDetectionState,
+	type AdbControllerCallbacks,
 } from '../hooks/useQuestUsbDetection.js';
+import type { AdbControllerStreamer } from 'portalvr';
 import {
 	QUEST_USB_PERMISSION_DATA_URI,
 	VR_CONTROLLERS_DATA_URI,
@@ -27,6 +29,10 @@ export type PortalQrPromptProps = {
 	controllerConnected?: boolean;
 	isOpenxrQuest?: boolean;
 	onFirstControllerLaunch?: () => void;
+	/** Callbacks for ADB controller state - wire these to XRDevice */
+	adbControllerCallbacks?: AdbControllerCallbacks;
+	/** Called when ADB streamer is created/disposed */
+	onAdbStreamerChange?: (streamer: AdbControllerStreamer | null) => void;
 };
 
 const QR_SIZE = 384;
@@ -44,14 +50,26 @@ export function PortalQrPrompt({
 	controllerConnected = false,
 	isOpenxrQuest = false,
 	onFirstControllerLaunch,
+	adbControllerCallbacks,
+	onAdbStreamerChange,
 }: PortalQrPromptProps): JSX.Element | null {
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
+	const prevAdbStreamerRef = useRef<AdbControllerStreamer | null>(null);
 	const questUsb = useQuestUsbDetection(
 		status === 'qr',
 		pairingUrl,
 		controllerConnected,
 		onFirstControllerLaunch,
+		adbControllerCallbacks,
 	);
+
+	// Notify parent when ADB streamer changes
+	useEffect(() => {
+		if (questUsb.adbStreamer !== prevAdbStreamerRef.current) {
+			prevAdbStreamerRef.current = questUsb.adbStreamer;
+			onAdbStreamerChange?.(questUsb.adbStreamer);
+		}
+	}, [questUsb.adbStreamer, onAdbStreamerChange]);
 	const handleManualRetry = () => {
 		questUsb.restartLaunchLoop();
 	};

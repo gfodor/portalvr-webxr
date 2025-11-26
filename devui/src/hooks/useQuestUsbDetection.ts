@@ -14,6 +14,8 @@ import {
 	portalConfigProvider,
 	updatePortalEmulatorConfig,
 	type PortalEmulatorConfig,
+	AdbControllerStreamer,
+	type ControllerState,
 } from 'portalvr';
 
 const QUEST_VENDOR_IDS = [0x2833];
@@ -30,6 +32,9 @@ const MAX_CONTROLLER_LAUNCH_ATTEMPTS = 3;
 const CONTROLLER_LAUNCH_RETRY_DELAY_MS = 4000;
 const REPO_BASE_URL = 'https://repo.portalvr.io';
 const REPO_INDEX_PATH = '/index-v2.json';
+const MAX_SOCKET_ATTEMPTS = 3;
+const SOCKET_RETRY_DELAY_MS = 1000;
+const ADB_SOCKET_NAME = 'localabstract:PORTALVR-ADB';
 
 const LOG_PREFIX = '[QuestUSB]';
 export const ADB_BUSY_MESSAGE =
@@ -104,6 +109,8 @@ export type QuestUsbDetectionResult = {
 	requestPermission: () => Promise<void>;
 	hasPermission: boolean;
 	restartLaunchLoop: () => void;
+	/** ADB controller streamer when connected via USB. When non-null, skip SIGCF/WebRTC. */
+	adbStreamer: AdbControllerStreamer | null;
 };
 
 type QuestInfo = {
@@ -111,15 +118,23 @@ type QuestInfo = {
 	manufacturer?: string;
 };
 
+export interface AdbControllerCallbacks {
+	onControllerState?: (state: ControllerState) => void;
+	onOrientationReset?: (hand: 'left' | 'right') => void;
+	onConnectionChange?: (connected: boolean) => void;
+}
+
 export function useQuestUsbDetection(
 	enabled: boolean,
 	controllerLaunchUrl?: string,
 	controllerConnected?: boolean,
 	onFirstLaunch?: () => void,
+	adbCallbacks?: AdbControllerCallbacks,
 ): QuestUsbDetectionResult {
 	const manager = useMemo(() => AdbDaemonWebUsbDeviceManager.BROWSER, []);
 	const [state, setState] = useState<QuestUsbDetectionState>({ kind: 'idle' });
 	const [hasPermission, setHasPermission] = useState(false);
+	const [adbStreamer, setAdbStreamer] = useState<AdbControllerStreamer | null>(null);
 	const questDetectedRef = useRef(false);
 	const credentialStoreRef = useRef<QuestCredentialStore | null>(null);
 	const pipelineStartedRef = useRef(false);
@@ -130,10 +145,16 @@ export function useQuestUsbDetection(
 	const unmountedRef = useRef(false);
 	const firstLaunchFiredRef = useRef(false);
 	const onFirstLaunchRef = useRef(onFirstLaunch);
+	const adbStreamerRef = useRef<AdbControllerStreamer | null>(null);
+	const adbCallbacksRef = useRef(adbCallbacks);
 
 	useEffect(() => {
 		onFirstLaunchRef.current = onFirstLaunch;
 	}, [onFirstLaunch]);
+
+	useEffect(() => {
+		adbCallbacksRef.current = adbCallbacks;
+	}, [adbCallbacks]);
 
 	useEffect(() => {
 		enabledRef.current = enabled;
@@ -148,6 +169,11 @@ export function useQuestUsbDetection(
 		if (typeof window !== 'undefined' && exhaustedPromptTimeoutRef.current != null) {
 			window.clearTimeout(exhaustedPromptTimeoutRef.current);
 			exhaustedPromptTimeoutRef.current = null;
+		}
+		// Dispose ADB streamer on unmount
+		if (adbStreamerRef.current) {
+			void adbStreamerRef.current.dispose();
+			adbStreamerRef.current = null;
 		}
 	}, []);
 
@@ -205,6 +231,9 @@ export function useQuestUsbDetection(
 			exhaustedPromptTimeoutRef,
 			onFirstLaunchRef,
 			firstLaunchFiredRef,
+			adbStreamerRef,
+			setAdbStreamer,
+			adbCallbacksRef,
 		);
 	}, [manager, hasPermission, controllerLaunchUrl, ensureCredentialStore]);
 
@@ -222,6 +251,12 @@ export function useQuestUsbDetection(
 			if (typeof window !== 'undefined' && exhaustedPromptTimeoutRef.current != null) {
 				window.clearTimeout(exhaustedPromptTimeoutRef.current);
 				exhaustedPromptTimeoutRef.current = null;
+			}
+			// Clean up ADB streamer when disabled
+			if (adbStreamerRef.current) {
+				void adbStreamerRef.current.dispose();
+				adbStreamerRef.current = null;
+				setAdbStreamer(null);
 			}
 			return;
 		}
@@ -618,6 +653,7 @@ export function useQuestUsbDetection(
 		hasPermission,
 		requestPermission,
 		restartLaunchLoop,
+		adbStreamer,
 	};
 }
 
@@ -1102,6 +1138,9 @@ async function launchControllerWithRetries(
 	exhaustedPromptTimeoutRef: { current: number | null },
 	onFirstLaunchRef?: { current: (() => void) | undefined },
 	firstLaunchFiredRef?: { current: boolean },
+	adbStreamerRef?: { current: AdbControllerStreamer | null },
+	setAdbStreamer?: (streamer: AdbControllerStreamer | null) => void,
+	adbCallbacksRef?: { current: AdbControllerCallbacks | undefined },
 ): Promise<void> {
 	let attempt = 0;
 	logDebug('Launch controller with retries', { controllerLaunchUrl });
@@ -1172,6 +1211,7 @@ async function launchControllerWithRetries(
 		});
 
 		let adb: Adb | null = null;
+		let socketConnected = false;
 		try {
 			adb = await openQuestAdb(manager, getCredentialStore());
 			await safeRunShellIgnoreError(adb, [
@@ -1191,14 +1231,102 @@ async function launchControllerWithRetries(
 			logDebug('Sending launch intent', { intentCmd });
 			await runShellText(adb, intentCmd);
 			logDebug('Launch intent sent');
+
+			// Try to connect to the ADB socket with retries
+			if (adbStreamerRef && setAdbStreamer && adb) {
+				for (let socketAttempt = 0; socketAttempt < MAX_SOCKET_ATTEMPTS; socketAttempt++) {
+					try {
+						logDebug(`Socket connection attempt ${socketAttempt + 1}/${MAX_SOCKET_ATTEMPTS}`);
+
+						// Wait a bit for the app to initialize and create the socket server
+						await sleep(SOCKET_RETRY_DELAY_MS);
+
+						// Create the streamer with the existing adb instance
+						// Pass factory for reconnects
+						const callbacks = adbCallbacksRef?.current;
+						const currentAdb = adb!; // We already checked adb is non-null above
+						const streamer = new AdbControllerStreamer({
+							adb: currentAdb, // Use existing connection
+							adbFactory: async () => {
+								// Factory for reconnects only
+								return openQuestAdb(manager, getCredentialStore());
+							},
+							socketName: ADB_SOCKET_NAME,
+							log: logDebug,
+							onConnectionChange: (connected) => {
+								logDebug('ADB streamer connection changed:', connected);
+								controllerConnectedRef.current = connected;
+								callbacks?.onConnectionChange?.(connected);
+								if (connected) {
+									setState((prev) =>
+										prev.kind === 'controller-setup'
+											? {
+													...prev,
+													phase: 'ready',
+													message: 'Controller connected via USB.',
+													progressPct: null,
+												}
+											: prev,
+									);
+								}
+							},
+							onControllerState: (state) => {
+								// Forward to XRDevice via callback
+								callbacks?.onControllerState?.(state);
+							},
+							onOrientationReset: (hand) => {
+								logDebug('Orientation reset via ADB, hand=', hand);
+								callbacks?.onOrientationReset?.(hand);
+							},
+						});
+
+						// Give it some time to connect
+						await sleep(500);
+
+						if (streamer.isConnected()) {
+							logDebug('ADB socket connected successfully');
+							adbStreamerRef.current = streamer;
+							setAdbStreamer(streamer);
+							socketConnected = true;
+							controllerConnectedRef.current = true;
+							setState((prev) =>
+								prev.kind === 'controller-setup'
+									? {
+											...prev,
+											phase: 'ready',
+											message: 'Controller connected via USB.',
+											progressPct: null,
+										}
+									: prev,
+							);
+							// Don't close ADB - streamer owns it now
+							adb = null;
+							return;
+						} else {
+							// Not connected yet, dispose and retry
+							logDebug(`Socket not connected after attempt ${socketAttempt + 1}`);
+							await streamer.dispose();
+						}
+					} catch (err) {
+						logDebug(`Socket connection attempt ${socketAttempt + 1} failed:`, err);
+						if (socketAttempt < MAX_SOCKET_ATTEMPTS - 1) {
+							await sleep(SOCKET_RETRY_DELAY_MS);
+						}
+					}
+				}
+				logDebug('All socket connection attempts failed, falling back to retry loop');
+			}
 		} catch {
 			logDebug('Launch attempt failed');
 			// Ignore individual launch errors; we'll retry below.
 		} finally {
-			await adb?.close().catch(() => undefined);
+			// Only close ADB if we didn't hand it off to the streamer
+			if (adb) {
+				await adb.close().catch(() => undefined);
+			}
 		}
 
-		if (controllerConnectedRef.current) {
+		if (controllerConnectedRef.current || socketConnected) {
 			setState((prev) =>
 				prev.kind === 'controller-setup'
 					? {
@@ -1231,6 +1359,10 @@ async function launchControllerWithRetries(
 	};
 
 	await attemptLaunch();
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function isUserCancellation(error: unknown): boolean {

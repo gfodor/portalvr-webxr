@@ -244,21 +244,40 @@ ${buildFontFaceDeclaration()}
 }
 
 .portal-help-dialog {
-  width: min(320px, 80vw);
+  width: min(400px, 80vw);
   background: var(--portal-color-card);
   color: var(--portal-color-text-primary);
   padding: var(--portal-spacing-lg);
   border-radius: var(--portal-radius-card);
-  text-align: center;
+  text-align: left;
   display: flex;
   flex-direction: column;
   gap: var(--portal-spacing-md);
 }
 
+.portal-help-dialog h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--portal-color-text-inverse);
+}
 
 .portal-help-text {
   font-size: 0.875rem;
   color: var(--portal-color-text-secondary);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-help-text p {
+  margin: 0;
+}
+
+.portal-help-text a {
+  color: var(--portal-color-accent);
+  text-decoration: underline;
 }
 
 .portal-qr-pill {

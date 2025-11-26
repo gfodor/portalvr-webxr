@@ -74,6 +74,7 @@ import {
   type WebRTCControllerStreamOptions,
 } from '../webrtc/WebRTCControllerStreamer.js';
 import { type SIGCFStatusSnapshot } from '../webrtc/sigcf.js';
+import { AdbControllerStreamer } from '../adb/AdbControllerStreamer.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
 import {
   TRACKING_REASON_SYSTEM_MENU,
@@ -490,6 +491,7 @@ export class XRDevice {
   private portalPoseCameraOptions: PortalPoseCameraOptions | undefined;
   private webrtcStreamer: WebRTCControllerStreamer | null = null;
   private webrtcStreamOptions: WebRTCControllerStreamOptions | undefined;
+  private adbStreamer: AdbControllerStreamer | null = null;
   private connectToControllerViaLan = true;
   private controllerSearchStatus: SIGCFStatusSnapshot | null = null;
   private readonly controllerSearchListeners = new Set<(status: SIGCFStatusSnapshot | null) => void>();
@@ -1994,21 +1996,64 @@ export class XRDevice {
     const left = controllers[XRHandedness.Left];
     const right = controllers[XRHandedness.Right];
 
-    const axisX = clampAxis(state.joystick.x);
-    const axisY = clampAxis(state.joystick.y);
-    const thumbstickTouched =
-      Math.abs(axisX) > THUMBSTICK_TOUCH_EPSILON ||
-      Math.abs(axisY) > THUMBSTICK_TOUCH_EPSILON ||
+	// Base (right-hand) joystick values and touch state from the main packet body.
+	const rightAxisX = clampAxis(state.joystick.x);
+	const rightAxisY = clampAxis(state.joystick.y);
+	const rightThumbstickTouched =
+		Math.abs(rightAxisX) > THUMBSTICK_TOUCH_EPSILON ||
+		Math.abs(rightAxisY) > THUMBSTICK_TOUCH_EPSILON ||
       state.buttons.stick;
 
+	// By default (non dual-tracked modes), left-hand uses the same data as right-hand,
+	// preserving existing mirrored/opposed behaviour.
+	let leftState: ControllerState = state;
+	let leftAxisX = rightAxisX;
+	let leftAxisY = rightAxisY;
+	let leftThumbstickTouched = rightThumbstickTouched;
+
+	// In dual-tracked mode with a valid left-hand tail, drive the left controller from
+	// the left-hand buttons/joystick instead of mirroring the right-hand values.
+	if (state.dualTrackedRequested && state.left) {
+		const leftJoyX = clampAxis(state.left.joystick.x);
+		const leftJoyY = clampAxis(state.left.joystick.y);
+
+		leftAxisX = leftJoyX;
+		leftAxisY = leftJoyY;
+		leftThumbstickTouched =
+		Math.abs(leftJoyX) > THUMBSTICK_TOUCH_EPSILON ||
+		Math.abs(leftJoyY) > THUMBSTICK_TOUCH_EPSILON ||
+		state.left.buttons.stick;
+
+		// Shallow clone the controller state, swapping in left-hand input for buttons/joystick.
+		leftState = {
+		...state,
+		buttons: state.left.buttons,
+		joystick: state.left.joystick,
+		};
+	}
+
     if (activeState === 'left' || activeState === 'both') {
-      this.applyButtonsToController(left, state, XRHandedness.Left, thumbstickTouched, axisX, axisY);
+		this.applyButtonsToController(
+		left,
+		leftState,
+		XRHandedness.Left,
+		leftThumbstickTouched,
+		leftAxisX,
+		leftAxisY,
+		);
     } else if (left) {
       this.resetControllerState(left);
     }
 
     if (activeState === 'right' || activeState === 'both') {
-      this.applyButtonsToController(right, state, XRHandedness.Right, thumbstickTouched, axisX, axisY);
+		this.applyButtonsToController(
+		right,
+		state,
+		XRHandedness.Right,
+		rightThumbstickTouched,
+		rightAxisX,
+		rightAxisY,
+		);
     } else if (right) {
       this.resetControllerState(right);
     }
@@ -3731,6 +3776,54 @@ export class XRDevice {
     this.emitControllerSearchStatus(null);
   }
 
+  /**
+   * Enable ADB-based controller streaming. This is used when Quest is connected via USB.
+   * When ADB streaming is active, WebRTC/SIGCF streaming should be disabled.
+   */
+  enableAdbControllerStreaming(streamer: AdbControllerStreamer) {
+    // Dispose any existing ADB streamer
+    if (this.adbStreamer && this.adbStreamer !== streamer) {
+      void this.adbStreamer.dispose();
+    }
+
+    // Disable WebRTC when using ADB
+    if (this.webrtcStreamer) {
+      this.disableWebRTCControllerStreaming();
+    }
+
+    this.adbStreamer = streamer;
+
+    // Note: The streamer's callbacks should already be set up by the caller
+    // to call handleControllerState, handleOrientationReset, etc.
+    // If not already connected, the connection change callback will fire when connected.
+  }
+
+  /**
+   * Set up an externally-created ADB streamer to feed into XRDevice's controller handling.
+   * This wires up the streamer's callbacks to the device's internal handlers.
+   */
+  configureAdbControllerStreamer(streamer: AdbControllerStreamer) {
+    // Wire up callbacks - need to replace the streamer's callbacks
+    // Since the streamer is already created, we need a way to add our handlers
+    // For now, we just track it and rely on the DevUI to wire up the callbacks
+    this.enableAdbControllerStreaming(streamer);
+  }
+
+  disableAdbControllerStreaming() {
+    if (this.adbStreamer) {
+      void this.adbStreamer.dispose();
+      this.adbStreamer = null;
+      this.handleControllerConnectionChange(false);
+    }
+  }
+
+  /**
+   * Check if ADB controller streaming is currently active
+   */
+  isAdbControllerStreamingActive(): boolean {
+    return this.adbStreamer?.isConnected() ?? false;
+  }
+
   onControllerSearchStatus(listener: (status: SIGCFStatusSnapshot | null) => void): () => void {
     this.controllerSearchListeners.add(listener);
     try {
@@ -3752,6 +3845,11 @@ export class XRDevice {
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const st: any = this.lastControllerState;
 	return st && typeof st.interactionMode === 'number' ? st.interactionMode : null;
+	}
+
+	public isDualTrackedMode(): boolean {
+		// wandMode 6 = BLE_WAND_DUAL_TRACKED
+		return this.lastControllerState?.wandMode === 6;
 	}
 
   private ensureDefaultWebRTCStreamer() {
