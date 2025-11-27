@@ -516,7 +516,7 @@ export function DevUIRoot({
 						<h2>Help</h2>
 						{isDualTrackedMode() ? (
 							<div className="portal-help-text">
-								<p>Press and hold system/Oculus/Meta button to recenter controllers.</p>
+								<p>Press and hold the Menu button (left controller) to recenter controllers.</p>
 								<p>Place your finger on either thumbstick to move the camera. Click in and hold either thumbstick to aim.</p>
 								<p>Turn your wrist as you reach forward to stretch farther.</p>
 								<p>
@@ -529,7 +529,7 @@ export function DevUIRoot({
 							</div>
 						) : (
 							<div className="portal-help-text">
-								<p>Press and hold system/Oculus/Meta button to recenter controllers.</p>
+								<p>Press and hold the Menu button (left controller) to recenter controllers.</p>
 								<p>Place your finger on either thumbstick to move the camera. Press in the thumbstick and tilt it left or right to change hands. Press it in and tilt it up or down to zoom in or out.</p>
 								<p>Turn your wrist as you reach forward to stretch farther.</p>
 								<p>

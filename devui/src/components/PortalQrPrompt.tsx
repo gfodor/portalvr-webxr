@@ -168,7 +168,7 @@ export function PortalQrPrompt({
 						: swipeVariant === 'trackpad'
 							? 'Click the controller trackpad to calibrate the controller.'
 							: swipeVariant === 'quest-stick'
-								? 'Press and hold the system/Oculus/Meta button to recenter your controllers.'
+								? 'Press and hold the Menu button (left controller) to recenter your controllers.'
 								: 'To calibrate, point at screen from comfortable distance and swipe right edge.';
 
 	const containerClassName = isSwipePrompt

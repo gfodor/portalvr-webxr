@@ -338,6 +338,7 @@ export class PortalControllerRuntime {
   private lastMomentumNs = 0;
   // Track recent drag increments (smoothed) for velocity estimation on release
   private readonly lastButtonDragLocalInc = [0, 0, 0, 0, 0]; // [incY, incYaw, incPitch, incX, incZ]
+  private lastIncSmoothingNs = 0; // For frame-rate independent smoothing
   // Track current drag hand for late-grab handoff
   private currentDragHand: HandId | null = null;
 
@@ -1448,7 +1449,15 @@ export class PortalControllerRuntime {
       // While BUTTON drag is active, remember the latest increments (with exponential smoothing)
       // so we can seed momentum on release. Mirrors HeadPoseProvider.kt lines 614-623.
       if (this.activeDragMode === 'button') {
-        const alpha = 0.3;
+        // Frame-rate independent smoothing: use exponential decay with time constant
+        const dtSec =
+          this.lastIncSmoothingNs > 0
+            ? Math.max(1, nowNs - this.lastIncSmoothingNs) * 1e-9
+            : 1 / 90; // Default to one frame at 90Hz on first sample
+        this.lastIncSmoothingNs = nowNs;
+        // Time constant ~30ms gives alpha ≈ 0.3 at 90Hz for equivalent feel
+        const tau = 0.03;
+        const alpha = Math.min(1, Math.max(0, 1 - Math.exp(-dtSec / tau)));
         this.lastButtonDragLocalInc[0] += (incY - this.lastButtonDragLocalInc[0]) * alpha;
         this.lastButtonDragLocalInc[1] += (incYaw - this.lastButtonDragLocalInc[1]) * alpha;
         this.lastButtonDragLocalInc[2] += (incPitch - this.lastButtonDragLocalInc[2]) * alpha;
@@ -1636,6 +1645,7 @@ export class PortalControllerRuntime {
     this.momentumVelYaw = 0;
     this.momentumVelPitch = 0;
     this.lastMomentumNs = 0;
+    this.lastIncSmoothingNs = 0;
     for (let i = 0; i < this.lastButtonDragLocalInc.length; i++) {
       this.lastButtonDragLocalInc[i] = 0;
     }
