@@ -22,6 +22,11 @@ const ASSETS = [
     mime: 'image/svg+xml',
   },
   {
+    name: 'ASSET_ICON_FULLSCREEN',
+    path: '../assets/icons/ic_feathericons_maximize.svg',
+    mime: 'image/svg+xml',
+  },
+  {
     name: 'ASSET_MODE_2D',
     path: '../assets/mode/mode_2d.png',
     mime: 'image/png',

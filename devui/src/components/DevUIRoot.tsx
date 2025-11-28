@@ -20,6 +20,7 @@ import type { AdbControllerCallbacks } from '../hooks/useQuestUsbDetection.js';
 import { ensurePortalStyles } from '../styles/injectPortalStyles.js';
 import { PortalQrPrompt } from './PortalQrPrompt.js';
 import {
+	ASSET_ICON_FULLSCREEN,
 	ASSET_ICON_HELP,
 	ASSET_ICON_SETTINGS,
 	ASSET_MODE_2D,
@@ -70,6 +71,7 @@ export function DevUIRoot({
 	const [isSigcfConnected, setIsSigcfConnected] = useState(false);
 	const [adbStreamer, setAdbStreamer] = useState<AdbControllerStreamer | null>(null);
 	const [isAdbConnected, setIsAdbConnected] = useState(false);
+	const [isFullscreen, setIsFullscreen] = useState(false);
 
 	const lastInteractionMode = (xrDevice as any)?.getLastControllerInteractionMode?.() ?? 0;
 	const isOpenxrQuest = lastInteractionMode === 0x10;
@@ -112,6 +114,32 @@ export function DevUIRoot({
 
 	useEffect(() => {
 		ensurePortalStyles();
+	}, []);
+
+	// Track fullscreen state
+	useEffect(() => {
+		const updateFullscreenState = () => {
+			const fullscreenElement =
+				document.fullscreenElement ??
+				(document as any).webkitFullscreenElement ??
+				(document as any).mozFullScreenElement ??
+				(document as any).msFullscreenElement ??
+				null;
+			setIsFullscreen(fullscreenElement != null);
+		};
+
+		updateFullscreenState();
+		document.addEventListener('fullscreenchange', updateFullscreenState);
+		document.addEventListener('webkitfullscreenchange', updateFullscreenState);
+		document.addEventListener('mozfullscreenchange', updateFullscreenState);
+		document.addEventListener('MSFullscreenChange', updateFullscreenState);
+
+		return () => {
+			document.removeEventListener('fullscreenchange', updateFullscreenState);
+			document.removeEventListener('webkitfullscreenchange', updateFullscreenState);
+			document.removeEventListener('mozfullscreenchange', updateFullscreenState);
+			document.removeEventListener('MSFullscreenChange', updateFullscreenState);
+		};
 	}, []);
 
 	useEffect(() => {
@@ -310,6 +338,27 @@ export function DevUIRoot({
 		setHelpOpen(false);
 	}, []);
 
+	const handleEnterFullscreen = useCallback(() => {
+		const element = document.documentElement;
+		const requestFullscreen =
+			element.requestFullscreen ??
+			(element as any).webkitRequestFullscreen ??
+			(element as any).mozRequestFullScreen ??
+			(element as any).msRequestFullscreen;
+		if (requestFullscreen) {
+			try {
+				const result = requestFullscreen.call(element);
+				if (result && typeof (result as Promise<void>).catch === 'function') {
+					(result as Promise<void>).catch(() => {
+						// ignore fullscreen request errors
+					});
+				}
+			} catch {
+				// ignore fullscreen request errors
+			}
+		}
+	}, []);
+
 	const isDualTrackedMode = useCallback(() => {
 		return (xrDevice as any)?.isDualTrackedMode?.() ?? false;
 	}, [xrDevice]);
@@ -372,6 +421,16 @@ export function DevUIRoot({
 				>
 					<img src={ASSET_ICON_SETTINGS} alt="" aria-hidden="true" />
 				</button>
+				{!isFullscreen && (
+					<button
+						className="portal-icon-button"
+						type="button"
+						aria-label="Enter fullscreen"
+						onClick={handleEnterFullscreen}
+					>
+						<img src={ASSET_ICON_FULLSCREEN} alt="" aria-hidden="true" />
+					</button>
+				)}
 			</div>
 
 			<PortalQrPrompt

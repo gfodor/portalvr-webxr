@@ -71,6 +71,10 @@ export class AdbControllerStreamer {
   // State deduplication
   private shouldAcceptState = createStateDeduper();
 
+  // Pending state queue - only process latest to avoid backup
+  private pendingState: ControllerState | null = null;
+  private stateFlushScheduled = false;
+
   constructor(options: AdbControllerStreamOptions) {
     if (!options.adbFactory && !options.adb) {
       throw new Error('AdbControllerStreamer requires either adbFactory or adb');
@@ -174,6 +178,7 @@ export class AdbControllerStreamer {
         this.connected = true;
         this.reconnectAttempt = 0; // Reset on successful connect
         this.shouldAcceptState = createStateDeduper(); // Reset deduper
+        this.pendingState = null; // Clear any stale pending state
         this.log('connected');
         this.onConnectionChange?.(true);
       },
@@ -201,7 +206,7 @@ export class AdbControllerStreamer {
   }
 
   private handleMessage(payload: ArrayBuffer): void {
-    // Check for hangup packet
+    // Check for hangup packet - process immediately
     if (payload.byteLength === 1) {
       const view = new DataView(payload);
       if (view.getUint8(0) === PACKET_HANGUP) {
@@ -210,7 +215,7 @@ export class AdbControllerStreamer {
       }
     }
 
-    // Check for orientation reset
+    // Check for orientation reset - process immediately
     if (isOrientationResetPacket(payload)) {
       const calibratingHand = parseOrientationResetWand(payload);
       this.log(`received orientation reset (hand=${calibratingHand})`);
@@ -218,12 +223,34 @@ export class AdbControllerStreamer {
       return;
     }
 
-    // Parse controller state
+    // Parse controller state - queue for batched processing
     const parsed = parseControllerState(payload);
-    if (parsed && this.shouldAcceptState(parsed)) {
-      this.onControllerState?.(parsed);
-    } else if (parsed) {
-      this.log(`dropped duplicate packet ts=${parsed.sessionTimestampMs}`);
+    if (!parsed) return;
+
+    // Always keep the latest state, replacing any pending one
+    // This ensures we skip stale packets when USB buffers back up
+    this.pendingState = parsed;
+
+    // Schedule flush if not already scheduled
+    if (!this.stateFlushScheduled) {
+      this.stateFlushScheduled = true;
+      // Use queueMicrotask to process after all pending messages are handled
+      // but before the next frame, ensuring we always use the latest state
+      queueMicrotask(() => this.flushPendingState());
+    }
+  }
+
+  private flushPendingState(): void {
+    this.stateFlushScheduled = false;
+    const state = this.pendingState;
+    this.pendingState = null;
+
+    if (!state) return;
+
+    if (this.shouldAcceptState(state)) {
+      this.onControllerState?.(state);
+    } else {
+      this.log(`dropped duplicate packet ts=${state.sessionTimestampMs}`);
     }
   }
 
@@ -270,6 +297,7 @@ export class AdbControllerStreamer {
     this.log('attempting reconnect');
     await this.cleanup();
     this.shouldAcceptState = createStateDeduper();
+    this.pendingState = null; // Clear any stale pending state
 
     try {
       await this.doStart();

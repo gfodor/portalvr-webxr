@@ -27,6 +27,11 @@ export interface AdbTransportStats {
 
 const DEFAULT_SOCKET_NAME = 'localabstract:PORTALVR-ADB';
 
+// Buffer management constants to reduce GC pressure
+const INITIAL_BUFFER_SIZE = 4096; // 4KB initial size
+const MAX_BUFFER_SIZE = 65536; // 64KB max before forcing compaction
+const GROWTH_FACTOR = 2;
+
 export class AdbControllerTransport {
   private readonly adb: Adb;
   private readonly socketName: string;
@@ -143,7 +148,46 @@ export class AdbControllerTransport {
     this.readLoopRunning = true;
 
     const socket = this.socket;
-    let buffer = new Uint8Array(0);
+
+    // Pre-allocated buffer to reduce GC pressure
+    let buffer = new Uint8Array(INITIAL_BUFFER_SIZE);
+    let writePos = 0; // Where to write incoming data
+    let readPos = 0;  // Where to read frames from
+
+    // Helper to get available data length
+    const availableData = () => writePos - readPos;
+
+    // Helper to ensure capacity for incoming data
+    const ensureCapacity = (needed: number) => {
+      const available = buffer.length - writePos;
+      if (available >= needed) return;
+
+      // First try compacting: move unread data to start of buffer
+      if (readPos > 0) {
+        const dataLen = availableData();
+        if (dataLen > 0) {
+          buffer.copyWithin(0, readPos, writePos);
+        }
+        writePos = dataLen;
+        readPos = 0;
+
+        // Check if compaction freed enough space
+        if (buffer.length - writePos >= needed) return;
+      }
+
+      // Need to grow the buffer
+      const requiredSize = writePos + needed;
+      let newSize = buffer.length;
+      while (newSize < requiredSize) {
+        newSize = Math.min(newSize * GROWTH_FACTOR, Math.max(requiredSize, MAX_BUFFER_SIZE));
+        if (newSize >= requiredSize) break;
+        newSize = requiredSize; // Ensure we have enough
+      }
+
+      const newBuffer = new Uint8Array(newSize);
+      newBuffer.set(buffer.subarray(0, writePos));
+      buffer = newBuffer;
+    };
 
     try {
       const reader = socket.readable.getReader();
@@ -158,33 +202,47 @@ export class AdbControllerTransport {
 
         if (!value || value.length === 0) continue;
 
-        // Accumulate bytes
-        const newBuffer = new Uint8Array(buffer.length + value.length);
-        newBuffer.set(buffer, 0);
-        newBuffer.set(value, buffer.length);
-        buffer = newBuffer;
+        // Ensure we have space for incoming data
+        ensureCapacity(value.length);
+
+        // Copy incoming data to buffer
+        buffer.set(value, writePos);
+        writePos += value.length;
         this.stats.bytesReceived += value.length;
 
         // Parse frames: [u16 LE length][payload]
-        while (buffer.length >= 2) {
-          const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+        while (availableData() >= 2) {
+          const view = new DataView(buffer.buffer, readPos, availableData());
           const frameLen = view.getUint16(0, true);
 
-          if (buffer.length < 2 + frameLen) {
+          if (availableData() < 2 + frameLen) {
             // Incomplete frame, wait for more data
             break;
           }
 
-          // Extract the payload
-          const payload = buffer.slice(2, 2 + frameLen);
-          buffer = buffer.slice(2 + frameLen);
+          // Extract payload - create a copy for the callback since buffer may be reused
+          const payloadStart = readPos + 2;
+          const payloadEnd = payloadStart + frameLen;
+          const payload = buffer.slice(payloadStart, payloadEnd);
+          readPos = payloadEnd;
 
           // Deliver to callback
           try {
-            this.onMsg?.(payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength));
+            this.onMsg?.(payload.buffer);
           } catch (err: any) {
             this.log(`onMsg callback error: ${err?.message || err}`);
           }
+        }
+
+        // Compact buffer if we've consumed a lot of data and have leftover
+        // This prevents the buffer from growing indefinitely
+        if (readPos > INITIAL_BUFFER_SIZE && availableData() < INITIAL_BUFFER_SIZE) {
+          const dataLen = availableData();
+          if (dataLen > 0) {
+            buffer.copyWithin(0, readPos, writePos);
+          }
+          writePos = dataLen;
+          readPos = 0;
         }
 
         this.emitStats();
