@@ -183,6 +183,9 @@ const MOMENTUM_MIN_ANGULAR_SPEED = 0.05;  // rad/s threshold to stop
 const STICK_DEADZONE_MAG = 0.12;   // radial magnitude threshold
 const STICK_DEADZONE_AXIS = 0.08;  // per-axis threshold
 
+const CATCH_LINEAR_EPS = 0.003; // meters-per-frame linear drag needed to count as motion
+const CATCH_ANGULAR_EPS = 0.015; // radians-per-frame angular drag needed to count as motion
+
 const enum PortalHandEnum {
   Right = 0,
   Left = 1,
@@ -341,6 +344,12 @@ export class PortalControllerRuntime {
   private lastIncSmoothingNs = 0; // For frame-rate independent smoothing
   // Track current drag hand for late-grab handoff
   private currentDragHand: HandId | null = null;
+
+  // Track per-BUTTON-drag state used to distinguish "catch" gestures
+  // (re-grabbing while momentum is active with no stick motion) from
+  // deliberate flicks that should seed a new momentum tail.
+  private dragStartedFromMomentum = false;
+  private dragHasSignificantMotion = false;
 
   // State for momentum cancellation triggers (stick dead zone exit)
   private prevRightStickOutsideDeadZone = false;
@@ -1323,14 +1332,33 @@ export class PortalControllerRuntime {
     const sourcePose =
       GLOBAL_HAND_STATES[sourceHand].lastUnblendedPose ?? unblendedPose;
 
+    // Remember whether we had residual momentum before changing modes and
+    // whether this transition is starting a new BUTTON drag.
+    const hadMomentumBeforeTransition = this.hasMomentum;
+    const startingNewButtonDrag =
+      desired === 'button' && previousMode !== 'button';
+
     if (desired !== previousMode) {
-      // Mode transition handling - mirrors HeadPoseProvider.kt updateCameraDrag()
       if (previousMode === 'button' && desired === 'none') {
-        // BUTTON drag just ended: start momentum from the last observed increments
-        this.armMomentumOnButtonRelease(90); // Default 90Hz
+        // BUTTON drag just ended. Only seed momentum when the drag
+        // contained meaningful motion. If the drag started while a
+        // momentum tail was active and the user never moved the stick,
+        // treat this as a pure "catch" gesture that cancels the tail
+        // instead of reversing it.
+        if (this.dragStartedFromMomentum && !this.dragHasSignificantMotion) {
+          this.cancelMomentum();
+        } else {
+          this.armMomentumOnButtonRelease(90); // Default 90Hz
+        }
+        this.dragStartedFromMomentum = false;
+        this.dragHasSignificantMotion = false;
       } else {
-        // Any other transition cancels residual momentum
+        // Any other transition cancels residual momentum.
         this.cancelMomentum();
+        if (previousMode === 'button') {
+          this.dragStartedFromMomentum = false;
+          this.dragHasSignificantMotion = false;
+        }
       }
 
       // End previous drag session
@@ -1342,7 +1370,8 @@ export class PortalControllerRuntime {
         }
       }
 
-      // Begin new drag session if needed (late-grab: snapshot current controller pose as new baseline)
+      // Begin new drag session if needed (late-grab: snapshot current
+      // controller pose as new baseline).
       if (desired !== 'none' && sourcePose) {
         try {
           this.dragHandle.begin({
@@ -1355,9 +1384,20 @@ export class PortalControllerRuntime {
             mode: desired === 'aim' ? 1 : 0,
           });
           this.currentDragHand = sourceHand;
+
+          // For BUTTON drags, remember whether this session began while a
+          // momentum tail was active so release can distinguish "catch"
+          // from a fresh flick.
+          if (startingNewButtonDrag) {
+            this.dragStartedFromMomentum = hadMomentumBeforeTransition;
+            this.dragHasSignificantMotion = false;
+          }
         } catch {
           // If begin fails, disable drag this frame.
-          desired = 'none';
+          this.activeDragMode = 'none';
+          this.currentDragHand = null;
+          this.requestDragButtonActive(false);
+          return undefined;
         }
       } else {
         this.currentDragHand = null;
@@ -1392,8 +1432,9 @@ export class PortalControllerRuntime {
         }
       }
     } else if (this.activeDragMode === 'button' && sourceHand !== this.currentDragHand) {
-      // Late-grab handoff for BUTTON mode - when one controller releases while other is held
-      // Re-snapshot baseline with the new hand so the remaining controller continues dragging seamlessly
+      // Late-grab handoff for BUTTON mode - when one controller releases
+      // while the other is held. Re-snapshot baseline with the new hand
+      // so the remaining controller continues dragging seamlessly.
       this.cancelMomentum();
       try {
         this.dragHandle.end();
@@ -1412,6 +1453,8 @@ export class PortalControllerRuntime {
             mode: 0, // BUTTON mode
           });
           this.currentDragHand = sourceHand;
+          // dragStartedFromMomentum / dragHasSignificantMotion represent
+          // the whole BUTTON session and are left unchanged.
         } catch {
           this.activeDragMode = 'none';
           this.currentDragHand = null;
@@ -1446,10 +1489,11 @@ export class PortalControllerRuntime {
       const incX = res.incX ?? 0;
       const incZ = res.incZ ?? 0;
 
-      // While BUTTON drag is active, remember the latest increments (with exponential smoothing)
-      // so we can seed momentum on release. Mirrors HeadPoseProvider.kt lines 614-623.
+      // While BUTTON drag is active, remember the latest increments (with
+      // exponential smoothing) so we can seed momentum on release. We
+      // also track whether the session has accumulated enough motion to
+      // justify seeding new momentum when it ends.
       if (this.activeDragMode === 'button') {
-        // Frame-rate independent smoothing: use exponential decay with time constant
         const dtSec =
           this.lastIncSmoothingNs > 0
             ? Math.max(1, nowNs - this.lastIncSmoothingNs) * 1e-9
@@ -1458,11 +1502,29 @@ export class PortalControllerRuntime {
         // Time constant ~30ms gives alpha ≈ 0.3 at 90Hz for equivalent feel
         const tau = 0.03;
         const alpha = Math.min(1, Math.max(0, 1 - Math.exp(-dtSec / tau)));
-        this.lastButtonDragLocalInc[0] += (incY - this.lastButtonDragLocalInc[0]) * alpha;
-        this.lastButtonDragLocalInc[1] += (incYaw - this.lastButtonDragLocalInc[1]) * alpha;
-        this.lastButtonDragLocalInc[2] += (incPitch - this.lastButtonDragLocalInc[2]) * alpha;
-        this.lastButtonDragLocalInc[3] += (incX - this.lastButtonDragLocalInc[3]) * alpha;
-        this.lastButtonDragLocalInc[4] += (incZ - this.lastButtonDragLocalInc[4]) * alpha;
+        this.lastButtonDragLocalInc[0] +=
+          (incY - this.lastButtonDragLocalInc[0]) * alpha;
+        this.lastButtonDragLocalInc[1] +=
+          (incYaw - this.lastButtonDragLocalInc[1]) * alpha;
+        this.lastButtonDragLocalInc[2] +=
+          (incPitch - this.lastButtonDragLocalInc[2]) * alpha;
+        this.lastButtonDragLocalInc[3] +=
+          (incX - this.lastButtonDragLocalInc[3]) * alpha;
+        this.lastButtonDragLocalInc[4] +=
+          (incZ - this.lastButtonDragLocalInc[4]) * alpha;
+
+        if (!this.dragHasSignificantMotion) {
+          const linearMag = Math.hypot(incX, incY, incZ);
+          const angularMag = Math.hypot(incYaw, incPitch);
+          if (
+            linearMag > CATCH_LINEAR_EPS ||
+            angularMag > CATCH_ANGULAR_EPS
+          ) {
+            this.dragHasSignificantMotion = true;
+          }
+
+          console.log("linearMag: " + linearMag + " angularMag: " + angularMag + " significant: " + this.dragHasSignificantMotion);
+        }
       }
 
       return {
@@ -1649,6 +1711,8 @@ export class PortalControllerRuntime {
     for (let i = 0; i < this.lastButtonDragLocalInc.length; i++) {
       this.lastButtonDragLocalInc[i] = 0;
     }
+    this.dragStartedFromMomentum = false;
+    this.dragHasSignificantMotion = false;
   }
 
   private commitDisplayLock(
