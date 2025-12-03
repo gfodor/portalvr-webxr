@@ -79,6 +79,7 @@ function bridgePageSignaling(): void {
 bridgePageConfigUpdates();
 bridgePageSignaling();
 ensureRuntimeInstalled();
+ensureIframeUsbPermissions();
 
 function ensureRuntimeInstalled(): void {
 	if (!chrome.runtime?.id) {
@@ -93,5 +94,133 @@ function ensureRuntimeInstalled(): void {
 		);
 	} catch {
 		// ignore send failures
+	}
+}
+
+/**
+ * Ensures that iframes with xr-spatial-tracking permission also get usb permission.
+ * This allows WebXR content in iframes to access USB devices when the extension is installed.
+ * Only runs in the top-level frame.
+ */
+function ensureIframeUsbPermissions(): void {
+	// Only run in the top-level frame
+	if (window !== window.top) {
+		console.log('[IFRAME] Skipping - not top-level frame');
+		return;
+	}
+
+	console.log('[IFRAME] ensureIframeUsbPermissions starting in top-level frame');
+
+	const XR_PERMISSION = 'xr-spatial-tracking';
+	const USB_PERMISSION = 'usb';
+
+	/**
+	 * Adds usb permission to an iframe's allow attribute if it has xr-spatial-tracking
+	 */
+	function addUsbPermissionToIframe(iframe: HTMLIFrameElement): void {
+		const allowAttr = iframe.getAttribute('allow');
+		const src = iframe.getAttribute('src') || iframe.src || '(no src)';
+		console.log('[IFRAME] Checking iframe:', src, 'allow=', allowAttr);
+
+		if (!allowAttr) {
+			console.log('[IFRAME] Skipping - no allow attribute');
+			return;
+		}
+
+		// Check if iframe has xr-spatial-tracking permission
+		if (!allowAttr.includes(XR_PERMISSION)) {
+			console.log('[IFRAME] Skipping - no xr-spatial-tracking permission');
+			return;
+		}
+
+		// Check if usb permission is already present
+		if (allowAttr.includes(USB_PERMISSION)) {
+			console.log('[IFRAME] Skipping - usb permission already present');
+			return;
+		}
+
+		// Add usb permission to the allow attribute
+		const newAllowAttr = allowAttr + '; ' + USB_PERMISSION;
+		iframe.setAttribute('allow', newAllowAttr);
+		console.log('[IFRAME] Added usb permission. New allow=', newAllowAttr);
+	}
+
+	/**
+	 * Process all iframes in the document
+	 */
+	function processAllIframes(): void {
+		const iframes = document.querySelectorAll('iframe');
+		console.log('[IFRAME] processAllIframes found', iframes.length, 'iframes');
+		iframes.forEach((iframe) => {
+			addUsbPermissionToIframe(iframe as HTMLIFrameElement);
+		});
+	}
+
+	/**
+	 * Set up MutationObserver to watch for new iframes and attribute changes
+	 */
+	function setupObserver(): void {
+		console.log('[IFRAME] Setting up MutationObserver');
+		const observer = new MutationObserver((mutations) => {
+			for (const mutation of mutations) {
+				// Handle new nodes being added
+				if (mutation.type === 'childList') {
+					mutation.addedNodes.forEach((node) => {
+						if (node instanceof HTMLIFrameElement) {
+							console.log('[IFRAME] MutationObserver: new iframe added');
+							addUsbPermissionToIframe(node);
+						} else if (node instanceof Element) {
+							// Check for iframes inside added elements
+							const nestedIframes = node.querySelectorAll('iframe');
+							if (nestedIframes.length > 0) {
+								console.log('[IFRAME] MutationObserver: found', nestedIframes.length, 'nested iframes in added element');
+							}
+							nestedIframes.forEach((iframe) => {
+								addUsbPermissionToIframe(iframe as HTMLIFrameElement);
+							});
+						}
+					});
+				}
+				// Handle attribute changes on existing iframes
+				else if (mutation.type === 'attributes' && mutation.attributeName === 'allow') {
+					if (mutation.target instanceof HTMLIFrameElement) {
+						console.log('[IFRAME] MutationObserver: allow attribute changed on iframe');
+						addUsbPermissionToIframe(mutation.target);
+					}
+				}
+			}
+		});
+
+		observer.observe(document.documentElement, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ['allow'],
+		});
+		console.log('[IFRAME] MutationObserver active');
+	}
+
+	// Process existing iframes when DOM is ready
+	console.log('[IFRAME] document.readyState =', document.readyState);
+	if (document.readyState === 'loading') {
+		console.log('[IFRAME] Waiting for DOMContentLoaded to process iframes');
+		document.addEventListener('DOMContentLoaded', () => {
+			console.log('[IFRAME] DOMContentLoaded fired, processing iframes');
+			processAllIframes();
+		});
+	} else {
+		console.log('[IFRAME] DOM already ready, processing iframes now');
+		processAllIframes();
+	}
+
+	// Set up observer to catch dynamically added iframes
+	// Need to wait for document.documentElement to exist
+	if (document.documentElement) {
+		setupObserver();
+	} else {
+		console.log('[IFRAME] Waiting for DOMContentLoaded to setup observer');
+		document.addEventListener('DOMContentLoaded', () => {
+			setupObserver();
+		});
 	}
 }

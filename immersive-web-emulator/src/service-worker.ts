@@ -713,3 +713,4 @@ async function ensureRuntimePreloadRegistered(): Promise<void> {
 		logDebug('failed to register runtime preload script', { error });
 	}
 }
+
