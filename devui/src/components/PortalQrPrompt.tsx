@@ -161,7 +161,7 @@ export function PortalQrPrompt({
 				? 'Controller app lost focus. Try clicking the system/Oculus/Meta button or checking the headset.'
 				: status === 'tracking-issues'
 					? isOpenxrQuest
-						? 'Tracking or connection issue. If it persists, check the headset for notifications.'
+						? 'Check your headset. Tracking issues detected, maybe due to a popup.'
 						: 'Tracking issues, hold the controller still and ensure camera is clear.'
 					: swipeVariant === 'recenter'
 						? 'To recenter, hold the gamepad facing forward and press the Recenter button.'

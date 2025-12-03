@@ -28,6 +28,8 @@ export interface AdbUsbConfig {
   adbPrivateKeyPkcs8: string | null;
 }
 
+export type CameraDragHand = 'left' | 'right' | 'both';
+
 export interface PortalEmulatorConfig {
   device: {
     /** 12-char uppercase A–Z0–9 suffix, eg: ABCD… */
@@ -38,6 +40,8 @@ export interface PortalEmulatorConfig {
     stereoRenderingEnabled: boolean;
     immersiveFullscreenEnabled: boolean;
     connectToControllerViaLan: boolean;
+    /** Which hand(s) can trigger camera drag in dual-tracked mode. Default: 'left' */
+    cameraDragHand: CameraDragHand;
   };
   adbUsb: AdbUsbConfig;
   /** reserved for future migrations */
@@ -62,6 +66,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
     stereoRenderingEnabled: false,
     immersiveFullscreenEnabled: true,
     connectToControllerViaLan: true,
+    cameraDragHand: 'left',
   },
   adbUsb: { ...DEFAULT_ADB_USB },
   version: 1,
@@ -126,6 +131,9 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
         typeof (settingsCandidate as { connectToControllerViaLan?: unknown }).connectToControllerViaLan === 'boolean'
           ? ((settingsCandidate as { connectToControllerViaLan: boolean }).connectToControllerViaLan)
           : DEFAULT_CONFIG.settings.connectToControllerViaLan,
+      cameraDragHand: normalizeCameraDragHand(
+        (settingsCandidate as { cameraDragHand?: unknown }).cameraDragHand,
+      ),
     },
     adbUsb: normalizeAdbUsbCandidate(adbUsbCandidate, DEFAULT_ADB_USB),
     version:
@@ -134,6 +142,15 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
         : DEFAULT_CONFIG.version,
   };
   return normalized;
+}
+
+const VALID_CAMERA_DRAG_HANDS: CameraDragHand[] = ['left', 'right', 'both'];
+
+function normalizeCameraDragHand(candidate: unknown): CameraDragHand {
+  if (typeof candidate === 'string' && VALID_CAMERA_DRAG_HANDS.includes(candidate as CameraDragHand)) {
+    return candidate as CameraDragHand;
+  }
+  return DEFAULT_CONFIG.settings.cameraDragHand;
 }
 
 function normalizeAdbUsbCandidate(

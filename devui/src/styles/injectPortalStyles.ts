@@ -243,6 +243,18 @@ ${buildFontFaceDeclaration()}
   border-color: var(--portal-color-text-inverse);
 }
 
+.portal-mode-toggle--inline {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  gap: var(--portal-spacing-sm);
+}
+
+.portal-mode-button--compact {
+  width: auto;
+  min-width: 4.5rem;
+  padding: var(--portal-spacing-sm) var(--portal-spacing-md);
+}
+
 .portal-help-dialog {
   width: min(400px, 80vw);
   background: var(--portal-color-card);

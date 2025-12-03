@@ -328,6 +328,8 @@ export class PortalControllerRuntime {
   private dragSource: HandId | null = null;
   private lastButtonDragRight = false;
   private lastButtonDragLeft = false;
+  /** Which hand(s) can trigger camera drag in dual-tracked mode: 'left', 'right', or 'both' */
+  private cameraDragHand: 'left' | 'right' | 'both' = 'left';
 
   private displayLockCalibrationHand: HandId = 'right';
 
@@ -548,9 +550,18 @@ export class PortalControllerRuntime {
       menu: state.buttons.menu,
     };
 
-    const rightDrag = !!(state.buttons as any).cameraDrag;
-    const leftDrag = !!state.left?.buttons.cameraDrag;
+    const rightDragRaw = !!(state.buttons as any).cameraDrag;
+    const leftDragRaw = !!state.left?.buttons.cameraDrag;
     const dualTracked = !!state.dualTrackedRequested;
+
+    // Apply camera drag hand mask in dual-tracked mode
+    // In single-hand mode, either hand can drag (no masking)
+    const rightDrag = dualTracked
+      ? rightDragRaw && (this.cameraDragHand === 'right' || this.cameraDragHand === 'both')
+      : rightDragRaw;
+    const leftDrag = dualTracked
+      ? leftDragRaw && (this.cameraDragHand === 'left' || this.cameraDragHand === 'both')
+      : leftDragRaw;
 
     if (!dualTracked) {
       // Single-hand / legacy dual modes: right hand is always the drag source when pressed.
@@ -1278,6 +1289,11 @@ export class PortalControllerRuntime {
   public clearAimActiveHand(): void {
     this.explicitAimHand = null;
     this.syncSessionPoseModeConfig();
+  }
+
+  /** Set which hand(s) can trigger camera drag in dual-tracked mode */
+  public setCameraDragHand(hand: 'left' | 'right' | 'both'): void {
+    this.cameraDragHand = hand;
   }
 
   private requestDragButtonActive(active: boolean): void {

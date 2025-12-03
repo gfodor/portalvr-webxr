@@ -11,6 +11,7 @@ import {
 	XRDevice,
 	portalConfigProvider,
 	type PortalEmulatorConfig,
+	type CameraDragHand,
 	updatePortalEmulatorConfig,
 	type AdbControllerStreamer,
 	type ControllerState,
@@ -39,6 +40,7 @@ type EmulatorSettingsState = {
 	stereoRenderingEnabled: boolean;
 	immersiveFullscreenEnabled: boolean;
 	connectToControllerViaLan: boolean;
+	cameraDragHand: CameraDragHand;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -307,6 +309,25 @@ export function DevUIRoot({
 		[],
 	);
 
+	const selectCameraDragHand = useCallback(
+		(hand: CameraDragHand) => {
+			setSettings((prev) => ({
+				...prev,
+				cameraDragHand: hand,
+			}));
+			updatePortalEmulatorConfig({
+				settings: { cameraDragHand: hand },
+			});
+			// Notify XRDevice of the change
+			try {
+				(xrDevice as any).setCameraDragHand?.(hand);
+			} catch {
+				// ignore if not supported
+			}
+		},
+		[xrDevice],
+	);
+
 	const closeOnScrimClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
@@ -500,6 +521,48 @@ export function DevUIRoot({
 						</label>
 					</section>
 
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Camera Drag Hand</h3>
+						<p className="portal-section__description">
+							Which hands can move the camera
+						</p>
+						<div className="portal-mode-toggle portal-mode-toggle--inline">
+							<button
+								type="button"
+								className={`portal-mode-button portal-mode-button--compact${
+									settings.cameraDragHand === 'left'
+										? ' portal-mode-button--selected'
+										: ''
+								}`}
+								onClick={() => selectCameraDragHand('left')}
+							>
+								<span>Left</span>
+							</button>
+							<button
+								type="button"
+								className={`portal-mode-button portal-mode-button--compact${
+									settings.cameraDragHand === 'right'
+										? ' portal-mode-button--selected'
+										: ''
+								}`}
+								onClick={() => selectCameraDragHand('right')}
+							>
+								<span>Right</span>
+							</button>
+							<button
+								type="button"
+								className={`portal-mode-button portal-mode-button--compact${
+									settings.cameraDragHand === 'both'
+										? ' portal-mode-button--selected'
+										: ''
+								}`}
+								onClick={() => selectCameraDragHand('both')}
+							>
+								<span>Both</span>
+							</button>
+						</div>
+					</section>
+
 						<section className="portal-section">
 							<h3 className="portal-section__heading">Rendering Mode</h3>
 							<div className="portal-mode-toggle">
@@ -629,6 +692,7 @@ function readSettings(config?: PortalEmulatorConfig | null): EmulatorSettingsSta
 			source?.settings?.immersiveFullscreenEnabled !== false,
 		connectToControllerViaLan:
 			source?.settings?.connectToControllerViaLan !== false,
+		cameraDragHand: source?.settings?.cameraDragHand ?? 'left',
 	};
 }
 

@@ -1787,6 +1787,11 @@ export class XRDevice {
             runtime.setWandMode(this.lastControllerState.wandMode);
           }
           this.syncAllCameraLocksToRuntime();
+          // Apply camera drag hand setting from config
+          const config = portalConfigProvider.getConfigSync();
+          if (config?.settings?.cameraDragHand) {
+            runtime.setCameraDragHand(config.settings.cameraDragHand);
+          }
           return runtime;
         })
         .catch((error) => {
@@ -3221,6 +3226,10 @@ export class XRDevice {
     if (nextLanEnabled !== this.connectToControllerViaLan) {
       this.updateWebRTCLanPreference(nextLanEnabled);
     }
+
+    // Apply camera drag hand setting to runtime
+    const nextCameraDragHand = config.settings?.cameraDragHand ?? 'left';
+    this.portalControllerRuntime?.setCameraDragHand(nextCameraDragHand);
   }
 
 	private handleConfigUpdate(config: PortalEmulatorConfig): void {
@@ -3856,6 +3865,11 @@ export class XRDevice {
 	public isDualTrackedMode(): boolean {
 		// wandMode 6 = BLE_WAND_DUAL_TRACKED
 		return this.lastControllerState?.wandMode === 6;
+	}
+
+	/** Set which hand(s) can trigger camera drag in dual-tracked mode */
+	public setCameraDragHand(hand: 'left' | 'right' | 'both'): void {
+		this.portalControllerRuntime?.setCameraDragHand(hand);
 	}
 
   private ensureDefaultWebRTCStreamer() {

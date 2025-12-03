@@ -29,7 +29,7 @@ export {
   getPortalEmulatorConfig,
   updatePortalEmulatorConfig,
 } from './device/PortalEmulatorConfig.js';
-export type { PortalEmulatorConfig } from './device/PortalEmulatorConfig.js';
+export type { PortalEmulatorConfig, CameraDragHand } from './device/PortalEmulatorConfig.js';
 export {
 	metaQuest2,
 	metaQuest3,
