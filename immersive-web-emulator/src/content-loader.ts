@@ -114,13 +114,23 @@ function ensureIframeUsbPermissions(): void {
 	const XR_PERMISSION = 'xr-spatial-tracking';
 	const USB_PERMISSION = 'usb';
 
+	// Track iframes we've already processed to avoid infinite reload loops
+	const processedIframes = new WeakSet<HTMLIFrameElement>();
+
 	/**
-	 * Adds usb permission to an iframe's allow attribute if it has xr-spatial-tracking
+	 * Adds usb permission to an iframe's allow attribute if it has xr-spatial-tracking.
+	 * If the iframe already has a src and has started loading, we need to reload it
+	 * for the new permissions to take effect.
 	 */
 	function addUsbPermissionToIframe(iframe: HTMLIFrameElement): void {
+		// Skip if we've already processed this iframe
+		if (processedIframes.has(iframe)) {
+			return;
+		}
+
 		const allowAttr = iframe.getAttribute('allow');
-		const src = iframe.getAttribute('src') || iframe.src || '(no src)';
-		console.log('[IFRAME] Checking iframe:', src, 'allow=', allowAttr);
+		const src = iframe.getAttribute('src') || iframe.src || '';
+		console.log('[IFRAME] Checking iframe:', src || '(no src)', 'allow=', allowAttr);
 
 		if (!allowAttr) {
 			console.log('[IFRAME] Skipping - no allow attribute');
@@ -139,10 +149,29 @@ function ensureIframeUsbPermissions(): void {
 			return;
 		}
 
+		// Mark as processed before modifying to prevent re-processing on reload
+		processedIframes.add(iframe);
+
 		// Add usb permission to the allow attribute
 		const newAllowAttr = allowAttr + '; ' + USB_PERMISSION;
 		iframe.setAttribute('allow', newAllowAttr);
 		console.log('[IFRAME] Added usb permission. New allow=', newAllowAttr);
+
+		// If the iframe already has a src, we need to reload it for permissions to take effect.
+		// The permission policy is evaluated when navigation begins, so modifying the allow
+		// attribute after the iframe has started loading won't help unless we reload.
+		if (src) {
+			console.log('[IFRAME] Reloading iframe to apply new permissions:', src);
+			// Use a microtask to ensure the attribute change is committed first
+			queueMicrotask(() => {
+				// Force reload by reassigning src
+				// Setting to empty then back causes a proper reload
+				const currentSrc = iframe.src;
+				iframe.src = '';
+				iframe.src = currentSrc;
+				console.log('[IFRAME] Iframe reload triggered');
+			});
+		}
 	}
 
 	/**

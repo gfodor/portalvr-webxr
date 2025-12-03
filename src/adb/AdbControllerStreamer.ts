@@ -19,6 +19,9 @@ import {
   PACKET_HANGUP,
   type ControllerState,
 } from '../webrtc/controllerParser.js';
+
+// ACK byte sent back to host after processing a state packet (flow control)
+const PACKET_ACK = 0x06;
 import { AdbControllerTransport, type AdbTransportStats } from './AdbControllerTransport.js';
 import { createStateDeduper } from '../webrtc/controllerStateDeduper.js';
 
@@ -227,6 +230,12 @@ export class AdbControllerStreamer {
     const parsed = parseControllerState(payload);
     if (!parsed) return;
 
+    // Send ACK to host for flow control (protocol v5+)
+    // This signals the host that we received the packet and are ready for more
+    if (parsed.version >= 5) {
+      this.sendAck();
+    }
+
     // Always keep the latest state, replacing any pending one
     // This ensures we skip stale packets when USB buffers back up
     this.pendingState = parsed;
@@ -238,6 +247,15 @@ export class AdbControllerStreamer {
       // but before the next frame, ensuring we always use the latest state
       queueMicrotask(() => this.flushPendingState());
     }
+  }
+
+  private sendAck(): void {
+    if (!this.transport || !this.connected) return;
+    const ackPacket = new Uint8Array([PACKET_ACK]);
+    // Fire-and-forget - don't await to avoid blocking the read loop
+    void this.transport.send(ackPacket).catch((err: any) => {
+      this.log(`failed to send ACK: ${err?.message || err}`);
+    });
   }
 
   private flushPendingState(): void {
