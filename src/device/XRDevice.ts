@@ -595,7 +595,7 @@ export class XRDevice {
     };
     const canvasContainer =
       deviceOptions.canvasContainer ?? document.createElement('div');
-    canvasContainer.dataset.webxr_runtime = `Immersive Web Emulation Runtime v${VERSION}`;
+    canvasContainer.dataset.webxr_runtime = `PortalVR v${VERSION}`;
     canvasContainer.style.position = 'fixed';
     canvasContainer.style.width = '100%';
     canvasContainer.style.height = '100%';
