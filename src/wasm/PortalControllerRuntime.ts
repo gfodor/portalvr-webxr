@@ -772,7 +772,11 @@ export class PortalControllerRuntime {
     return this.wandMode;
   }
 
-  private getSessionPtr(): number {
+  /**
+   * Returns the raw WASM pointer to the portal_pose_session.
+   * Used to associate with HeadSessionBridge for display-delta computation.
+   */
+  public getSessionPtr(): number {
     return (this as any).sessionPtr as number;
   }
 

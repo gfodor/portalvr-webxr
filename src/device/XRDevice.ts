@@ -558,11 +558,8 @@ export class XRDevice {
   private activeDragMode = DRAG_MODE_NONE;
   /** Last known drag source hand (0=right, 1=left) */
   private lastDragSourceHand = 0;
-  /** Current drag context for display delta callback - set before computeCameraDragIncrements */
-  private currentDragHand: 'left' | 'right' = 'right';
-  private currentDragControllerPose: PortalPose | null = null;
-  /** Whether display delta callback is set up */
-  private displayDeltaCallbackSet = false;
+  /** Whether pose session has been associated with head session for display-delta computation */
+  private poseSessionAssociated = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -1819,15 +1816,15 @@ export class XRDevice {
   }
 
   /**
-   * Sets up the display delta callback for camera drag if both runtime and camera are ready.
-   * This callback transforms controller positions into display-space coordinates,
-   * accounting for head orientation at calibration time. This is critical for correct
-   * drag translations when looking up/down (e.g., moving controller "up on screen"
-   * when looking down should translate along the ground plane).
+   * Associates the pose session with the head session for display-delta computation.
+   * This enables correct camera drag translations when looking up/down (e.g., moving
+   * controller "up on screen" when looking down should translate along the ground plane).
+   * The head session computes display-space deltas internally using the pose state's
+   * calibration data.
    */
-  private ensureDisplayDeltaCallback(): void {
+  private ensurePoseSessionAssociation(): void {
     // Only set up once
-    if (this.displayDeltaCallbackSet) {
+    if (this.poseSessionAssociated) {
       return;
     }
 
@@ -1838,21 +1835,12 @@ export class XRDevice {
       return;
     }
 
-    // Create a callback that reads from the current drag context
-    // and calls the runtime's computeDisplayDelta
-    const displayDeltaCallback = (): { x: number; y: number; z: number } | null => {
-      const pose = this.currentDragControllerPose;
-      if (!pose || !this.portalControllerRuntime) {
-        return null;
-      }
-      return this.portalControllerRuntime.computeDisplayDelta(
-        this.currentDragHand,
-        pose,
-      );
-    };
-
-    camera.setDisplayDeltaCallback(displayDeltaCallback);
-    this.displayDeltaCallbackSet = true;
+    // Associate the pose session with the head session
+    const poseSessionPtr = runtime.getSessionPtr();
+    if (poseSessionPtr) {
+      camera.setPoseSession(poseSessionPtr);
+      this.poseSessionAssociated = true;
+    }
   }
 
   private setActiveWandState(next: ActiveWandState, force = false) {
@@ -2438,14 +2426,9 @@ export class XRDevice {
           : update.byHand.right.unblendedPose;
 
         if (controllerPose) {
-          // Set up display delta callback if both runtime and camera are ready
-          // This enables display-space coordinate transformation for drag translations
-          this.ensureDisplayDeltaCallback();
-
-          // Update current drag context for the display delta callback
-          // The callback will be invoked during computeCameraDragIncrements
-          this.currentDragHand = update.dragSourceHand === 1 ? 'left' : 'right';
-          this.currentDragControllerPose = controllerPose;
+          // Associate pose session with head session for display-delta computation
+          // This enables correct camera drag translations when looking up/down
+          this.ensurePoseSessionAssociation();
 
           const nowSeconds = nowMs / 1000;
           const increments = this.portalPoseCamera?.computeCameraDragIncrements({
@@ -3879,7 +3862,7 @@ export class XRDevice {
     } as PortalPoseCameraOptions;
     this.portalPoseCameraOptions = nextOptions;
     this.portalPoseCamera?.dispose();
-    this.displayDeltaCallbackSet = false; // Reset so callback is set up on new camera
+    this.poseSessionAssociated = false; // Reset so callback is set up on new camera
     this.portalPoseCamera = new PortalPoseCameraController(this, nextOptions);
     const session = this.activeSession;
     if (session && session[P_SESSION].mode === 'immersive-vr') {
@@ -3890,7 +3873,7 @@ export class XRDevice {
   disablePortalPoseCamera() {
     this.portalPoseCamera?.dispose();
     this.portalPoseCamera = null;
-    this.displayDeltaCallbackSet = false;
+    this.poseSessionAssociated = false;
     this.disablePointerLookControlsForSession();
   }
 

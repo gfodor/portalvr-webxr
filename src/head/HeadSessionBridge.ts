@@ -131,6 +131,7 @@ interface PortalHeadSessionHandle {
     stretchLerp?: number;
     armScaling?: number;
   }): void;
+  setPoseSession(poseSessionPtr: number): void;
   delete?(): void;
 }
 
@@ -382,5 +383,18 @@ export class HeadSessionBridge {
       stretchLerpRange: stretchLerpRange,
       armScaling: armScaling,
     });
+  }
+
+  /**
+   * Associate a pose session for internal display-delta computation during camera drag.
+   * When set, the head session automatically computes display-space deltas without
+   * requiring an external callback. This is the preferred approach over
+   * setDisplayDeltaCallback().
+   *
+   * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
+   */
+  setPoseSession(poseSessionPtr: number): void {
+    if (this.destroyed) return;
+    this.handle.setPoseSession(poseSessionPtr);
   }
 }
