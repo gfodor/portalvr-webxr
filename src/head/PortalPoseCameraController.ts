@@ -1,6 +1,14 @@
 import type { XRDevice } from '../device/XRDevice.js';
 import type { XRFrame } from '../frameloop/XRFrame.js';
-import { HeadSessionBridge, type PoseLike } from './HeadSessionBridge.js';
+import {
+  HeadSessionBridge,
+  type PoseLike,
+  type DragStateResult,
+  type CameraDragIncrements,
+  DRAG_MODE_NONE,
+  DRAG_MODE_BUTTON,
+  DRAG_MODE_AIM,
+} from './HeadSessionBridge.js';
 import { PoseSmoother, type PoseArray } from './PoseSmoother.js';
 import {
   DEFAULT_CAMERA_PITCH_RAD,
@@ -8,7 +16,47 @@ import {
   loadPortalPoseModule,
   type PortalPoseLoadOptions,
 } from '../wasm/PortalPoseLoader.js';
-import type { Vec3Like } from '../types/geometry.js';
+import type { Vec3Like, QuatLike } from '../types/geometry.js';
+
+/** Input for drag state machine advancement */
+export interface DragStateMachineInput {
+  /** Whether display is locked (AIM drag requires this) */
+  displayLocked: boolean;
+  /** AIM weight from pose blending (0-1) */
+  aimWeight: number;
+  /** Hand identifier (0=right, 1=left) */
+  hand: number;
+  /** Target frame rate for scaling */
+  targetHz: number;
+}
+
+/** Input for beginning a camera drag session */
+export interface BeginCameraDragInput {
+  /** Controller position */
+  controllerPos: Vec3Like;
+  /** Controller orientation */
+  controllerQuat: QuatLike;
+  /** Camera orientation */
+  cameraQuat: QuatLike;
+  /** Base UI yaw in radians */
+  baseUiYawRad: number;
+  /** Drag mode (0=BUTTON, 1=AIM) */
+  mode: number;
+  /** Hand (0=right, 1=left) */
+  hand: number;
+}
+
+/** Input for computing camera drag increments */
+export interface ComputeCameraDragInput {
+  /** Current controller position */
+  controllerPos: Vec3Like;
+  /** Current controller orientation */
+  controllerQuat: QuatLike;
+  /** Current time in seconds */
+  nowSeconds: number;
+}
+
+export { DragStateResult, CameraDragIncrements, DRAG_MODE_NONE, DRAG_MODE_BUTTON, DRAG_MODE_AIM };
 
 interface PortalPoseCameraInternalOptions {
   cameraPitchRad: number;
@@ -162,7 +210,13 @@ class PortalPoseCameraNudger {
       );
     }
 
-    // 1) Vertical translation along screen-up
+    // With the display delta callback set (via XRDevice.ensureDisplayDeltaCallback), the C code
+    // uses the display-delta path which already applies correct "grab" semantics (negative X/Y).
+    // The callback transforms controller positions into display-space coordinates, properly
+    // handling head orientation at calibration (e.g., "up on screen" maps to ground plane
+    // when looking down). No additional sign corrections are needed here.
+
+    // 1) Vertical translation
     if (Math.abs(inc.incY) > 1e-6) {
       this.applyTranslationDelta(0, inc.incY, 0);
     }
@@ -196,6 +250,67 @@ class PortalPoseCameraNudger {
    */
   public cancelMomentum(): void {
     this.headSession.cancelMomentum();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Drag state machine (Phase 5 migration)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Advance the drag state machine. Returns mode transition info.
+   */
+  public advanceDragStateMachine(input: DragStateMachineInput): DragStateResult | null {
+    return this.headSession.advanceDragStateMachine(
+      input.displayLocked,
+      input.aimWeight,
+      input.hand,
+      input.targetHz,
+    );
+  }
+
+  /**
+   * Begin a camera drag session with the given baseline.
+   */
+  public beginCameraDrag(input: BeginCameraDragInput): void {
+    this.headSession.beginCameraDrag(
+      input.controllerPos,
+      input.controllerQuat,
+      input.cameraQuat,
+      input.baseUiYawRad,
+      input.mode,
+      input.hand,
+    );
+  }
+
+  /**
+   * Compute camera drag increments for the current frame.
+   */
+  public computeCameraDragIncrements(input: ComputeCameraDragInput): CameraDragIncrements | null {
+    return this.headSession.computeCameraDragIncrements(
+      input.controllerPos,
+      input.controllerQuat,
+      input.nowSeconds,
+    );
+  }
+
+  /**
+   * End the current camera drag session.
+   */
+  public endCameraDrag(): void {
+    this.headSession.endCameraDrag();
+  }
+
+  /**
+   * Set a callback that provides display-space deltas for camera drag.
+   * When set, drag translations will use display-calibrated coordinates instead of
+   * raw world coordinates, which properly handles looking up/down (e.g., moving
+   * the controller "up" on screen when looking down translates along the ground plane).
+   *
+   * The callback is invoked during computeCameraDragIncrements and should return
+   * the current display-space delta for the active drag hand, or null if unavailable.
+   */
+  public setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void {
+    this.headSession.setDisplayDeltaCallback(cb);
   }
 
   public resetOrientation() {
@@ -410,6 +525,74 @@ export class PortalPoseCameraController {
       return;
     }
     this.controller?.cancelMomentum();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Drag state machine (Phase 5 migration)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Advance the drag state machine. Returns mode transition info.
+   * Call this each frame with current display lock and aim weight state.
+   */
+  public advanceDragStateMachine(input: DragStateMachineInput): DragStateResult | null {
+    if (this.disposed) {
+      return null;
+    }
+    return this.controller?.advanceDragStateMachine(input) ?? null;
+  }
+
+  /**
+   * Begin a camera drag session with the given baseline.
+   */
+  public beginCameraDrag(input: BeginCameraDragInput): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.beginCameraDrag(input);
+  }
+
+  /**
+   * Compute camera drag increments for the current frame.
+   */
+  public computeCameraDragIncrements(input: ComputeCameraDragInput): CameraDragIncrements | null {
+    if (this.disposed) {
+      return null;
+    }
+    return this.controller?.computeCameraDragIncrements(input) ?? null;
+  }
+
+  /**
+   * End the current camera drag session.
+   */
+  public endCameraDrag(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.endCameraDrag();
+  }
+
+  /**
+   * Set a callback that provides display-space deltas for camera drag.
+   * When set, drag translations will use display-calibrated coordinates instead of
+   * raw world coordinates, which properly handles looking up/down (e.g., moving
+   * the controller "up" on screen when looking down translates along the ground plane).
+   *
+   * The callback is invoked during computeCameraDragIncrements and should return
+   * the current display-space delta for the active drag hand, or null if unavailable.
+   */
+  public setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setDisplayDeltaCallback(cb);
+  }
+
+  /**
+   * Check if the controller is initialized.
+   */
+  public isInitialized(): boolean {
+    return this.controller !== null;
   }
 
   /**

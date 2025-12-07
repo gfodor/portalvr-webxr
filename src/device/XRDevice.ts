@@ -64,6 +64,10 @@ import WebXRLayerPolyfill from 'webxr-layers-polyfill';
 import {
   PortalPoseCameraController,
   type PortalPoseCameraOptions,
+  type DragStateResult,
+  DRAG_MODE_NONE,
+  DRAG_MODE_BUTTON,
+  DRAG_MODE_AIM,
 } from '../head/PortalPoseCameraController.js';
 import {
   FaceTracker,
@@ -550,6 +554,15 @@ export class XRDevice {
   private pointerLookLastFlushMs: number | null = null;
   /** Tracks previous frame's button drag state for momentum arming on release */
   private lastButtonDragActive = false;
+  /** Current active drag mode (0=NONE, 1=BUTTON, 2=AIM) - mirrors Android HeadPoseProvider */
+  private activeDragMode = DRAG_MODE_NONE;
+  /** Last known drag source hand (0=right, 1=left) */
+  private lastDragSourceHand = 0;
+  /** Current drag context for display delta callback - set before computeCameraDragIncrements */
+  private currentDragHand: 'left' | 'right' = 'right';
+  private currentDragControllerPose: PortalPose | null = null;
+  /** Whether display delta callback is set up */
+  private displayDeltaCallbackSet = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -1805,6 +1818,43 @@ export class XRDevice {
     return this.portalControllerRuntimePromise;
   }
 
+  /**
+   * Sets up the display delta callback for camera drag if both runtime and camera are ready.
+   * This callback transforms controller positions into display-space coordinates,
+   * accounting for head orientation at calibration time. This is critical for correct
+   * drag translations when looking up/down (e.g., moving controller "up on screen"
+   * when looking down should translate along the ground plane).
+   */
+  private ensureDisplayDeltaCallback(): void {
+    // Only set up once
+    if (this.displayDeltaCallbackSet) {
+      return;
+    }
+
+    // Both need to be available
+    const runtime = this.portalControllerRuntime;
+    const camera = this.portalPoseCamera;
+    if (!runtime || !camera || !camera.isInitialized()) {
+      return;
+    }
+
+    // Create a callback that reads from the current drag context
+    // and calls the runtime's computeDisplayDelta
+    const displayDeltaCallback = (): { x: number; y: number; z: number } | null => {
+      const pose = this.currentDragControllerPose;
+      if (!pose || !this.portalControllerRuntime) {
+        return null;
+      }
+      return this.portalControllerRuntime.computeDisplayDelta(
+        this.currentDragHand,
+        pose,
+      );
+    };
+
+    camera.setDisplayDeltaCallback(displayDeltaCallback);
+    this.displayDeltaCallbackSet = true;
+  }
+
   private setActiveWandState(next: ActiveWandState, force = false) {
     if (!force && this.activeWandState === next) {
       return;
@@ -2306,24 +2356,129 @@ export class XRDevice {
 		);
     }
 
-    // Track button drag state for momentum arming
-    const isButtonDragActive = update.cameraDrag?.mode === 'button';
+    // ─────────────────────────────────────────────────────────────────────────
+    // Drag state machine coordination (mirrors Android HeadPoseProvider pattern)
+    // ─────────────────────────────────────────────────────────────────────────
+    const targetHz = 90;
 
-    // Notify session of button press state changes (momentum is armed on release)
+    // Notify session of button press state (momentum is armed on release)
+    const isButtonDragActive = update.buttonDragRequested;
     if (isButtonDragActive !== this.lastButtonDragActive) {
-      this.portalPoseCamera?.setDragButtonPressed(!!isButtonDragActive);
-      this.lastButtonDragActive = !!isButtonDragActive;
+      this.portalPoseCamera?.setDragButtonPressed(isButtonDragActive);
+      this.lastButtonDragActive = isButtonDragActive;
     }
 
-    if (update.cameraDrag) {
-      this.portalPoseCamera?.applyCameraDragIncrements(
-        update.cameraDrag,
-        !!isButtonDragActive,
-        90, // Default 90Hz target
-      );
+    // Advance the drag state machine to determine mode transitions
+    const dragResult = this.portalPoseCamera?.advanceDragStateMachine({
+      displayLocked: update.displayLocked,
+      aimWeight: update.aimWeight,
+      hand: update.dragSourceHand,
+      targetHz,
+    });
+
+    if (dragResult) {
+      const { activeMode, previousMode, modeChanged, handChanged } = dragResult;
+
+      // Handle mode transitions
+      if (modeChanged) {
+        // End previous drag session if any
+        if (previousMode !== DRAG_MODE_NONE) {
+          this.portalPoseCamera?.endCameraDrag();
+        }
+
+        // Begin new drag session if entering a drag mode
+        if (activeMode !== DRAG_MODE_NONE) {
+          // Get controller pose for the drag source hand
+          const controllerPose = update.dragSourceHand === 1
+            ? update.byHand.left.unblendedPose
+            : update.byHand.right.unblendedPose;
+
+          if (controllerPose) {
+            const baseUiYawRad = this.portalPoseCamera?.getYawOffsetRad() ?? 0;
+            // Map from state machine modes (1=BUTTON, 2=AIM) to WASM API modes (0=BUTTON, 1=AIM)
+            const wasmMode = activeMode === DRAG_MODE_AIM ? 1 : 0;
+            this.portalPoseCamera?.beginCameraDrag({
+              controllerPos: controllerPose.position,
+              controllerQuat: controllerPose.orientation,
+              cameraQuat: headPortalPose.orientation,
+              baseUiYawRad,
+              mode: wasmMode,
+              hand: update.dragSourceHand,
+            });
+          }
+        }
+
+        this.activeDragMode = activeMode;
+      } else if (handChanged && activeMode === DRAG_MODE_AIM) {
+        // Hand changed during AIM mode - restart drag with new hand
+        this.portalPoseCamera?.endCameraDrag();
+
+        const controllerPose = update.dragSourceHand === 1
+          ? update.byHand.left.unblendedPose
+          : update.byHand.right.unblendedPose;
+
+        if (controllerPose) {
+          const baseUiYawRad = this.portalPoseCamera?.getYawOffsetRad() ?? 0;
+          // AIM mode maps to WASM mode 1
+          this.portalPoseCamera?.beginCameraDrag({
+            controllerPos: controllerPose.position,
+            controllerQuat: controllerPose.orientation,
+            cameraQuat: headPortalPose.orientation,
+            baseUiYawRad,
+            mode: 1, // AIM
+            hand: update.dragSourceHand,
+          });
+        }
+      }
+
+      // Compute and apply drag increments if drag is active
+      if (this.activeDragMode !== DRAG_MODE_NONE) {
+        const controllerPose = update.dragSourceHand === 1
+          ? update.byHand.left.unblendedPose
+          : update.byHand.right.unblendedPose;
+
+        if (controllerPose) {
+          // Set up display delta callback if both runtime and camera are ready
+          // This enables display-space coordinate transformation for drag translations
+          this.ensureDisplayDeltaCallback();
+
+          // Update current drag context for the display delta callback
+          // The callback will be invoked during computeCameraDragIncrements
+          this.currentDragHand = update.dragSourceHand === 1 ? 'left' : 'right';
+          this.currentDragControllerPose = controllerPose;
+
+          const nowSeconds = nowMs / 1000;
+          const increments = this.portalPoseCamera?.computeCameraDragIncrements({
+            controllerPos: controllerPose.position,
+            controllerQuat: controllerPose.orientation,
+            nowSeconds,
+          });
+
+          if (increments) {
+            // Debug: log increments periodically
+            if (Math.random() < 0.02) {
+              console.log('[Drag] incX:', increments.incX.toFixed(4),
+                'incY:', increments.incY.toFixed(4),
+                'incZ:', increments.incZ.toFixed(4),
+                'incYaw:', increments.incYaw.toFixed(4),
+                'incPitch:', increments.incPitch.toFixed(4));
+            }
+
+            // Apply the computed drag increments
+            const isButtonDrag = this.activeDragMode === DRAG_MODE_BUTTON;
+            this.portalPoseCamera?.applyCameraDragIncrements(
+              increments,
+              isButtonDrag,
+              targetHz,
+            );
+          }
+        }
+      }
     }
 
-    // Momentum is now handled internally by PortalPoseCameraController via HeadSessionBridge.
+    this.lastDragSourceHand = update.dragSourceHand;
+
+    // Momentum is handled internally by PortalPoseCameraController via HeadSessionBridge.
     // The session tracks drag increments during BUTTON drag and advances momentum each frame.
   }
 
@@ -3724,6 +3879,7 @@ export class XRDevice {
     } as PortalPoseCameraOptions;
     this.portalPoseCameraOptions = nextOptions;
     this.portalPoseCamera?.dispose();
+    this.displayDeltaCallbackSet = false; // Reset so callback is set up on new camera
     this.portalPoseCamera = new PortalPoseCameraController(this, nextOptions);
     const session = this.activeSession;
     if (session && session[P_SESSION].mode === 'immersive-vr') {
@@ -3734,6 +3890,7 @@ export class XRDevice {
   disablePortalPoseCamera() {
     this.portalPoseCamera?.dispose();
     this.portalPoseCamera = null;
+    this.displayDeltaCallbackSet = false;
     this.disablePointerLookControlsForSession();
   }
 

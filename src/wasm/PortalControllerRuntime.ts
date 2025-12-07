@@ -9,43 +9,8 @@ interface PortalPose {
   orientation: { x: number; y: number; z: number; w: number };
 }
 
-interface CameraDragIncrements {
-  incY: number;
-  incYaw: number;
-  incPitch: number;
-  incX: number;
-  incZ: number;
-  mode: 'button' | 'aim';
-}
-
-interface PortalCameraDragBeginParams {
-  controllerPose: PortalPose;
-  cameraQuat: PortalPose['orientation'];
-  baseUiYawRad: number;
-  mode: number;
-}
-
-interface PortalCameraDragComputeParams {
-  controllerPose: PortalPose;
-  nowSeconds: number;
-}
-
-interface PortalCameraDragComputeResult {
-  incY?: number;
-  incYaw?: number;
-  incPitch?: number;
-  incX?: number;
-  incZ?: number;
-}
-
-type PortalCameraDragDisplayDelta = PortalPose['position'] | null;
-
-interface PortalCameraDragHandle {
-  setDisplayDeltaCallback(cb: () => PortalCameraDragDisplayDelta): void;
-  begin(params: PortalCameraDragBeginParams): void;
-  compute(params: PortalCameraDragComputeParams): PortalCameraDragComputeResult | null | undefined;
-  end(): void;
-}
+// NOTE: CameraDragIncrements, PortalCameraDragHandle and related interfaces removed - Phase 5 migration
+// Drag computation is now handled by HeadSessionBridge via PortalPoseCameraController
 
 interface PortalControllerPerHandUpdate {
   finalPose: PortalPose | null;
@@ -60,8 +25,12 @@ interface PortalControllerUpdate {
   aimWeight: number;
   headWeight: number;
   stretchAmount: number;
-  cameraDrag?: CameraDragIncrements;
-  // NOTE: cameraMomentum removed - momentum is now handled internally by HeadSessionBridge (Phase 4 migration)
+  /** Display lock state for drag state machine */
+  displayLocked: boolean;
+  /** Whether BUTTON drag is requested (squeeze held) */
+  buttonDragRequested: boolean;
+  /** Which hand is the drag source (0=right, 1=left) */
+  dragSourceHand: number;
   cameraFovDeg: number;
 }
 
@@ -170,6 +139,11 @@ const DEFAULT_HALF_FOV_RAD = Math.PI / 4;
 
 const DISPLAY_LOCK_TIMEOUT_MS = 1500;
 
+// AIM drag threshold constants - match portal_head_session.c defaults
+// NOTE: The session-based advanceDragStateMachine() in HeadSessionBridge.ts provides
+// equivalent state machine logic. This local implementation is retained for now as
+// it's tightly coupled to controller pose computation. Future refactoring could
+// migrate to the session-based API.
 const AIM_ENTER_W = 0.999;
 
 // NOTE: Momentum constants moved to portal_head_session (C code) - Phase 4 migration
@@ -234,6 +208,7 @@ const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
 GLOBAL_HAND_STATES.right.smoother.setMode(PoseSmootherMode.LOW);
 GLOBAL_HAND_STATES.left.smoother.setMode(PoseSmootherMode.LOW);
 
+// AIM exit threshold - hysteresis to avoid mode flickering (see AIM_ENTER_W above)
 const AIM_EXIT_W = 0.98;
 
 const INTERACTION_MODE_BASE = 0x0;
@@ -261,7 +236,7 @@ export class PortalControllerRuntime {
   private readonly U8: Uint8Array;
   private readonly I32: Int32Array;
   private readonly F64: Float64Array;
-  private dragHandle: PortalCameraDragHandle | null = null;
+  // NOTE: dragHandle removed - drag computation moved to HeadSessionBridge (Phase 5 migration)
   private dragButtonSetter: ((active: boolean) => void) | null = null;
   private dragButtonActive = false;
 
@@ -323,10 +298,8 @@ export class PortalControllerRuntime {
   private displayLockCalibrationHand: HandId = 'right';
 
   // NOTE: Momentum state moved to portal_head_session (C code) - Phase 4 migration
-  // See HeadSessionBridge.ts for session-based momentum API
-
-  // Track current drag hand for late-grab handoff
-  private currentDragHand: HandId | null = null;
+  // NOTE: Drag state machine moved to HeadSessionBridge (C code) - Phase 5 migration
+  // XRDevice now coordinates drag via PortalPoseCameraController.advanceDragStateMachine()
 
   private deltaTargetValid = false;
   private readonly deltaTargetPose: PortalPose = {
@@ -380,40 +353,8 @@ export class PortalControllerRuntime {
     this.poseSmoother = GLOBAL_HAND_STATES.right.smoother;
     this.poseSmoother.setMode(PoseSmootherMode.LOW);
 
-    // NEW: create PortalCameraDragHandle and wire display-delta callback
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const DragCtor = (this.Module as any).PortalCameraDragHandle;
-      if (typeof DragCtor === 'function') {
-        this.dragHandle = new DragCtor() as PortalCameraDragHandle;
-        this.dragHandle.setDisplayDeltaCallback(() => {
-          const hand: HandId = this.dragSource ?? 'right';
-          const pose = GLOBAL_HAND_STATES[hand].lastUnblendedPose;
-          if (!pose) {
-            return null;
-          }
-          this.writePose(this.ctrlPosePtr, pose);
-          const statePtr = this.getStatePtrForHand(hand);
-          const ok = this.Module._portal_wasm_pose_state_compute_display_delta(
-            statePtr,
-            this.ctrlPosePtr,
-            this.vecPtr,
-          );
-          if (!ok) {
-            return null;
-          }
-          const base = this.vecPtr >>> 2;
-          return {
-            x: this.F32[base + 0],
-            y: this.F32[base + 1],
-            z: this.F32[base + 2],
-          };
-        });
-      }
-    } catch {
-      // If unavailable (older wasm), we just won't have display-delta (raw fallback stays active).
-      this.dragHandle = null;
-    }
+    // NOTE: PortalCameraDragHandle initialization removed - Phase 5 migration
+    // Drag computation is now handled by HeadSessionBridge via PortalPoseCameraController
 
     this.applyStaticConfig();
     // Ensure neutral orientation and roll config reflect default BASE behavior
@@ -635,6 +576,9 @@ export class PortalControllerRuntime {
       stretchAmount: 0,
       headWeight: 0,
       aimWeight: 0,
+      displayLocked: false,
+      buttonDragRequested: false,
+      dragSourceHand: 0,
       cameraFovDeg: 0,
     };
 
@@ -747,16 +691,12 @@ export class PortalControllerRuntime {
       this.syncSessionAltHandConfig();
     }
 
-    const cameraDrag = rightUnblended
-      ? this.computeCameraDrag(nowNs, headPose, rightUnblended, result.aimWeight)
-      : undefined;
-    if (cameraDrag) {
-      result.cameraDrag = cameraDrag;
-    }
-
-    // Apply camera drag momentum (decaying after BUTTON drag release)
-    // This should be applied BEFORE nudge smoothing, mirroring HeadPoseProvider.predictedPose()
-    // NOTE: Momentum is now handled by PortalPoseCameraController via HeadSessionBridge - Phase 4 migration
+    // Expose drag state for XRDevice to coordinate via PortalPoseCameraController
+    // This mirrors Android's HeadPoseProvider which calls advanceDragStateMachine() and
+    // beginCameraDrag()/computeCameraDragIncrements()/endCameraDrag() on the session
+    result.displayLocked = this.displayLockActive;
+    result.buttonDragRequested = this.buttonDragRequested;
+    result.dragSourceHand = this.dragSource === 'left' ? 1 : 0;
 
     this.lastUnblendedPose = rightUnblended ?? null;
 
@@ -805,18 +745,13 @@ export class PortalControllerRuntime {
     this.displayLockHeadPose = null;
     this.displayLockCtrlPose = null;
 
-    try {
-      this.dragHandle?.end();
-    } catch {
-      // ignore
-    }
+    // NOTE: Drag handle end() removed - drag state managed by HeadSessionBridge (Phase 5 migration)
     this.activeDragMode = 'none';
     this.buttonDragRequested = false;
     this.aimDragRequested = false;
     this.dragSource = null;
     this.lastButtonDragRight = false;
     this.lastButtonDragLeft = false;
-    this.currentDragHand = null;
     this.lastUnblendedPose = null;
     this.requestDragButtonActive(false);
     // NOTE: Momentum cancellation now handled by HeadSessionBridge - Phase 4 migration
@@ -1136,6 +1071,51 @@ export class PortalControllerRuntime {
     return this.readPose(this.outPosePtr);
   }
 
+  /**
+   * Compute the display delta for a controller pose.
+   * This transforms the controller's world position delta (since display-lock calibration)
+   * into display-space coordinates, accounting for the head orientation at calibration.
+   *
+   * @param hand Which hand's pose state to use ('left' or 'right')
+   * @param controllerPose The unblended controller pose in world coordinates
+   * @returns Display-space delta {x, y, z}, or null if display lock is not active
+   */
+  public computeDisplayDelta(
+    hand: 'left' | 'right',
+    controllerPose: PortalPose,
+  ): { x: number; y: number; z: number } | null {
+    if (!this.displayLockActive) {
+      return null;
+    }
+
+    const statePtr = this.getStatePtrForHand(hand);
+    if (!statePtr) {
+      return null;
+    }
+
+    // Write controller pose to memory
+    this.writePose(this.ctrlPosePtr, controllerPose);
+
+    // Call portal_wasm_pose_state_compute_display_delta
+    const ok = this.Module._portal_wasm_pose_state_compute_display_delta(
+      statePtr,
+      this.ctrlPosePtr,
+      this.vecPtr,
+    );
+
+    if (!ok) {
+      return null;
+    }
+
+    // Read result
+    const base = this.vecPtr >> 2;
+    return {
+      x: this.F32[base + 0],
+      y: this.F32[base + 1],
+      z: this.F32[base + 2],
+    };
+  }
+
   public setExternalUiYawRad(yawRad: number): void {
     if (Number.isFinite(yawRad)) {
       this.externalUiYawRad = yawRad;
@@ -1248,180 +1228,9 @@ export class PortalControllerRuntime {
     }
   }
 
-  private computeCameraDrag(
-    nowNs: number,
-    headPose: HeadPoseInput,
-    unblendedPose: PortalPose,
-    aimWeight: number,
-  ): CameraDragIncrements | undefined {
-    if (!this.dragHandle) {
-      this.requestDragButtonActive(false);
-      return undefined;
-    }
-
-    // Aim-drag request toggling mirrors Android: only when display-lock is active.
-    if (this.displayLockActive) {
-      if (!this.aimDragRequested && aimWeight >= AIM_ENTER_W) {
-        this.aimDragRequested = true;
-      } else if (this.aimDragRequested && aimWeight <= AIM_EXIT_W) {
-        this.aimDragRequested = false;
-      }
-    } else {
-      this.aimDragRequested = false;
-    }
-
-    // Prefer AIM over BUTTON: pressing BUTTON while AIM-drag is active must NOT restore translations.
-    const aimDragActive = this.displayLockActive && this.aimDragRequested;
-    const previousMode = this.activeDragMode;
-    let desired: DragMode = 'none';
-    if (aimDragActive) {
-      desired = 'aim';
-    } else if (this.buttonDragRequested) {
-      desired = 'button';
-    }
-
-    const sourceHand: HandId = this.dragSource ?? 'right';
-    const sourcePose =
-      GLOBAL_HAND_STATES[sourceHand].lastUnblendedPose ?? unblendedPose;
-
-    // NOTE: Momentum arming/cancellation is now handled by HeadSessionBridge - Phase 4 migration
-    // The session tracks drag increments and arms momentum on button release internally
-
-    if (desired !== previousMode) {
-      // End previous drag session
-      if (previousMode !== 'none') {
-        try {
-          this.dragHandle.end();
-        } catch {
-          // ignore
-        }
-      }
-
-      // Begin new drag session if needed (late-grab: snapshot current
-      // controller pose as new baseline).
-      if (desired !== 'none' && sourcePose) {
-        try {
-          this.dragHandle.begin({
-            controllerPose: {
-              position: { ...sourcePose.position },
-              orientation: { ...sourcePose.orientation },
-            },
-            cameraQuat: { ...headPose.orientation },
-            baseUiYawRad: this.externalUiYawRad,
-            mode: desired === 'aim' ? 1 : 0,
-          });
-          this.currentDragHand = sourceHand;
-        } catch {
-          // If begin fails, disable drag this frame.
-          this.activeDragMode = 'none';
-          this.currentDragHand = null;
-          this.requestDragButtonActive(false);
-          return undefined;
-        }
-      } else {
-        this.currentDragHand = null;
-      }
-
-      this.activeDragMode = desired;
-    } else if (this.activeDragMode === 'aim' && sourceHand !== this.currentDragHand) {
-      // Hand switching within AIM mode - re-snapshot baseline (mirrors HeadPoseProvider.kt lines 571-577)
-      // When the AIM source hand changes (driven by CAMERA_DRAG), re-snapshot the baseline
-      // so rotation-only drags remain stable and centered for the new hand.
-      try {
-        this.dragHandle.end();
-      } catch {
-        // ignore
-      }
-      if (sourcePose) {
-        try {
-          this.dragHandle.begin({
-            controllerPose: {
-              position: { ...sourcePose.position },
-              orientation: { ...sourcePose.orientation },
-            },
-            cameraQuat: { ...headPose.orientation },
-            baseUiYawRad: this.externalUiYawRad,
-            mode: 1, // AIM mode
-          });
-          this.currentDragHand = sourceHand;
-        } catch {
-          this.activeDragMode = 'none';
-          this.currentDragHand = null;
-        }
-      }
-    } else if (this.activeDragMode === 'button' && sourceHand !== this.currentDragHand) {
-      // Late-grab handoff for BUTTON mode - when one controller releases
-      // while the other is held. Re-snapshot baseline with the new hand
-      // so the remaining controller continues dragging seamlessly.
-      try {
-        this.dragHandle.end();
-      } catch {
-        // ignore
-      }
-      if (sourcePose) {
-        try {
-          this.dragHandle.begin({
-            controllerPose: {
-              position: { ...sourcePose.position },
-              orientation: { ...sourcePose.orientation },
-            },
-            cameraQuat: { ...headPose.orientation },
-            baseUiYawRad: this.externalUiYawRad,
-            mode: 0, // BUTTON mode
-          });
-          this.currentDragHand = sourceHand;
-        } catch {
-          this.activeDragMode = 'none';
-          this.currentDragHand = null;
-        }
-      }
-    } else {
-      // Same mode, same hand - update tracking
-      this.currentDragHand = sourceHand;
-    }
-
-    this.requestDragButtonActive(this.activeDragMode === 'button');
-
-    if (this.activeDragMode === 'none' || !sourcePose) {
-      return undefined;
-    }
-
-    try {
-      const res = this.dragHandle.compute({
-        controllerPose: {
-          position: { ...sourcePose.position },
-          orientation: { ...sourcePose.orientation },
-        },
-        nowSeconds: nowNs * 1e-9,
-      });
-      if (!res) {
-        return undefined;
-      }
-
-      const incY = res.incY ?? 0;
-      const incYaw = res.incYaw ?? 0;
-      const incPitch = res.incPitch ?? 0;
-      const incX = res.incX ?? 0;
-      const incZ = res.incZ ?? 0;
-
-      // NOTE: Drag increment tracking for momentum seeding moved to HeadSessionBridge - Phase 4 migration
-      // The session now tracks increments via recordDragIncrement() and arms momentum on button release
-
-      return {
-        incY,
-        incYaw,
-        incPitch,
-        incX,
-        incZ,
-        mode: this.activeDragMode,
-      };
-    } catch {
-      return undefined;
-    }
-  }
-
-  // NOTE: armMomentumOnButtonRelease(), applyCameraDragMomentum(), cancelMomentum()
-  // moved to HeadSessionBridge (portal_head_session C code) - Phase 4 migration
+  // NOTE: computeCameraDrag() removed - Phase 5 migration
+  // Drag state machine and computation now handled by HeadSessionBridge via PortalPoseCameraController
+  // XRDevice calls advanceDragStateMachine() and beginCameraDrag()/computeCameraDragIncrements()/endCameraDrag()
 
   private commitDisplayLock(
     headPose: HeadPoseInput,
