@@ -548,6 +548,8 @@ export class XRDevice {
   private pointerLookPendingYaw = 0;
   private pointerLookPendingPitch = 0;
   private pointerLookLastFlushMs: number | null = null;
+  /** Tracks previous frame's button drag state for momentum arming on release */
+  private lastButtonDragActive = false;
 
   constructor(
     deviceConfig: XRDeviceConfig,
@@ -2304,19 +2306,25 @@ export class XRDevice {
 		);
     }
 
-    if (update.cameraDrag) {
-		this.portalPoseCamera?.applyCameraDragIncrements(
-		update.cameraDrag,
-		);
+    // Track button drag state for momentum arming
+    const isButtonDragActive = update.cameraDrag?.mode === 'button';
+
+    // Notify session of button press state changes (momentum is armed on release)
+    if (isButtonDragActive !== this.lastButtonDragActive) {
+      this.portalPoseCamera?.setDragButtonPressed(!!isButtonDragActive);
+      this.lastButtonDragActive = !!isButtonDragActive;
     }
 
-    // Apply momentum-based camera increments (decaying after BUTTON drag release)
-    // This mirrors HeadPoseProvider.predictedPose() which applies momentum each frame
-    if (update.cameraMomentum) {
-		this.portalPoseCamera?.applyCameraDragIncrements(
-		update.cameraMomentum,
-		);
+    if (update.cameraDrag) {
+      this.portalPoseCamera?.applyCameraDragIncrements(
+        update.cameraDrag,
+        !!isButtonDragActive,
+        90, // Default 90Hz target
+      );
     }
+
+    // Momentum is now handled internally by PortalPoseCameraController via HeadSessionBridge.
+    // The session tracks drag increments during BUTTON drag and advances momentum each frame.
   }
 
   private applyControllerPose(

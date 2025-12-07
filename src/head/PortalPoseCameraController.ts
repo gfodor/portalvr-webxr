@@ -38,6 +38,8 @@ class PortalPoseCameraNudger {
   private latestFinalPose: PoseLike;
   private lastPredictedMs: number | null = null;
   private lastNowMs: number | null = null;
+  /** Whether drag button is currently pressed (for momentum arming on release) */
+  private dragButtonPressed = false;
 
   constructor(
     headSession: HeadSessionBridge,
@@ -101,6 +103,26 @@ class PortalPoseCameraNudger {
     void this.computeDeltaSeconds(frame);
     const nowNs = this.nowNs();
 
+    // Advance momentum (decaying after BUTTON drag release)
+    // This is done BEFORE nudge smoothing, mirroring HeadPoseProvider.predictedPose()
+    const momentumResult = this.headSession.advanceMomentum(nowNs, false);
+    if (momentumResult) {
+      const { dx, dy, dz, dYaw, dPitch } = momentumResult;
+      // Apply momentum increments directly to nudge targets
+      if (Math.abs(dy) > 1e-6) {
+        this.applyTranslationDelta(0, dy, 0);
+      }
+      if (Math.abs(dYaw) > 1e-6) {
+        this.applyYawDelta(dYaw);
+      }
+      if (Math.abs(dPitch) > 1e-6) {
+        this.headSession.nudgeCameraPitch(dPitch);
+      }
+      if (Math.abs(dx) > 1e-6 || Math.abs(dz) > 1e-6) {
+        this.applyTranslationDelta(dx, 0, dz);
+      }
+    }
+
     // Advance session smoothing (TAU blend toward targets)
     const smoothingResult = this.headSession.advanceSmoothing(nowNs);
 
@@ -117,9 +139,27 @@ class PortalPoseCameraNudger {
     this.composeFinalPose(device, predicted);
   }
 
-  public applyCameraDragIncrements(inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number }): void {
+  public applyCameraDragIncrements(
+    inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number },
+    isButtonDrag = false,
+    targetHz = 90,
+  ): void {
     if (!inc) {
       return;
+    }
+
+    // Record drag increment for momentum seeding (BUTTON drag only)
+    if (isButtonDrag) {
+      const nowNs = this.nowNs();
+      this.headSession.recordDragIncrement(
+        inc.incY,
+        inc.incYaw,
+        inc.incPitch,
+        inc.incX,
+        inc.incZ,
+        nowNs,
+        targetHz,
+      );
     }
 
     // 1) Vertical translation along screen-up
@@ -141,6 +181,21 @@ class PortalPoseCameraNudger {
     if (Math.abs(inc.incX) > 1e-6 || Math.abs(inc.incZ) > 1e-6) {
       this.applyTranslationDelta(inc.incX, 0, inc.incZ);
     }
+  }
+
+  /**
+   * Set drag button pressed state. Momentum is armed on release.
+   */
+  public setDragButtonPressed(pressed: boolean): void {
+    this.headSession.setDragButtonPressed(pressed);
+    this.dragButtonPressed = pressed;
+  }
+
+  /**
+   * Cancel any active momentum immediately.
+   */
+  public cancelMomentum(): void {
+    this.headSession.cancelMomentum();
   }
 
   public resetOrientation() {
@@ -322,12 +377,39 @@ export class PortalPoseCameraController {
 
   /**
    * Apply controller-driven camera drag increments (forwarded from PortalControllerRuntime).
+   * @param inc The drag increments to apply
+   * @param isButtonDrag Whether this is from BUTTON drag mode (for momentum seeding)
+   * @param targetHz Target frame rate for momentum scaling
    */
-  public applyCameraDragIncrements(inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number }): void {
+  public applyCameraDragIncrements(
+    inc: { incY: number; incYaw: number; incPitch: number; incX: number; incZ: number },
+    isButtonDrag = false,
+    targetHz = 90,
+  ): void {
     if (this.disposed) {
       return;
     }
-    this.controller?.applyCameraDragIncrements(inc);
+    this.controller?.applyCameraDragIncrements(inc, isButtonDrag, targetHz);
+  }
+
+  /**
+   * Set drag button pressed state. Momentum is armed on release.
+   */
+  public setDragButtonPressed(pressed: boolean): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setDragButtonPressed(pressed);
+  }
+
+  /**
+   * Cancel any active momentum immediately.
+   */
+  public cancelMomentum(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.cancelMomentum();
   }
 
   /**
