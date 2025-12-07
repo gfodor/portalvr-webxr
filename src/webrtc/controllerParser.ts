@@ -6,8 +6,8 @@
 export const PACKET_STATE = 0x10;
 export const PACKET_ORIENTATION_RESET = 0x7e;
 export const PACKET_HANGUP = 0x02;
-const PROTO_VERSION = 0x04;
-const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02, 0x03]);
+const PROTO_VERSION = 0x05;
+const LEGACY_PROTO_VERSIONS = new Set([0x01, 0x02, 0x03, 0x04]);
 const TRACKING_STATE_MASK = 0x03;
 const TRACKING_REASON_MASK = 0x0f;
 
