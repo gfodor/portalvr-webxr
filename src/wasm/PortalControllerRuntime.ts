@@ -290,6 +290,8 @@ export class PortalControllerRuntime {
   private lastButtonDragLeft = false;
   /** Which hand(s) can trigger camera drag in dual-tracked mode: 'left', 'right', or 'both' */
   private cameraDragHand: 'left' | 'right' | 'both' = 'left';
+  /** Player height mode: 'standing' (1.5m) or 'sitting' (1.0m) */
+  private playerHeightMode: 'standing' | 'sitting' = 'standing';
 
   private displayLockCalibrationHand: HandId = 'right';
 
@@ -1222,6 +1224,31 @@ export class PortalControllerRuntime {
   /** Set which hand(s) can trigger camera drag in dual-tracked mode */
   public setCameraDragHand(hand: 'left' | 'right' | 'both'): void {
     this.cameraDragHand = hand;
+  }
+
+  /** Set player height mode ('standing' or 'sitting') */
+  public setPlayerHeight(height: 'standing' | 'sitting'): void {
+    this.playerHeightMode = height;
+  }
+
+  /** Get current player height mode */
+  public getPlayerHeight(): 'standing' | 'sitting' {
+    return this.playerHeightMode ?? 'standing';
+  }
+
+  /** Get player height in meters based on current mode */
+  public getPlayerHeightMeters(): number {
+    return this.playerHeightMode === 'sitting' ? 1.0 : 1.5;
+  }
+
+  /** Get minimum Y offset based on player height mode */
+  public getYOffsetMinMeters(): number {
+    return this.playerHeightMode === 'sitting' ? -0.5 : -1.0;
+  }
+
+  /** Get maximum Y offset based on player height mode */
+  public getYOffsetMaxMeters(): number {
+    return this.playerHeightMode === 'sitting' ? 1.5 : 1.0;
   }
 
   private requestDragButtonActive(active: boolean): void {

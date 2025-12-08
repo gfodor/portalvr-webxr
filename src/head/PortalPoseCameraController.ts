@@ -311,6 +311,15 @@ class PortalPoseCameraNudger {
     this.headSession.setPoseSession(poseSessionPtr);
   }
 
+  /**
+   * Set Y offset limits for standing/sitting player height modes.
+   * @param yOffsetMinM Minimum Y offset (e.g., -1.0 for standing, -0.5 for sitting)
+   * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
+   */
+  public setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    this.headSession.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+  }
+
   public resetOrientation() {
     // Reset camera offset (preserves clamped Y)
     this.headSession.resetCameraOffset();
@@ -589,6 +598,18 @@ export class PortalPoseCameraController {
       return;
     }
     this.controller?.setPoseSession(poseSessionPtr);
+  }
+
+  /**
+   * Set Y offset limits for standing/sitting player height modes.
+   * @param yOffsetMinM Minimum Y offset (e.g., -1.0 for standing, -0.5 for sitting)
+   * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
+   */
+  public setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
   }
 
   /**

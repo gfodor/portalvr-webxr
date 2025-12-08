@@ -29,6 +29,7 @@ export interface AdbUsbConfig {
 }
 
 export type CameraDragHand = 'left' | 'right' | 'both';
+export type PlayerHeight = 'standing' | 'sitting';
 
 export interface PortalEmulatorConfig {
   device: {
@@ -42,6 +43,8 @@ export interface PortalEmulatorConfig {
     connectToControllerViaLan: boolean;
     /** Which hand(s) can trigger camera drag in dual-tracked mode. Default: 'left' */
     cameraDragHand: CameraDragHand;
+    /** Player height mode. 'standing' = 1.5m height, 'sitting' = 1.0m height. Default: 'standing' */
+    playerHeight: PlayerHeight;
   };
   adbUsb: AdbUsbConfig;
   /** reserved for future migrations */
@@ -67,6 +70,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
     immersiveFullscreenEnabled: true,
     connectToControllerViaLan: true,
     cameraDragHand: 'left',
+    playerHeight: 'standing',
   },
   adbUsb: { ...DEFAULT_ADB_USB },
   version: 1,
@@ -134,6 +138,9 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
       cameraDragHand: normalizeCameraDragHand(
         (settingsCandidate as { cameraDragHand?: unknown }).cameraDragHand,
       ),
+      playerHeight: normalizePlayerHeight(
+        (settingsCandidate as { playerHeight?: unknown }).playerHeight,
+      ),
     },
     adbUsb: normalizeAdbUsbCandidate(adbUsbCandidate, DEFAULT_ADB_USB),
     version:
@@ -145,12 +152,20 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
 }
 
 const VALID_CAMERA_DRAG_HANDS: CameraDragHand[] = ['left', 'right', 'both'];
+const VALID_PLAYER_HEIGHTS: PlayerHeight[] = ['standing', 'sitting'];
 
 function normalizeCameraDragHand(candidate: unknown): CameraDragHand {
   if (typeof candidate === 'string' && VALID_CAMERA_DRAG_HANDS.includes(candidate as CameraDragHand)) {
     return candidate as CameraDragHand;
   }
   return DEFAULT_CONFIG.settings.cameraDragHand;
+}
+
+function normalizePlayerHeight(candidate: unknown): PlayerHeight {
+  if (typeof candidate === 'string' && VALID_PLAYER_HEIGHTS.includes(candidate as PlayerHeight)) {
+    return candidate as PlayerHeight;
+  }
+  return DEFAULT_CONFIG.settings.playerHeight;
 }
 
 function normalizeAdbUsbCandidate(

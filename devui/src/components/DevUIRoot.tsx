@@ -12,6 +12,7 @@ import {
 	portalConfigProvider,
 	type PortalEmulatorConfig,
 	type CameraDragHand,
+	type PlayerHeight,
 	updatePortalEmulatorConfig,
 	type AdbControllerStreamer,
 	type ControllerState,
@@ -41,6 +42,7 @@ type EmulatorSettingsState = {
 	immersiveFullscreenEnabled: boolean;
 	connectToControllerViaLan: boolean;
 	cameraDragHand: CameraDragHand;
+	playerHeight: PlayerHeight;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -328,6 +330,25 @@ export function DevUIRoot({
 		[xrDevice],
 	);
 
+	const selectPlayerHeight = useCallback(
+		(height: PlayerHeight) => {
+			setSettings((prev) => ({
+				...prev,
+				playerHeight: height,
+			}));
+			updatePortalEmulatorConfig({
+				settings: { playerHeight: height },
+			});
+			// Notify XRDevice of the change
+			try {
+				(xrDevice as any).setPlayerHeight?.(height);
+			} catch {
+				// ignore if not supported
+			}
+		},
+		[xrDevice],
+	);
+
 	const closeOnScrimClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
@@ -485,40 +506,35 @@ export function DevUIRoot({
 					<div className="portal-settings-card" role="dialog" aria-modal="true">
 						<h2>PortalVR Settings</h2>
 
-						<section className="portal-section">
-							<h3 className="portal-section__heading">Face Tracking</h3>
-							<label className="portal-toggle-row">
-								<input
-									type="checkbox"
-									checked={settings.faceTrackingEnabled}
-									onChange={toggleFaceTracking}
-								/>
-									<span>Enable face tracking</span>
-								</label>
-						</section>
-
 					<section className="portal-section">
-						<h3 className="portal-section__heading">Immersive Display</h3>
-						<label className="portal-toggle-row">
-							<input
-								type="checkbox"
-								checked={settings.immersiveFullscreenEnabled}
-								onChange={toggleFullscreen}
-							/>
-							<span>Enable fullscreen when entering VR</span>
-						</label>
-					</section>
-
-					<section className="portal-section">
-						<h3 className="portal-section__heading">Controller Connection</h3>
-						<label className="portal-toggle-row">
-							<input
-								type="checkbox"
-								checked={settings.connectToControllerViaLan}
-								onChange={toggleControllerLan}
-							/>
-							<span>Connect to controller via LAN</span>
-						</label>
+						<h3 className="portal-section__heading">Player Height</h3>
+						<p className="portal-section__description">
+							In-game default camera height
+						</p>
+						<div className="portal-mode-toggle portal-mode-toggle--inline">
+							<button
+								type="button"
+								className={`portal-mode-button portal-mode-button--compact${
+									settings.playerHeight === 'standing'
+										? ' portal-mode-button--selected'
+										: ''
+								}`}
+								onClick={() => selectPlayerHeight('standing')}
+							>
+								<span>Standing</span>
+							</button>
+							<button
+								type="button"
+								className={`portal-mode-button portal-mode-button--compact${
+									settings.playerHeight === 'sitting'
+										? ' portal-mode-button--selected'
+										: ''
+								}`}
+								onClick={() => selectPlayerHeight('sitting')}
+							>
+								<span>Sitting</span>
+							</button>
+						</div>
 					</section>
 
 					<section className="portal-section">
@@ -564,7 +580,7 @@ export function DevUIRoot({
 					</section>
 
 						<section className="portal-section">
-							<h3 className="portal-section__heading">Rendering Mode</h3>
+							<h3 className="portal-section__heading">Rendering</h3>
 							<div className="portal-mode-toggle">
 								<button
 									type="button"
@@ -614,6 +630,42 @@ export function DevUIRoot({
 								</a>
 							</p>
 						</section>
+
+						<section className="portal-section">
+							<h3 className="portal-section__heading">Face Tracking</h3>
+							<label className="portal-toggle-row">
+								<input
+									type="checkbox"
+									checked={settings.faceTrackingEnabled}
+									onChange={toggleFaceTracking}
+								/>
+									<span>Enable face tracking</span>
+								</label>
+						</section>
+
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Immersive Display</h3>
+						<label className="portal-toggle-row">
+							<input
+								type="checkbox"
+								checked={settings.immersiveFullscreenEnabled}
+								onChange={toggleFullscreen}
+							/>
+							<span>Enable fullscreen when entering VR</span>
+						</label>
+					</section>
+
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Controller Connection</h3>
+						<label className="portal-toggle-row">
+							<input
+								type="checkbox"
+								checked={settings.connectToControllerViaLan}
+								onChange={toggleControllerLan}
+							/>
+							<span>Connect to controller via LAN</span>
+						</label>
+					</section>
 
 						<button
 							type="button"
@@ -693,6 +745,7 @@ function readSettings(config?: PortalEmulatorConfig | null): EmulatorSettingsSta
 		connectToControllerViaLan:
 			source?.settings?.connectToControllerViaLan !== false,
 		cameraDragHand: source?.settings?.cameraDragHand ?? 'left',
+		playerHeight: source?.settings?.playerHeight ?? 'standing',
 	};
 }
 

@@ -137,6 +137,7 @@ interface PortalHeadSessionHandle {
   getSmootherMode(): number;
   setOutlierRejection(enabled: boolean): void;
   resetSmoother(): void;
+  setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void;
   delete?(): void;
 }
 
@@ -452,5 +453,15 @@ export class HeadSessionBridge {
   resetSmoother(): void {
     if (this.destroyed) return;
     this.handle.resetSmoother();
+  }
+
+  /**
+   * Set Y offset limits for standing/sitting player height modes.
+   * @param yOffsetMinM Minimum Y offset (e.g., -1.0 for standing, -0.5 for sitting)
+   * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
+   */
+  setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    if (this.destroyed) return;
+    this.handle.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
   }
 }

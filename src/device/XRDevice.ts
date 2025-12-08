@@ -1799,10 +1799,13 @@ export class XRDevice {
             runtime.setWandMode(this.lastControllerState.wandMode);
           }
           this.syncAllCameraLocksToRuntime();
-          // Apply camera drag hand setting from config
+          // Apply settings from config
           const config = portalConfigProvider.getConfigSync();
           if (config?.settings?.cameraDragHand) {
             runtime.setCameraDragHand(config.settings.cameraDragHand);
+          }
+          if (config?.settings?.playerHeight) {
+            runtime.setPlayerHeight(config.settings.playerHeight);
           }
           return runtime;
         })
@@ -3376,6 +3379,10 @@ export class XRDevice {
     // Apply camera drag hand setting to runtime
     const nextCameraDragHand = config.settings?.cameraDragHand ?? 'left';
     this.portalControllerRuntime?.setCameraDragHand(nextCameraDragHand);
+
+    // Apply player height setting to runtime and head session
+    const nextPlayerHeight = config.settings?.playerHeight ?? 'standing';
+    this.setPlayerHeight(nextPlayerHeight);
   }
 
 	private handleConfigUpdate(config: PortalEmulatorConfig): void {
@@ -4018,6 +4025,15 @@ export class XRDevice {
 	/** Set which hand(s) can trigger camera drag in dual-tracked mode */
 	public setCameraDragHand(hand: 'left' | 'right' | 'both'): void {
 		this.portalControllerRuntime?.setCameraDragHand(hand);
+	}
+
+	/** Set player height mode ('standing' or 'sitting') */
+	public setPlayerHeight(height: 'standing' | 'sitting'): void {
+		this.portalControllerRuntime?.setPlayerHeight(height);
+		// Update the head session's Y offset limits based on player height mode
+		const yOffsetMinM = height === 'sitting' ? -0.5 : -1.0;
+		const yOffsetMaxM = height === 'sitting' ? 1.5 : 1.0;
+		this.portalPoseCamera?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
 	}
 
   private ensureDefaultWebRTCStreamer() {
