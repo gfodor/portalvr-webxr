@@ -2,6 +2,7 @@ import type { PortalPoseModuleConfig, PortalPoseModuleInstance } from './portal-
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore -- the JS factory function is provided at runtime from the copied asset.
 import PortalPoseModule from './portal-pose/portal_pose.js';
+import { setNativePoseSmootherModule } from '../head/NativePoseSmoother.js';
 
 const DEFAULT_CAMERA_PITCH_DEG = 0;
 
@@ -44,7 +45,11 @@ export async function loadPortalPoseModule(
         }
         return options.locateFile ? options.locateFile(path, prefix) : path;
       },
-    } as PortalPoseModuleConfig);
+    } as PortalPoseModuleConfig).then((mod) => {
+      // Initialize the native pose smoother module for use by NativePoseSmoother
+      setNativePoseSmootherModule(mod);
+      return mod;
+    });
   }
   return modulePromise;
 }

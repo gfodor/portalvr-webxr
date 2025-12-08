@@ -131,6 +131,11 @@ interface PortalHeadSessionHandle {
     armScaling?: number;
   }): void;
   setPoseSession(poseSessionPtr: number): void;
+  submitPose(rawPose: PoseLike, timestampNs: number): PoseLike;
+  setSmootherMode(mode: number): void;
+  getSmootherMode(): number;
+  setOutlierRejection(enabled: boolean): void;
+  resetSmoother(): void;
   delete?(): void;
 }
 
@@ -389,5 +394,56 @@ export class HeadSessionBridge {
   setPoseSession(poseSessionPtr: number): void {
     if (this.destroyed) return;
     this.handle.setPoseSession(poseSessionPtr);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // One-Euro pose filtering (Euro Filter Plan)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Submit a raw pose sample and get the filtered + composed final pose.
+   * This single call replaces the previous multi-step dance:
+   *   addSample -> advanceSmoothing -> translateHistory -> predict -> composeFinalPose
+   *
+   * @param rawPose Raw camera pose (from ARCore or neutral)
+   * @param timestampNs Timestamp in nanoseconds
+   * @returns The filtered and composed final pose
+   */
+  submitPose(rawPose: PoseLike, timestampNs: number): PoseLike | null {
+    if (this.destroyed) return null;
+    return this.handle.submitPose(rawPose, timestampNs);
+  }
+
+  /**
+   * Set the pose smoother mode (filtering aggressiveness).
+   * @param mode 0=HIGH (responsive), 1=LOW (balanced, default), 2=VERY_HIGH (smooth)
+   */
+  setSmootherMode(mode: number): void {
+    if (this.destroyed) return;
+    this.handle.setSmootherMode(mode);
+  }
+
+  /**
+   * Get the current pose smoother mode.
+   */
+  getSmootherMode(): number {
+    if (this.destroyed) return 1; // LOW
+    return this.handle.getSmootherMode();
+  }
+
+  /**
+   * Enable or disable outlier rejection in the pose smoother.
+   */
+  setOutlierRejection(enabled: boolean): void {
+    if (this.destroyed) return;
+    this.handle.setOutlierRejection(enabled);
+  }
+
+  /**
+   * Reset the pose smoother state (clears filter history).
+   */
+  resetSmoother(): void {
+    if (this.destroyed) return;
+    this.handle.resetSmoother();
   }
 }

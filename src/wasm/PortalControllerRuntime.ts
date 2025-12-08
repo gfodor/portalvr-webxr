@@ -1,8 +1,10 @@
 import type { PortalPoseModuleInstance } from './portal-pose/portal_pose.js';
 import { loadPortalPoseModule, type PortalPoseLoadOptions } from './PortalPoseLoader.js';
 import type { ControllerState } from '../webrtc/controllerParser.js';
-import { PoseSmoother, PoseSmootherMode, type PoseArray } from '../head/PoseSmoother.js';
 import { quat, vec3 } from 'gl-matrix';
+
+// PoseArray: [px, py, pz, qx, qy, qz, qw]
+type PoseArray = [number, number, number, number, number, number, number];
 
 interface PortalPose {
   position: { x: number; y: number; z: number };
@@ -40,13 +42,13 @@ type ActiveHand = 'left' | 'right';
 type DragMode = 'none' | 'button' | 'aim';
 
 const SIZEOF_PORTAL_POSEF = 28;
-const SIZEOF_PORTAL_POSE_INPUTS = 192;
+const SIZEOF_PORTAL_POSE_INPUTS = 200; // Added sample_timestamp_ns (int64_t)
 const SIZEOF_PORTAL_POSE_RESULT = 228;
 
 const FLOAT_SIZE = 4;
 
 // Session sample structs (C: portal_pose_session_sample_in/out)
-const SIZEOF_PORTAL_POSE_SESSION_SAMPLE_IN = 200;
+const SIZEOF_PORTAL_POSE_SESSION_SAMPLE_IN = 208; // Includes sample_timestamp_ns
 const OFF_SAMPLE_IN_HAND = 0;
 const OFF_SAMPLE_IN_INPUTS = 8;
 
@@ -109,6 +111,7 @@ const OFF_INPUTS_NEUTRAL_YAW = 172;
 const OFF_INPUTS_HAND_TO_HEAD = 176;
 const OFF_INPUTS_ACTIVE_HAND = 180;
 const OFF_INPUTS_TIME_NOW = 184;
+const OFF_INPUTS_SAMPLE_TIMESTAMP_NS = 192; // int64_t for controller pose smoothing
 
 const OFF_RESULT_FINAL_POSE = 0;
 const OFF_RESULT_UNBLENDED_POSE = 28;
@@ -163,19 +166,21 @@ interface ButtonState {
 type HandId = 'left' | 'right';
 
 interface HandRuntimeState {
-  smoother: PoseSmoother;
-  lastSmoothedPose: PoseArray | null;
+  /** Latest raw pose from WebRTC (smoothing now happens in C) */
+  lastRawPose: PoseArray | null;
+  /** Timestamp of the last raw pose in nanoseconds */
+  lastRawPoseTimestampNs: number;
   buttonState: ButtonState;
   lastUnblendedPose: PortalPose | null;
 }
 
 const HAND_IDS: HandId[] = ['right', 'left'];
 
+// Global hand states - pose smoothing now happens in C code
 const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
   right: {
-    // Disable outlier rejection for controllers - fast arm movements can exceed thresholds
-    smoother: new PoseSmoother(90, 0, false),
-    lastSmoothedPose: null,
+    lastRawPose: null,
+    lastRawPoseTimestampNs: 0,
     buttonState: {
       trigger: false,
       squeeze: false,
@@ -187,9 +192,8 @@ const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
     lastUnblendedPose: null,
   },
   left: {
-    // Disable outlier rejection for controllers - fast arm movements can exceed thresholds
-    smoother: new PoseSmoother(90, 0, false),
-    lastSmoothedPose: null,
+    lastRawPose: null,
+    lastRawPoseTimestampNs: 0,
     buttonState: {
       trigger: false,
       squeeze: false,
@@ -201,9 +205,6 @@ const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
     lastUnblendedPose: null,
   },
 };
-
-GLOBAL_HAND_STATES.right.smoother.setMode(PoseSmootherMode.LOW);
-GLOBAL_HAND_STATES.left.smoother.setMode(PoseSmootherMode.LOW);
 
 // AIM exit threshold - hysteresis to avoid mode flickering (see AIM_ENTER_W above)
 const AIM_EXIT_W = 0.98;
@@ -236,8 +237,7 @@ export class PortalControllerRuntime {
   private dragButtonSetter: ((active: boolean) => void) | null = null;
   private dragButtonActive = false;
 
-  private readonly poseSmoother: PoseSmoother;
-  private lastSmoothedPose: PoseArray | null = null;
+  // Note: poseSmoother removed - controller smoothing now handled in C code
   private lastUnblendedPose: PortalPose | null = null;
   private lastPacketNs: number | null = null;
   private lastPacketMs: number | null = null;
@@ -341,9 +341,7 @@ export class PortalControllerRuntime {
     this.outPosePtr = Module._malloc(SIZEOF_PORTAL_POSEF);
     this.vecPtr = Module._malloc(3 * FLOAT_SIZE);
 
-    // Legacy alias (right-hand smoother) kept for compatibility
-    this.poseSmoother = GLOBAL_HAND_STATES.right.smoother;
-    this.poseSmoother.setMode(PoseSmootherMode.LOW);
+    // Note: Controller pose smoothing now handled in C code via submit_sample
 
     this.applyStaticConfig();
     // Ensure neutral orientation and roll config reflect default BASE behavior
@@ -394,8 +392,9 @@ export class PortalControllerRuntime {
           );
 
     // Right-hand pose and buttons (primary stream body)
+    // Store raw pose - smoothing now happens in C code
     const right = GLOBAL_HAND_STATES.right;
-    right.smoother.addSample(
+    right.lastRawPose = [
       state.position.x,
       state.position.y,
       state.position.z,
@@ -403,8 +402,8 @@ export class PortalControllerRuntime {
       state.quaternion.y,
       state.quaternion.z,
       state.quaternion.w,
-      tNs,
-    );
+    ];
+    right.lastRawPoseTimestampNs = tNs;
     right.buttonState = {
       trigger: state.buttons.trigger,
       squeeze: state.buttons.squeeze,
@@ -417,7 +416,7 @@ export class PortalControllerRuntime {
     // Optional left-hand tail (dual-tracked v4 packets)
     if (state.left) {
       const left = GLOBAL_HAND_STATES.left;
-      left.smoother.addSample(
+      left.lastRawPose = [
         state.left.position.x,
         state.left.position.y,
         state.left.position.z,
@@ -425,8 +424,8 @@ export class PortalControllerRuntime {
         state.left.quaternion.y,
         state.left.quaternion.z,
         state.left.quaternion.w,
-        tNs,
-      );
+      ];
+      left.lastRawPoseTimestampNs = tNs;
       left.buttonState = {
         trigger: state.left.buttons.trigger,
         squeeze: state.left.buttons.squeeze,
@@ -575,8 +574,10 @@ export class PortalControllerRuntime {
     const sampleOutPtr = this.getSampleOutPtr();
 
     // Always submit the right hand
-    const predictedRight = this.predictPoseForHand('right', nowNs);
-    this.writeInputsToSample('right', PortalHandEnum.Right, predictedRight, headPose, nowNs);
+    // Raw pose is passed to C code - smoothing happens in submit_sample
+    const rawRightPose = this.getRawPoseForHand('right');
+    const rightSampleTs = this.getSampleTimestampForHand('right');
+    this.writeInputsToSample('right', PortalHandEnum.Right, rawRightPose, headPose, nowNs, rightSampleTs);
     this.applyDynamicConfig();
 
     let ok = this.Module._portal_wasm_pose_session_submit_sample(
@@ -614,13 +615,15 @@ export class PortalControllerRuntime {
 
     // Optionally submit left-hand when dual-tracked is requested
     if (this.dualTrackedRequested) {
-      const predictedLeft = this.predictPoseForHand('left', nowNs);
+      const rawLeftPose = this.getRawPoseForHand('left');
+      const leftSampleTs = this.getSampleTimestampForHand('left');
       this.writeInputsToSample(
         'left',
         PortalHandEnum.Left,
-        predictedLeft,
+        rawLeftPose,
         headPose,
         nowNs,
+        leftSampleTs,
       );
       this.applyDynamicConfig();
       ok = this.Module._portal_wasm_pose_session_submit_sample(
@@ -667,7 +670,7 @@ export class PortalControllerRuntime {
       // can compute the correct per-hand relative offsets. This mirrors the
       // Android display_lock_commit_calibration behaviour and avoids falling
       // back to the manual centering path that collapses both hands onto the
-      // same anchor when the left smoother has not fully warmed up.
+      // same anchor when no left-hand pose is available yet.
       const useLeftForCalibration =
         this.dualTrackedRequested && !!leftUnblended;
 
@@ -713,9 +716,14 @@ export class PortalControllerRuntime {
   }
 
   handleDisconnect(): void {
+    // Reset controller smoother state in C code
+    const sessionPtr = this.getSessionPtr();
+    this.Module._portal_wasm_pose_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Right);
+    this.Module._portal_wasm_pose_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Left);
+
     for (const hand of HAND_IDS) {
-      GLOBAL_HAND_STATES[hand].smoother.reset();
-      GLOBAL_HAND_STATES[hand].lastSmoothedPose = null;
+      GLOBAL_HAND_STATES[hand].lastRawPose = null;
+      GLOBAL_HAND_STATES[hand].lastRawPoseTimestampNs = 0;
       GLOBAL_HAND_STATES[hand].lastUnblendedPose = null;
       GLOBAL_HAND_STATES[hand].buttonState = {
         trigger: false,
@@ -726,7 +734,6 @@ export class PortalControllerRuntime {
         menu: false,
       };
     }
-    this.lastSmoothedPose = null;
     this.lastPacketNs = null;
     this.lastPacketMs = null;
     this.displayLockActive = false;
@@ -782,13 +789,20 @@ export class PortalControllerRuntime {
     return (this as any).stateLeftPtr as number;
   }
 
-  private predictPoseForHand(hand: HandId, nowNs: number): PoseArray {
+  /**
+   * Get the raw pose for a hand.
+   * Smoothing now happens in C code inside portal_pose_session_submit_sample.
+   */
+  private getRawPoseForHand(hand: HandId): PoseArray {
     const state = GLOBAL_HAND_STATES[hand];
-    const predicted =
-      state.smoother.predict(nowNs) ??
-      (state.lastSmoothedPose ?? [0, 0, 0, 0, 0, 0, 1]);
-    state.lastSmoothedPose = predicted;
-    return predicted;
+    return state.lastRawPose ?? [0, 0, 0, 0, 0, 0, 1];
+  }
+
+  /**
+   * Get the sample timestamp for a hand (nanoseconds).
+   */
+  private getSampleTimestampForHand(hand: HandId): number {
+    return GLOBAL_HAND_STATES[hand].lastRawPoseTimestampNs;
   }
 
   private writeInputsToSample(
@@ -797,6 +811,7 @@ export class PortalControllerRuntime {
     pose: PoseArray,
     headPose: HeadPoseInput,
     nowNs: number,
+    sampleTimestampNs: number,
   ): void {
     const sampleInPtr = this.getSampleInPtr();
     // Write enum portal_hand hand
@@ -875,6 +890,12 @@ export class PortalControllerRuntime {
       : (this.activeHand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left);
     this.I32[(inputsPtr + OFF_INPUTS_ACTIVE_HAND) >> 2] = activeHandValue;
     this.F64[(inputsPtr + OFF_INPUTS_TIME_NOW) >> 3] = nowNs * 1e-9;
+    // Write sample timestamp for controller pose smoothing (int64_t)
+    // JavaScript BigInt64Array not available everywhere, write as two 32-bit ints
+    const sampleNsLow = sampleTimestampNs >>> 0;
+    const sampleNsHigh = Math.floor(sampleTimestampNs / 0x100000000) >>> 0;
+    this.I32[(inputsPtr + OFF_INPUTS_SAMPLE_TIMESTAMP_NS) >> 2] = sampleNsLow;
+    this.I32[(inputsPtr + OFF_INPUTS_SAMPLE_TIMESTAMP_NS + 4) >> 2] = sampleNsHigh;
   }
 
   private applyStaticConfig(): void {

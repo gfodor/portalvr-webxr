@@ -132,6 +132,31 @@ export interface PortalPoseModuleInstance {
     sampleOutPtr: number,
   ): number;
 
+  // Controller smoother control APIs (per-hand)
+  _portal_wasm_pose_session_set_ctrl_smoother_mode(
+    sessionPtr: number,
+    handEnum: number,
+    mode: number,
+  ): void;
+  _portal_wasm_pose_session_reset_ctrl_smoother(
+    sessionPtr: number,
+    handEnum: number,
+  ): void;
+  _portal_wasm_pose_session_translate_ctrl_smoother(
+    sessionPtr: number,
+    handEnum: number,
+    dx: number,
+    dy: number,
+    dz: number,
+  ): void;
+  _portal_wasm_pose_session_predict_ctrl_pose(
+    sessionPtr: number,
+    handEnum: number,
+    nowNsLow: number,
+    nowNsHigh: number,
+    outPosePtr: number,
+  ): number;
+
   // Pose-state setters (parity with native portal_pose_state_*)
   _portal_wasm_pose_state_set_roll_config(statePtr: number, rollCfgPtr: number): void;
   _portal_wasm_pose_state_set_delta_target(
