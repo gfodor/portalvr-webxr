@@ -382,13 +382,20 @@ class PortalPoseCameraNudger {
 
   private applyYawDelta(dYawRad: number) {
     const smoothedPose = this.latestSmoothedPose;
-    const finalPose = this.latestFinalPose;
-    if (!smoothedPose || !finalPose) {
+    if (!smoothedPose) {
+      return;
+    }
+
+    // Compose using TARGET yaw/pitch/offset for the continuity baseline.
+    // This must use targets (not smoothed) because nudgeCameraYaw modifies the targets,
+    // and the continuity correction needs to be computed relative to those same values.
+    const finalPoseFromTargets = this.headSession.composeFinalPoseFromTargets(smoothedPose);
+    if (!finalPoseFromTargets) {
       return;
     }
 
     // Use session's nudgeCameraYaw with continuity correction
-    this.headSession.nudgeCameraYaw(dYawRad, smoothedPose, finalPose);
+    this.headSession.nudgeCameraYaw(dYawRad, smoothedPose, finalPoseFromTargets);
     this.debug('yaw-nudge', { dYawRad });
   }
 

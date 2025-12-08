@@ -93,6 +93,7 @@ interface PortalHeadSessionHandle {
   resetCameraOffset(): void;
   advanceSmoothing(nowNs: number): SmoothingResult;
   composeFinalPose(smoothedPose: PoseLike): PoseLike;
+  composeFinalPoseFromTargets(smoothedPose: PoseLike): PoseLike;
   setDragButtonPressed(pressed: boolean): void;
   advanceMomentum(nowNs: number, arPoseActive: boolean): MomentumResult;
   cancelMomentum(): void;
@@ -265,6 +266,12 @@ export class HeadSessionBridge {
   composeFinalPose(smoothedPose: PoseLike): PoseLike | null {
     if (this.destroyed) return null;
     return this.handle.composeFinalPose(smoothedPose);
+  }
+
+  /** Compose final pose using TARGET yaw/pitch/offset (for yaw-continuity calculations). */
+  composeFinalPoseFromTargets(smoothedPose: PoseLike): PoseLike | null {
+    if (this.destroyed) return null;
+    return this.handle.composeFinalPoseFromTargets(smoothedPose);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
