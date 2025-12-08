@@ -48,7 +48,7 @@ type EmulatorSettingsState = {
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
 const AMAZON_3D_GLASSES_URL =
 	'https://www.amazon.com/INFICOLOR-3D-Compatible-Assassins-Revelations/dp/B005UZB7KM';
-const HOW_TO_PLAY_URL = 'https://youtu.be/g30wYsLU9AI';
+const HOW_TO_PLAY_URL = 'https://portalvr.io/how-to-play-webxr';
 const DOCUMENTATION_URL = 'https://portalvr.io/docs';
 const INTERACTION_MODE_OPENXR_QUEST = 0x10;
 
