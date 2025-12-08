@@ -78,7 +78,7 @@ class PortalPoseCameraNudger {
   private readonly cameraPitchRad: number;
   private readonly cameraPitchSin: number;
   private readonly fixedDisplayLocked: boolean;
-  private readonly basePosition: Vec3Like;
+  private basePosition: Vec3Like;
   private readonly baseOrientation: PoseLike['orientation'];
   private readonly debugEnabled: boolean;
   private readonly poseSmoother: PoseSmoother;
@@ -317,7 +317,41 @@ class PortalPoseCameraNudger {
    * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
    */
   public setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    console.log('[PortalPoseCameraNudger] setYOffsetLimits:', yOffsetMinM, yOffsetMaxM);
+    console.log('[PortalPoseCameraNudger] headSession:', !!this.headSession);
     this.headSession.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+  }
+
+  /**
+   * Update the base position Y for player height changes.
+   * Resets the pose smoother to apply the change immediately.
+   * @param y New base Y position in meters
+   */
+  public setBasePositionY(y: number): void {
+    this.basePosition.y = y;
+    // Reset the smoother with the new base position so the change takes effect immediately
+    const offset = this.headSession.getCameraOffset();
+    const samplePos = {
+      x: this.basePosition.x + offset.x,
+      y: this.basePosition.y + offset.y,
+      z: this.basePosition.z + offset.z,
+    };
+    const sample: PoseArray = [
+      samplePos.x,
+      samplePos.y,
+      samplePos.z,
+      this.baseOrientation.x,
+      this.baseOrientation.y,
+      this.baseOrientation.z,
+      this.baseOrientation.w,
+    ] as PoseArray;
+    const nowNs = this.nowNs();
+    this.poseSmoother.reset(sample, nowNs);
+    this.latestSmoothedPose = {
+      position: { x: samplePos.x, y: samplePos.y, z: samplePos.z },
+      orientation: { ...this.baseOrientation },
+    };
+    this.latestFinalPose = { ...this.latestSmoothedPose };
   }
 
   public resetOrientation() {
@@ -606,10 +640,23 @@ export class PortalPoseCameraController {
    * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
    */
   public setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    console.log('[PortalPoseCameraController] setYOffsetLimits:', yOffsetMinM, yOffsetMaxM);
+    console.log('[PortalPoseCameraController] disposed:', this.disposed, 'controller:', !!this.controller);
     if (this.disposed) {
       return;
     }
     this.controller?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+  }
+
+  /**
+   * Update the base position Y for player height changes.
+   * @param y New base Y position in meters
+   */
+  public setBasePositionY(y: number): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setBasePositionY(y);
   }
 
   /**

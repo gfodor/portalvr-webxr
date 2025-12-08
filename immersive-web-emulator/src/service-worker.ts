@@ -119,6 +119,9 @@ interface AdbUsbConfig {
 	adbPrivateKeyPkcs8: string | null;
 }
 
+type CameraDragHand = 'left' | 'right' | 'both';
+type PlayerHeight = 'standing' | 'sitting';
+
 interface PortalEmulatorConfig {
 	device: {
 		suffix: string;
@@ -128,6 +131,8 @@ interface PortalEmulatorConfig {
 		stereoRenderingEnabled: boolean;
 		immersiveFullscreenEnabled: boolean;
 		connectToControllerViaLan: boolean;
+		cameraDragHand: CameraDragHand;
+		playerHeight: PlayerHeight;
 	};
 	adbUsb: AdbUsbConfig;
 	version?: number;
@@ -135,6 +140,8 @@ interface PortalEmulatorConfig {
 const DEFAULT_ADB_USB: AdbUsbConfig = {
 	adbPrivateKeyPkcs8: null,
 };
+const VALID_CAMERA_DRAG_HANDS: CameraDragHand[] = ['left', 'right', 'both'];
+const VALID_PLAYER_HEIGHTS: PlayerHeight[] = ['standing', 'sitting'];
 const DEFAULT_CONFIG: PortalEmulatorConfig = {
 	device: { suffix: '' },
 	settings: {
@@ -142,6 +149,8 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 		stereoRenderingEnabled: false,
 		immersiveFullscreenEnabled: true,
 		connectToControllerViaLan: true,
+		cameraDragHand: 'left',
+		playerHeight: 'standing',
 	},
 	adbUsb: { ...DEFAULT_ADB_USB },
 	version: 1,
@@ -349,6 +358,8 @@ function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfi
 			stereoRenderingEnabled: config.settings.stereoRenderingEnabled,
 			immersiveFullscreenEnabled: config.settings.immersiveFullscreenEnabled,
 			connectToControllerViaLan: config.settings.connectToControllerViaLan,
+			cameraDragHand: config.settings.cameraDragHand ?? DEFAULT_CONFIG.settings.cameraDragHand,
+			playerHeight: config.settings.playerHeight ?? DEFAULT_CONFIG.settings.playerHeight,
 		},
 		adbUsb: normalizeAdbUsb(config.adbUsb, DEFAULT_ADB_USB),
 		version:
@@ -364,6 +375,20 @@ function ensureConfigSuffix(config: PortalEmulatorConfig): PortalEmulatorConfig 
 	};
 }
 
+function normalizeCameraDragHand(candidate: unknown): CameraDragHand {
+	if (typeof candidate === 'string' && VALID_CAMERA_DRAG_HANDS.includes(candidate as CameraDragHand)) {
+		return candidate as CameraDragHand;
+	}
+	return DEFAULT_CONFIG.settings.cameraDragHand;
+}
+
+function normalizePlayerHeight(candidate: unknown): PlayerHeight {
+	if (typeof candidate === 'string' && VALID_PLAYER_HEIGHTS.includes(candidate as PlayerHeight)) {
+		return candidate as PlayerHeight;
+	}
+	return DEFAULT_CONFIG.settings.playerHeight;
+}
+
 function normalizeConfig(
 	candidate: unknown,
 	fallback: PortalEmulatorConfig | null,
@@ -376,6 +401,8 @@ function normalizeConfig(
 			stereoRenderingEnabled: base.settings.stereoRenderingEnabled,
 			immersiveFullscreenEnabled: base.settings.immersiveFullscreenEnabled,
 			connectToControllerViaLan: base.settings.connectToControllerViaLan,
+			cameraDragHand: base.settings.cameraDragHand ?? DEFAULT_CONFIG.settings.cameraDragHand,
+			playerHeight: base.settings.playerHeight ?? DEFAULT_CONFIG.settings.playerHeight,
 		},
 		adbUsb: normalizeAdbUsb(base.adbUsb, DEFAULT_ADB_USB),
 		version:
@@ -416,6 +443,11 @@ function normalizeConfig(
 		if (typeof lanCandidate === 'boolean') {
 			result.settings.connectToControllerViaLan = lanCandidate;
 		}
+		const cameraDragHandCandidate = (settingsCandidate as { cameraDragHand?: unknown }).cameraDragHand;
+		result.settings.cameraDragHand = normalizeCameraDragHand(cameraDragHandCandidate);
+
+		const playerHeightCandidate = (settingsCandidate as { playerHeight?: unknown }).playerHeight;
+		result.settings.playerHeight = normalizePlayerHeight(playerHeightCandidate);
 	}
 
 	const adbUsbCandidate = (candidate as { adbUsb?: unknown }).adbUsb;

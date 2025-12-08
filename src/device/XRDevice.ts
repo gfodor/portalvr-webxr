@@ -242,7 +242,7 @@ const FORCED_IPD_METERS = 0.0075;
 const DEFAULTS = {
   ipd: FORCED_IPD_METERS,
   fovy: Math.PI / 2,
-  headsetPosition: new Vector3(0, 1.6, 0),
+  headsetPosition: new Vector3(0, 1.5, 0),
   headsetQuaternion: new Quaternion(),
   stereoEnabled: false,
 };
@@ -3870,7 +3870,16 @@ export class XRDevice {
     this.portalPoseCameraOptions = nextOptions;
     this.portalPoseCamera?.dispose();
     this.poseSessionAssociated = false; // Reset so callback is set up on new camera
+    // Apply player height before creating controller so basePosition is correct
+    const config = portalConfigProvider.getConfigSync();
+    const playerHeight = config?.settings?.playerHeight ?? 'standing';
+    const playerHeightY = playerHeight === 'sitting' ? 1.0 : 1.5;
+    this[P_DEVICE].position.y = playerHeightY;
     this.portalPoseCamera = new PortalPoseCameraController(this, nextOptions);
+    // Apply player height Y offset limits from stored config
+    const yOffsetMinM = playerHeight === 'sitting' ? -0.5 : -1.0;
+    const yOffsetMaxM = playerHeight === 'sitting' ? 1.5 : 1.0;
+    this.portalPoseCamera?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
     const session = this.activeSession;
     if (session && session[P_SESSION].mode === 'immersive-vr') {
       this.enablePointerLookControlsForSession();
@@ -4029,11 +4038,19 @@ export class XRDevice {
 
 	/** Set player height mode ('standing' or 'sitting') */
 	public setPlayerHeight(height: 'standing' | 'sitting'): void {
+		console.log('[XRDevice] setPlayerHeight called:', height);
 		this.portalControllerRuntime?.setPlayerHeight(height);
 		// Update the head session's Y offset limits based on player height mode
 		const yOffsetMinM = height === 'sitting' ? -0.5 : -1.0;
 		const yOffsetMaxM = height === 'sitting' ? 1.5 : 1.0;
 		this.portalPoseCamera?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+		// Update the device base position Y based on player height
+		// Standing: 1.5m, Sitting: 1.0m (matching Android)
+		const newY = height === 'sitting' ? 1.0 : 1.5;
+		console.log('[XRDevice] setting position.y to:', newY);
+		this[P_DEVICE].position.y = newY;
+		// Also update the pose camera's base position so it takes effect immediately
+		this.portalPoseCamera?.setBasePositionY(newY);
 	}
 
   private ensureDefaultWebRTCStreamer() {

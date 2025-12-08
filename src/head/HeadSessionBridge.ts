@@ -461,7 +461,10 @@ export class HeadSessionBridge {
    * @param yOffsetMaxM Maximum Y offset (e.g., 1.0 for standing, 1.5 for sitting)
    */
   setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void {
+    console.log('[HeadSessionBridge] setYOffsetLimits:', yOffsetMinM, yOffsetMaxM);
+    console.log('[HeadSessionBridge] destroyed:', this.destroyed, 'handle:', !!this.handle);
     if (this.destroyed) return;
     this.handle.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+    console.log('[HeadSessionBridge] setYOffsetLimits called on WASM handle');
   }
 }
