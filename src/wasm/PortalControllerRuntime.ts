@@ -47,7 +47,7 @@ const SIZEOF_PORTAL_POSE_RESULT = 228;
 
 const FLOAT_SIZE = 4;
 
-// Session sample structs (C: portal_pose_session_sample_in/out)
+// Session sample structs (C: portal_controller_session_sample_in/out)
 const SIZEOF_PORTAL_POSE_SESSION_SAMPLE_IN = 208; // Includes sample_timestamp_ns
 const OFF_SAMPLE_IN_HAND = 0;
 const OFF_SAMPLE_IN_INPUTS = 8;
@@ -314,15 +314,15 @@ export class PortalControllerRuntime {
 
     this.stateBasePtr = 0;
 
-    const sessionPtr = Module._portal_wasm_pose_session_create(2);
+    const sessionPtr = Module._portal_wasm_controller_session_create(2);
     (this as any).sessionPtr = sessionPtr;
 
     // Treat statePtr as the right-hand portal_pose_state*
-    this.statePtr = Module._portal_wasm_pose_session_get_hand_state(
+    this.statePtr = Module._portal_wasm_controller_session_get_hand_state(
       sessionPtr,
       PortalHandEnum.Right,
     );
-    (this as any).stateLeftPtr = Module._portal_wasm_pose_session_get_hand_state(
+    (this as any).stateLeftPtr = Module._portal_wasm_controller_session_get_hand_state(
       sessionPtr,
       PortalHandEnum.Left,
     );
@@ -580,7 +580,7 @@ export class PortalControllerRuntime {
     this.writeInputsToSample('right', PortalHandEnum.Right, rawRightPose, headPose, nowNs, rightSampleTs);
     this.applyDynamicConfig();
 
-    let ok = this.Module._portal_wasm_pose_session_submit_sample(
+    let ok = this.Module._portal_wasm_controller_session_submit_sample(
       sessionPtr,
       this.getSampleInPtr(),
       sampleOutPtr,
@@ -626,7 +626,7 @@ export class PortalControllerRuntime {
         leftSampleTs,
       );
       this.applyDynamicConfig();
-      ok = this.Module._portal_wasm_pose_session_submit_sample(
+      ok = this.Module._portal_wasm_controller_session_submit_sample(
         sessionPtr,
         this.getSampleInPtr(),
         sampleOutPtr,
@@ -707,7 +707,7 @@ export class PortalControllerRuntime {
     this.displayLockCtrlPose = null;
     const sessionPtr = this.getSessionPtr();
     if (sessionPtr) {
-      this.Module._portal_wasm_pose_session_clear_display_lock(sessionPtr);
+      this.Module._portal_wasm_controller_session_clear_display_lock(sessionPtr);
     }
     // Reset per-hand relative offsets so future frames are not influenced by
     // previous display-lock centering.
@@ -718,8 +718,8 @@ export class PortalControllerRuntime {
   handleDisconnect(): void {
     // Reset controller smoother state in C code
     const sessionPtr = this.getSessionPtr();
-    this.Module._portal_wasm_pose_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Right);
-    this.Module._portal_wasm_pose_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Left);
+    this.Module._portal_wasm_controller_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Right);
+    this.Module._portal_wasm_controller_session_reset_ctrl_smoother(sessionPtr, PortalHandEnum.Left);
 
     for (const hand of HAND_IDS) {
       GLOBAL_HAND_STATES[hand].lastRawPose = null;
@@ -767,7 +767,7 @@ export class PortalControllerRuntime {
   }
 
   /**
-   * Returns the raw WASM pointer to the portal_pose_session.
+   * Returns the raw WASM pointer to the portal_controller_session.
    * Used to associate with HeadSessionBridge for display-delta computation.
    */
   public getSessionPtr(): number {
@@ -791,7 +791,7 @@ export class PortalControllerRuntime {
 
   /**
    * Get the raw pose for a hand.
-   * Smoothing now happens in C code inside portal_pose_session_submit_sample.
+   * Smoothing now happens in C code inside portal_controller_session_submit_sample.
    */
   private getRawPoseForHand(hand: HandId): PoseArray {
     const state = GLOBAL_HAND_STATES[hand];
@@ -913,7 +913,7 @@ export class PortalControllerRuntime {
     this.F32[base + 5] = ANDROID_PLAYER_ARM_STRETCH_LERP_RANGE;
     this.F32[base + 6] = ANDROID_PLAYER_ARM_SCALING;
     this.F32[base + 7] = FIXED_DISPLAY_TORSO_DISTANCE_PROPORTION;
-    this.Module._portal_wasm_pose_session_apply_tuning(sessionPtr, tuningPtr);
+    this.Module._portal_wasm_controller_session_apply_tuning(sessionPtr, tuningPtr);
     this.Module._free(tuningPtr);
 
     const rollCfgPtr = this.Module._malloc(SIZEOF_PORTAL_ROLL_CONFIG);
@@ -921,7 +921,7 @@ export class PortalControllerRuntime {
     this.F32[rb + 0] = DEFAULT_YAW_ROLL_AMPLIFY;
     this.F32[rb + 1] = DEFAULT_ROLL_ZERO_OFFSET_DEG;
     this.F32[rb + 2] = DEFAULT_ROLL_AMPLIFY_START_DEG;
-    this.Module._portal_wasm_pose_session_set_roll_config(sessionPtr, rollCfgPtr);
+    this.Module._portal_wasm_controller_session_set_roll_config(sessionPtr, rollCfgPtr);
     this.Module._free(rollCfgPtr);
 
     // Apply FOV and arm params per-hand
@@ -989,7 +989,7 @@ export class PortalControllerRuntime {
     this.F32[base + 0] = amplify;
     this.F32[base + 1] = DEFAULT_ROLL_ZERO_OFFSET_DEG;
     this.F32[base + 2] = DEFAULT_ROLL_AMPLIFY_START_DEG;
-    this.Module._portal_wasm_pose_session_set_roll_config(
+    this.Module._portal_wasm_controller_session_set_roll_config(
       this.getSessionPtr(),
       rollCfgPtr,
     );
@@ -1174,7 +1174,7 @@ export class PortalControllerRuntime {
     this.U8[cfgPtr + OFF_ALT_HAND_CFG_DUAL_TRACKED_ENABLED] =
       this.dualTrackedRequested ? 1 : 0;
 
-    this.Module._portal_wasm_pose_session_update_alt_hand_offsets(
+    this.Module._portal_wasm_controller_session_update_alt_hand_offsets(
       sessionPtr,
       cfgPtr,
     );
@@ -1202,7 +1202,7 @@ export class PortalControllerRuntime {
     this.U8[cfgPtr + OFF_AIM_HAND_CFG_DUAL_TRACKED_ENABLED] =
       this.dualTrackedRequested ? 1 : 0;
 
-    this.Module._portal_wasm_pose_session_set_aim_hand_config(
+    this.Module._portal_wasm_controller_session_set_aim_hand_config(
       sessionPtr,
       cfgPtr,
     );
@@ -1303,7 +1303,7 @@ export class PortalControllerRuntime {
         (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
       ] = calibratingHandEnum;
 
-      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+      this.Module._portal_wasm_controller_session_apply_display_lock_calibration(
         sessionPtr,
         calPtr,
       );
@@ -1324,7 +1324,7 @@ export class PortalControllerRuntime {
       this.I32[
         (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
       ] = PortalHandEnum.Right;
-      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+      this.Module._portal_wasm_controller_session_apply_display_lock_calibration(
         sessionPtr,
         calPtr,
       );
@@ -1340,7 +1340,7 @@ export class PortalControllerRuntime {
       this.I32[
         (calPtr + OFF_DISPLAY_LOCK_CAL_CALIBRATING_HAND) >> 2
       ] = PortalHandEnum.Left;
-      this.Module._portal_wasm_pose_session_apply_display_lock_calibration(
+      this.Module._portal_wasm_controller_session_apply_display_lock_calibration(
         sessionPtr,
         calPtr,
       );

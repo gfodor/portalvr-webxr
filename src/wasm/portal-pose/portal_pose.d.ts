@@ -102,21 +102,21 @@ export interface PortalPoseModuleInstance {
   ): number;
   _portal_wasm_camera_drag_end(statePtr: number): void;
 
-  // Session orchestration (multi-hand portal_pose_session)
-  _portal_wasm_pose_session_create(numHands: number): number;
-  _portal_wasm_pose_session_get_hand_state(sessionPtr: number, handEnum: number): number;
-  _portal_wasm_pose_session_apply_tuning(sessionPtr: number, tuningPtr: number): void;
-  _portal_wasm_pose_session_set_roll_config(sessionPtr: number, rollCfgPtr: number): void;
-  _portal_wasm_pose_session_update_alt_hand_offsets(
+  // Session orchestration (multi-hand portal_controller_session)
+  _portal_wasm_controller_session_create(numHands: number): number;
+  _portal_wasm_controller_session_get_hand_state(sessionPtr: number, handEnum: number): number;
+  _portal_wasm_controller_session_apply_tuning(sessionPtr: number, tuningPtr: number): void;
+  _portal_wasm_controller_session_set_roll_config(sessionPtr: number, rollCfgPtr: number): void;
+  _portal_wasm_controller_session_update_alt_hand_offsets(
     sessionPtr: number,
     cfgPtr: number,
   ): void;
-  _portal_wasm_pose_session_set_aim_hand_config(sessionPtr: number, cfgPtr: number): void;
-  _portal_wasm_pose_session_apply_display_lock_calibration(
+  _portal_wasm_controller_session_set_aim_hand_config(sessionPtr: number, cfgPtr: number): void;
+  _portal_wasm_controller_session_apply_display_lock_calibration(
     sessionPtr: number,
     calPtr: number,
   ): void;
-  _portal_wasm_pose_session_clear_display_lock(sessionPtr: number): void;
+  _portal_wasm_controller_session_clear_display_lock(sessionPtr: number): void;
   _portal_wasm_dual_mode_synthesize_secondary_pose(
     sessionPtr: number,
     dualMode: number,
@@ -126,30 +126,30 @@ export interface PortalPoseModuleInstance {
     secondaryHandEnum: number,
     outSecondaryPosePtr: number,
   ): number;
-  _portal_wasm_pose_session_submit_sample(
+  _portal_wasm_controller_session_submit_sample(
     sessionPtr: number,
     sampleInPtr: number,
     sampleOutPtr: number,
   ): number;
 
   // Controller smoother control APIs (per-hand)
-  _portal_wasm_pose_session_set_ctrl_smoother_mode(
+  _portal_wasm_controller_session_set_ctrl_smoother_mode(
     sessionPtr: number,
     handEnum: number,
     mode: number,
   ): void;
-  _portal_wasm_pose_session_reset_ctrl_smoother(
+  _portal_wasm_controller_session_reset_ctrl_smoother(
     sessionPtr: number,
     handEnum: number,
   ): void;
-  _portal_wasm_pose_session_translate_ctrl_smoother(
+  _portal_wasm_controller_session_translate_ctrl_smoother(
     sessionPtr: number,
     handEnum: number,
     dx: number,
     dy: number,
     dz: number,
   ): void;
-  _portal_wasm_pose_session_predict_ctrl_pose(
+  _portal_wasm_controller_session_predict_ctrl_pose(
     sessionPtr: number,
     handEnum: number,
     nowNsLow: number,

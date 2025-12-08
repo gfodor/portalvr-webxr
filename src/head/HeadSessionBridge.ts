@@ -396,7 +396,7 @@ export class HeadSessionBridge {
    * When set, the head session automatically computes display-space deltas without
    * requiring an external callback.
    *
-   * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
+   * @param poseSessionPtr Raw WASM pointer to portal_controller_session, or 0 to clear
    */
   setPoseSession(poseSessionPtr: number): void {
     if (this.destroyed) return;

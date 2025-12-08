@@ -305,7 +305,7 @@ class PortalPoseCameraNudger {
    * When set, the head session automatically computes display-space deltas using the
    * pose state's calibration data.
    *
-   * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
+   * @param poseSessionPtr Raw WASM pointer to portal_controller_session, or 0 to clear
    */
   public setPoseSession(poseSessionPtr: number): void {
     this.headSession.setPoseSession(poseSessionPtr);
@@ -582,7 +582,7 @@ export class PortalPoseCameraController {
    * When set, the head session automatically computes display-space deltas using the
    * pose state's calibration data.
    *
-   * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
+   * @param poseSessionPtr Raw WASM pointer to portal_controller_session, or 0 to clear
    */
   public setPoseSession(poseSessionPtr: number): void {
     if (this.disposed) {
