@@ -9,9 +9,6 @@ interface PortalPose {
   orientation: { x: number; y: number; z: number; w: number };
 }
 
-// NOTE: CameraDragIncrements, PortalCameraDragHandle and related interfaces removed - Phase 5 migration
-// Drag computation is now handled by HeadSessionBridge via PortalPoseCameraController
-
 interface PortalControllerPerHandUpdate {
   finalPose: PortalPose | null;
   unblendedPose: PortalPose | null;
@@ -236,7 +233,6 @@ export class PortalControllerRuntime {
   private readonly U8: Uint8Array;
   private readonly I32: Int32Array;
   private readonly F64: Float64Array;
-  // NOTE: dragHandle removed - drag computation moved to HeadSessionBridge (Phase 5 migration)
   private dragButtonSetter: ((active: boolean) => void) | null = null;
   private dragButtonActive = false;
 
@@ -297,10 +293,6 @@ export class PortalControllerRuntime {
 
   private displayLockCalibrationHand: HandId = 'right';
 
-  // NOTE: Momentum state moved to portal_head_session (C code) - Phase 4 migration
-  // NOTE: Drag state machine moved to HeadSessionBridge (C code) - Phase 5 migration
-  // XRDevice now coordinates drag via PortalPoseCameraController.advanceDragStateMachine()
-
   private deltaTargetValid = false;
   private readonly deltaTargetPose: PortalPose = {
     position: { x: 0, y: 0, z: 0 },
@@ -352,9 +344,6 @@ export class PortalControllerRuntime {
     // Legacy alias (right-hand smoother) kept for compatibility
     this.poseSmoother = GLOBAL_HAND_STATES.right.smoother;
     this.poseSmoother.setMode(PoseSmootherMode.LOW);
-
-    // NOTE: PortalCameraDragHandle initialization removed - Phase 5 migration
-    // Drag computation is now handled by HeadSessionBridge via PortalPoseCameraController
 
     this.applyStaticConfig();
     // Ensure neutral orientation and roll config reflect default BASE behavior
@@ -745,7 +734,6 @@ export class PortalControllerRuntime {
     this.displayLockHeadPose = null;
     this.displayLockCtrlPose = null;
 
-    // NOTE: Drag handle end() removed - drag state managed by HeadSessionBridge (Phase 5 migration)
     this.activeDragMode = 'none';
     this.buttonDragRequested = false;
     this.aimDragRequested = false;
@@ -754,7 +742,6 @@ export class PortalControllerRuntime {
     this.lastButtonDragLeft = false;
     this.lastUnblendedPose = null;
     this.requestDragButtonActive(false);
-    // NOTE: Momentum cancellation now handled by HeadSessionBridge - Phase 4 migration
   }
 
   hasRecentPacket(nowMs: number): boolean {
@@ -1231,10 +1218,6 @@ export class PortalControllerRuntime {
       this.dragButtonActive = false;
     }
   }
-
-  // NOTE: computeCameraDrag() removed - Phase 5 migration
-  // Drag state machine and computation now handled by HeadSessionBridge via PortalPoseCameraController
-  // XRDevice calls advanceDragStateMachine() and beginCameraDrag()/computeCameraDragIncrements()/endCameraDrag()
 
   private commitDisplayLock(
     headPose: HeadPoseInput,

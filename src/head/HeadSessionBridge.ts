@@ -123,7 +123,6 @@ interface PortalHeadSessionHandle {
     nowSeconds: number;
   }): CameraDragIncrements | null;
   endCameraDrag(): void;
-  setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void;
   applyDragStretchParams(params: {
     stretchMinDistance?: number;
     stretchMinDist?: number;
@@ -367,11 +366,6 @@ export class HeadSessionBridge {
   // Configuration
   // ─────────────────────────────────────────────────────────────────────────
 
-  setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void {
-    if (this.destroyed) return;
-    this.handle.setDisplayDeltaCallback(cb);
-  }
-
   applyDragStretchParams(
     stretchMinDist: number,
     stretchLerpRange: number,
@@ -388,8 +382,7 @@ export class HeadSessionBridge {
   /**
    * Associate a pose session for internal display-delta computation during camera drag.
    * When set, the head session automatically computes display-space deltas without
-   * requiring an external callback. This is the preferred approach over
-   * setDisplayDeltaCallback().
+   * requiring an external callback.
    *
    * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
    */

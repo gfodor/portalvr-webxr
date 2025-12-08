@@ -210,11 +210,11 @@ class PortalPoseCameraNudger {
       );
     }
 
-    // With the display delta callback set (via XRDevice.ensureDisplayDeltaCallback), the C code
-    // uses the display-delta path which already applies correct "grab" semantics (negative X/Y).
-    // The callback transforms controller positions into display-space coordinates, properly
-    // handling head orientation at calibration (e.g., "up on screen" maps to ground plane
-    // when looking down). No additional sign corrections are needed here.
+    // With the pose session associated (via setPoseSession), the C code computes display-space
+    // deltas internally using the display-delta path which applies correct "grab" semantics
+    // (negative X/Y). This transforms controller positions into display-space coordinates,
+    // properly handling head orientation at calibration (e.g., "up on screen" maps to ground
+    // plane when looking down). No additional sign corrections are needed here.
 
     // 1) Vertical translation
     if (Math.abs(inc.incY) > 1e-6) {
@@ -301,18 +301,9 @@ class PortalPoseCameraNudger {
   }
 
   /**
-   * Set a callback that provides display-space deltas for camera drag.
-   * @deprecated Prefer using setPoseSession() which handles display-delta computation
-   * internally without requiring an external callback.
-   */
-  public setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void {
-    this.headSession.setDisplayDeltaCallback(cb);
-  }
-
-  /**
    * Associate a pose session for internal display-delta computation during camera drag.
    * When set, the head session automatically computes display-space deltas using the
-   * pose state's calibration data. This is the preferred approach over setDisplayDeltaCallback().
+   * pose state's calibration data.
    *
    * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
    */
@@ -580,21 +571,9 @@ export class PortalPoseCameraController {
   }
 
   /**
-   * Set a callback that provides display-space deltas for camera drag.
-   * @deprecated Prefer using setPoseSession() which handles display-delta computation
-   * internally without requiring an external callback.
-   */
-  public setDisplayDeltaCallback(cb: (() => Vec3Like | null) | undefined): void {
-    if (this.disposed) {
-      return;
-    }
-    this.controller?.setDisplayDeltaCallback(cb);
-  }
-
-  /**
    * Associate a pose session for internal display-delta computation during camera drag.
    * When set, the head session automatically computes display-space deltas using the
-   * pose state's calibration data. This is the preferred approach over setDisplayDeltaCallback().
+   * pose state's calibration data.
    *
    * @param poseSessionPtr Raw WASM pointer to portal_pose_session, or 0 to clear
    */
