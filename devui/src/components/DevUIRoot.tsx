@@ -43,6 +43,7 @@ type EmulatorSettingsState = {
 	connectToControllerViaLan: boolean;
 	cameraDragHand: CameraDragHand;
 	playerHeight: PlayerHeight;
+	automaticHeightResetEnabled: boolean;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -349,6 +350,26 @@ export function DevUIRoot({
 		[xrDevice],
 	);
 
+	const toggleAutomaticHeightReset = useCallback(
+		(event: ChangeEvent<HTMLInputElement>) => {
+			const enabled = event.currentTarget.checked;
+			setSettings((prev) => ({
+				...prev,
+				automaticHeightResetEnabled: enabled,
+			}));
+			updatePortalEmulatorConfig({
+				settings: { automaticHeightResetEnabled: enabled },
+			});
+			// Notify XRDevice of the change
+			try {
+				(xrDevice as any).setAutomaticHeightResetEnabled?.(enabled);
+			} catch {
+				// ignore if not supported
+			}
+		},
+		[xrDevice],
+	);
+
 	const closeOnScrimClick = useCallback(
 		(event: MouseEvent<HTMLDivElement>) => {
 			if (event.target === scrimRef.current) {
@@ -535,6 +556,18 @@ export function DevUIRoot({
 								<span>Sitting</span>
 							</button>
 						</div>
+					</section>
+
+					<section className="portal-section">
+						<h3 className="portal-section__heading">Automatic Height Reset</h3>
+						<label className="portal-toggle-row">
+							<input
+								type="checkbox"
+								checked={settings.automaticHeightResetEnabled}
+								onChange={toggleAutomaticHeightReset}
+							/>
+							<span>Keep your camera at the player height when moving camera</span>
+						</label>
 					</section>
 
 					<section className="portal-section">
@@ -746,6 +779,8 @@ function readSettings(config?: PortalEmulatorConfig | null): EmulatorSettingsSta
 			source?.settings?.connectToControllerViaLan !== false,
 		cameraDragHand: source?.settings?.cameraDragHand ?? 'left',
 		playerHeight: source?.settings?.playerHeight ?? 'standing',
+		automaticHeightResetEnabled:
+			source?.settings?.automaticHeightResetEnabled !== false,
 	};
 }
 

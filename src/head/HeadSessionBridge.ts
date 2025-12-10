@@ -138,6 +138,7 @@ interface PortalHeadSessionHandle {
   setOutlierRejection(enabled: boolean): void;
   resetSmoother(): void;
   setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void;
+  setAutomaticHeightResetEnabled(enabled: boolean): void;
   delete?(): void;
 }
 
@@ -466,5 +467,16 @@ export class HeadSessionBridge {
     if (this.destroyed) return;
     this.handle.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
     console.log('[HeadSessionBridge] setYOffsetLimits called on WASM handle');
+  }
+
+  /**
+   * Enable or disable automatic height reset.
+   * When enabled, the camera Y position snaps back to player height after a
+   * grace period when the user re-engages camera drag.
+   * @param enabled true to enable (default), false to disable
+   */
+  setAutomaticHeightResetEnabled(enabled: boolean): void {
+    if (this.destroyed) return;
+    this.handle.setAutomaticHeightResetEnabled(enabled);
   }
 }

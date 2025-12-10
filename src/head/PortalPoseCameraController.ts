@@ -323,6 +323,14 @@ class PortalPoseCameraNudger {
   }
 
   /**
+   * Enable or disable automatic height reset.
+   * @param enabled true to enable, false to disable
+   */
+  public setAutomaticHeightResetEnabled(enabled: boolean): void {
+    this.headSession.setAutomaticHeightResetEnabled(enabled);
+  }
+
+  /**
    * Update the base position Y for player height changes.
    * Resets the pose smoother to apply the change immediately.
    * @param y New base Y position in meters
@@ -646,6 +654,17 @@ export class PortalPoseCameraController {
       return;
     }
     this.controller?.setYOffsetLimits(yOffsetMinM, yOffsetMaxM);
+  }
+
+  /**
+   * Enable or disable automatic height reset.
+   * @param enabled true to enable, false to disable
+   */
+  public setAutomaticHeightResetEnabled(enabled: boolean): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setAutomaticHeightResetEnabled(enabled);
   }
 
   /**
