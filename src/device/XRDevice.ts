@@ -201,6 +201,54 @@ const POINTER_LOOK_PITCH_RAD_PER_PIXEL = 0.0020;
 const POINTER_LOOK_MAX_STEP_RAD = Math.PI / 3; // clamp spikes to 60 degrees per frame
 const POINTER_LOOK_SMOOTH_TAU_MS = 35;
 
+// Secret key for accessing original pointer lock APIs (set by pointer-lock-guard.ts)
+const PORTAL_POINTER_LOCK_KEY = '__PORTALVR_POINTER_LOCK_ORIGINALS__';
+
+interface PointerLockOriginals {
+  requestPointerLock: typeof Element.prototype.requestPointerLock;
+  exitPointerLock: typeof Document.prototype.exitPointerLock;
+  mozRequestPointerLock?: (this: Element) => void;
+  webkitRequestPointerLock?: (this: Element) => void;
+  msRequestPointerLock?: (this: Element) => void;
+  mozExitPointerLock?: (this: Document) => void;
+  webkitExitPointerLock?: (this: Document) => void;
+  msExitPointerLock?: (this: Document) => void;
+}
+
+/**
+ * Gets the original pointer lock APIs that were captured before site scripts ran.
+ * Falls back to current prototypes if the guard script didn't run (non-extension usage).
+ */
+function getPointerLockOriginals(): PointerLockOriginals {
+  if (typeof window !== 'undefined') {
+    const originals = (window as typeof window & Record<string, unknown>)[PORTAL_POINTER_LOCK_KEY] as PointerLockOriginals | undefined;
+    if (originals) {
+      return originals;
+    }
+  }
+  // Fallback: use current prototype methods (no guard script present)
+  const elementProto = Element.prototype as Element & {
+    mozRequestPointerLock?: () => void;
+    webkitRequestPointerLock?: () => void;
+    msRequestPointerLock?: () => void;
+  };
+  const docProto = Document.prototype as Document & {
+    mozExitPointerLock?: () => void;
+    webkitExitPointerLock?: () => void;
+    msExitPointerLock?: () => void;
+  };
+  return {
+    requestPointerLock: Element.prototype.requestPointerLock,
+    exitPointerLock: Document.prototype.exitPointerLock,
+    mozRequestPointerLock: elementProto.mozRequestPointerLock,
+    webkitRequestPointerLock: elementProto.webkitRequestPointerLock,
+    msRequestPointerLock: elementProto.msRequestPointerLock,
+    mozExitPointerLock: docProto.mozExitPointerLock,
+    webkitExitPointerLock: docProto.webkitExitPointerLock,
+    msExitPointerLock: docProto.msExitPointerLock,
+  };
+}
+
 // Remote/host trackpad mapping constants (tuned for comfortable motion)
 const TRACKPAD_YAW_RADIANS_PER_UNIT = Math.PI / 2;        // Δx across full width -> ±π/2
 const TRACKPAD_PITCH_RADIANS_PER_UNIT = Math.PI / 4;      // Δy across full height -> ±π/4 (up = look up)
@@ -3153,16 +3201,14 @@ export class XRDevice {
     if (!session || session[P_SESSION].mode !== 'immersive-vr') {
       return;
     }
-    const container = this[P_DEVICE].canvasContainer as HTMLElement & {
-      mozRequestPointerLock?: () => void;
-      webkitRequestPointerLock?: () => void;
-      msRequestPointerLock?: () => void;
-    };
+    const container = this[P_DEVICE].canvasContainer as HTMLElement;
     if (this.getPointerLockElement() === container) {
       return;
     }
+    // Use original pointer lock APIs (bypasses site hijacking via pointer-lock-guard.ts)
+    const originals = getPointerLockOriginals();
     type PointerLockRequest = ((options?: { unadjustedMovement?: boolean }) => Promise<void> | void) | undefined;
-    const standardRequest = container.requestPointerLock as unknown as PointerLockRequest;
+    const standardRequest = originals.requestPointerLock as unknown as PointerLockRequest;
     if (standardRequest) {
       try {
         const maybePromise = standardRequest.call(container, {
@@ -3183,9 +3229,9 @@ export class XRDevice {
     }
 
     const legacyRequest =
-      container.mozRequestPointerLock ??
-      container.webkitRequestPointerLock ??
-      container.msRequestPointerLock;
+      originals.mozRequestPointerLock ??
+      originals.webkitRequestPointerLock ??
+      originals.msRequestPointerLock;
     try {
       legacyRequest?.call(container);
     } catch {
@@ -3290,19 +3336,16 @@ export class XRDevice {
     if (lockedElement !== this[P_DEVICE].canvasContainer) {
       return;
     }
-    const doc = document as Document & {
-      mozExitPointerLock?: () => void;
-      webkitExitPointerLock?: () => void;
-      msExitPointerLock?: () => void;
-    };
+    // Use original pointer lock APIs (bypasses site hijacking via pointer-lock-guard.ts)
+    const originals = getPointerLockOriginals();
     const exitPointerLock =
-      doc.exitPointerLock ??
-      doc.mozExitPointerLock ??
-      doc.webkitExitPointerLock ??
-      doc.msExitPointerLock;
+      originals.exitPointerLock ??
+      originals.mozExitPointerLock ??
+      originals.webkitExitPointerLock ??
+      originals.msExitPointerLock;
     if (typeof exitPointerLock === 'function') {
       try {
-        exitPointerLock.call(doc);
+        exitPointerLock.call(document);
       } catch {
         // ignore exit failures
       }

@@ -92,6 +92,16 @@ export default [
 		},
 	},
 	{
+		input: 'lib/pointer-lock-guard.js',
+		external: externalModules,
+		plugins: [nodeResolve(), commonjs()],
+		output: {
+			file: 'build/pointer-lock-guard.js',
+			format: 'iife',
+			inlineDynamicImports: true,
+		},
+	},
+	{
 		input: 'lib/service-worker.js',
 		external: externalModules,
 		plugins: [createRuntimeAlias(), nodeResolve(), commonjs()],

@@ -98,8 +98,8 @@ function ensureRuntimeInstalled(): void {
 }
 
 /**
- * Ensures that iframes with xr-spatial-tracking permission also get usb permission.
- * This allows WebXR content in iframes to access USB devices when the extension is installed.
+ * Ensures that iframes with an allow attribute get usb and camera permissions.
+ * This allows WebXR content in iframes to access USB devices and camera when the extension is installed.
  * Only runs in the top-level frame.
  */
 function ensureIframeUsbPermissions(): void {
@@ -111,18 +111,17 @@ function ensureIframeUsbPermissions(): void {
 
 	console.log('[IFRAME] ensureIframeUsbPermissions starting in top-level frame');
 
-	const XR_PERMISSION = 'xr-spatial-tracking';
-	const USB_PERMISSION = 'usb';
+	const REQUIRED_PERMISSIONS = ['usb', 'camera'];
 
 	// Track iframes we've already processed to avoid infinite reload loops
 	const processedIframes = new WeakSet<HTMLIFrameElement>();
 
 	/**
-	 * Adds usb permission to an iframe's allow attribute if it has xr-spatial-tracking.
+	 * Adds usb and camera permissions to an iframe's allow attribute.
 	 * If the iframe already has a src and has started loading, we need to reload it
 	 * for the new permissions to take effect.
 	 */
-	function addUsbPermissionToIframe(iframe: HTMLIFrameElement): void {
+	function addPermissionsToIframe(iframe: HTMLIFrameElement): void {
 		// Skip if we've already processed this iframe
 		if (processedIframes.has(iframe)) {
 			return;
@@ -137,25 +136,23 @@ function ensureIframeUsbPermissions(): void {
 			return;
 		}
 
-		// Check if iframe has xr-spatial-tracking permission
-		if (!allowAttr.includes(XR_PERMISSION)) {
-			console.log('[IFRAME] Skipping - no xr-spatial-tracking permission');
-			return;
-		}
+		// Determine which permissions need to be added
+		const permissionsToAdd = REQUIRED_PERMISSIONS.filter(
+			(perm) => !allowAttr.includes(perm),
+		);
 
-		// Check if usb permission is already present
-		if (allowAttr.includes(USB_PERMISSION)) {
-			console.log('[IFRAME] Skipping - usb permission already present');
+		if (permissionsToAdd.length === 0) {
+			console.log('[IFRAME] Skipping - all required permissions already present');
 			return;
 		}
 
 		// Mark as processed before modifying to prevent re-processing on reload
 		processedIframes.add(iframe);
 
-		// Add usb permission to the allow attribute
-		const newAllowAttr = allowAttr + '; ' + USB_PERMISSION;
+		// Add missing permissions to the allow attribute
+		const newAllowAttr = allowAttr + '; ' + permissionsToAdd.join('; ');
 		iframe.setAttribute('allow', newAllowAttr);
-		console.log('[IFRAME] Added usb permission. New allow=', newAllowAttr);
+		console.log('[IFRAME] Added permissions:', permissionsToAdd.join(', '), '. New allow=', newAllowAttr);
 
 		// If the iframe already has a src, we need to reload it for permissions to take effect.
 		// The permission policy is evaluated when navigation begins, so modifying the allow
@@ -181,7 +178,7 @@ function ensureIframeUsbPermissions(): void {
 		const iframes = document.querySelectorAll('iframe');
 		console.log('[IFRAME] processAllIframes found', iframes.length, 'iframes');
 		iframes.forEach((iframe) => {
-			addUsbPermissionToIframe(iframe as HTMLIFrameElement);
+			addPermissionsToIframe(iframe as HTMLIFrameElement);
 		});
 	}
 
@@ -197,7 +194,7 @@ function ensureIframeUsbPermissions(): void {
 					mutation.addedNodes.forEach((node) => {
 						if (node instanceof HTMLIFrameElement) {
 							console.log('[IFRAME] MutationObserver: new iframe added');
-							addUsbPermissionToIframe(node);
+							addPermissionsToIframe(node);
 						} else if (node instanceof Element) {
 							// Check for iframes inside added elements
 							const nestedIframes = node.querySelectorAll('iframe');
@@ -205,7 +202,7 @@ function ensureIframeUsbPermissions(): void {
 								console.log('[IFRAME] MutationObserver: found', nestedIframes.length, 'nested iframes in added element');
 							}
 							nestedIframes.forEach((iframe) => {
-								addUsbPermissionToIframe(iframe as HTMLIFrameElement);
+								addPermissionsToIframe(iframe as HTMLIFrameElement);
 							});
 						}
 					});
@@ -214,7 +211,7 @@ function ensureIframeUsbPermissions(): void {
 				else if (mutation.type === 'attributes' && mutation.attributeName === 'allow') {
 					if (mutation.target instanceof HTMLIFrameElement) {
 						console.log('[IFRAME] MutationObserver: allow attribute changed on iframe');
-						addUsbPermissionToIframe(mutation.target);
+						addPermissionsToIframe(mutation.target);
 					}
 				}
 			}

@@ -21,6 +21,8 @@ const RUNTIME_ASSET_BASE_SETTER = '__PORTALVR_SET_ASSET_BASE__';
 const RUNTIME_INSTALL_FLAG = '__iweRuntimeInstalled__';
 const RUNTIME_INSTALL_PROMISE_KEY = '__iweRuntimeInstallPromise__';
 const RUNTIME_CONTENT_SCRIPT_ID = 'iwe-runtime-preload';
+const POINTER_LOCK_GUARD_SCRIPT_ID = 'iwe-pointer-lock-guard';
+const POINTER_LOCK_GUARD_SCRIPT_PATH = 'build/pointer-lock-guard.js';
 const CONTEXT_BRIDGE_DISABLE_GLOBAL = '__PORTALVR_DISABLE_CONTEXT_BRIDGE__';
 // Removed: CONFIG_READY_RESOLVED_KEY / CONFIG_READY_PROMISE_KEY / CONFIG_READY_RESOLVER_KEY
 const BLOCKED_PROTOCOL_PREFIXES = ['chrome:', 'edge:', 'devtools:', 'about:', 'view-source:', 'chrome-extension:'];
@@ -725,12 +727,37 @@ async function ensureRuntimePreloadRegistered(): Promise<void> {
 		return;
 	}
 	try {
-		const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [RUNTIME_CONTENT_SCRIPT_ID] }).catch(() => []);
-		if (existing && existing.length > 0) {
-			return;
+		// Check for existing registrations
+		const existingIds = [POINTER_LOCK_GUARD_SCRIPT_ID, RUNTIME_CONTENT_SCRIPT_ID];
+		const existing = await chrome.scripting.getRegisteredContentScripts({ ids: existingIds }).catch(() => []);
+		const existingIdSet = new Set((existing || []).map((s: { id: string }) => s.id));
+
+		const scriptsToRegister: Array<{
+			id: string;
+			js: string[];
+			matches: string[];
+			allFrames: boolean;
+			runAt: string;
+			persistAcrossSessions: boolean;
+			world: string;
+		}> = [];
+
+		// Register pointer lock guard first (runs before runtime to hijack APIs)
+		if (!existingIdSet.has(POINTER_LOCK_GUARD_SCRIPT_ID)) {
+			scriptsToRegister.push({
+				id: POINTER_LOCK_GUARD_SCRIPT_ID,
+				js: [POINTER_LOCK_GUARD_SCRIPT_PATH],
+				matches: ['<all_urls>'],
+				allFrames: true,
+				runAt: 'document_start',
+				persistAcrossSessions: true,
+				world: 'MAIN',
+			});
 		}
-		await chrome.scripting.registerContentScripts([
-			{
+
+		// Register runtime preload script
+		if (!existingIdSet.has(RUNTIME_CONTENT_SCRIPT_ID)) {
+			scriptsToRegister.push({
 				id: RUNTIME_CONTENT_SCRIPT_ID,
 				js: [RUNTIME_SCRIPT_PATH],
 				matches: ['<all_urls>'],
@@ -738,11 +765,15 @@ async function ensureRuntimePreloadRegistered(): Promise<void> {
 				runAt: 'document_start',
 				persistAcrossSessions: true,
 				world: 'MAIN',
-			},
-		]);
-		logDebug('registered runtime preload script');
+			});
+		}
+
+		if (scriptsToRegister.length > 0) {
+			await chrome.scripting.registerContentScripts(scriptsToRegister);
+			logDebug('registered content scripts', { ids: scriptsToRegister.map(s => s.id) });
+		}
 	} catch (error) {
-		logDebug('failed to register runtime preload script', { error });
+		logDebug('failed to register content scripts', { error });
 	}
 }
 
