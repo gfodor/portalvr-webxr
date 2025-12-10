@@ -318,6 +318,7 @@ export interface DevUI {
 		status: ControllerPromptStatus,
 		swipeVariant?: ControllerSwipeVariant,
 	): void;
+  isModalOpen(): boolean;
 }
 
 export interface SEMConstructor {
@@ -1735,6 +1736,11 @@ export class XRDevice {
 		return;
 	}
 	if (!this.pointerLookListenersAttached || this.pointerLockActive) {
+		return;
+	}
+	// Allow scrolling when settings/help modal is open
+	const devui = this[P_DEVICE].devui;
+	if (devui?.isModalOpen?.()) {
 		return;
 	}
 	

@@ -34,6 +34,7 @@ type DevUIRootProps = {
 	xrDevice: XRDevice;
 	controllerPrompt: 'qr' | 'tracking-issues' | 'focus-lost' | 'swipe' | 'hidden';
 	swipeVariant?: 'base' | 'recenter' | 'trackpad' | 'quest-stick';
+	onModalOpenChange?: (open: boolean) => void;
 };
 
 type EmulatorSettingsState = {
@@ -57,9 +58,15 @@ export function DevUIRoot({
 	xrDevice,
 	controllerPrompt,
 	swipeVariant = 'base',
+	onModalOpenChange,
 }: DevUIRootProps): JSX.Element {
 	const [isSettingsOpen, setSettingsOpen] = useState(false);
 	const [isHelpOpen, setHelpOpen] = useState(false);
+
+	// Notify parent when any modal opens/closes
+	useEffect(() => {
+		onModalOpenChange?.(isSettingsOpen || isHelpOpen);
+	}, [isSettingsOpen, isHelpOpen, onModalOpenChange]);
 	const [settings, setSettings] = useState<EmulatorSettingsState>(() =>
 		readSettings(portalConfigProvider.getConfigSync()),
 	);

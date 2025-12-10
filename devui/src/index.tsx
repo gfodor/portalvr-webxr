@@ -27,9 +27,18 @@ export class DevUI {
 	private controllerConnected = false;
 	private controllerPrompt: ControllerPromptStatus = 'qr';
 	private swipeVariant: SwipeVariant = 'base';
+	private _isModalOpen = false;
 
 	constructor(xrDevice: XRDevice) {
 		this.xrDevice = xrDevice;
+	}
+
+	public isModalOpen(): boolean {
+		return this._isModalOpen;
+	}
+
+	public setModalOpen(open: boolean): void {
+		this._isModalOpen = open;
 	}
 
 	public get devUICanvas(): HTMLCanvasElement {
@@ -158,6 +167,7 @@ export class DevUI {
 				xrDevice={this.xrDevice}
 				controllerPrompt={this.controllerPrompt}
 				swipeVariant={this.swipeVariant}
+				onModalOpenChange={(open) => this.setModalOpen(open)}
 			/>,
 		);
 	}

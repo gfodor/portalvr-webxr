@@ -163,6 +163,7 @@ ${buildFontFaceDeclaration()}
   justify-content: center;
   background: var(--portal-color-scrim);
   pointer-events: auto;
+  padding: var(--portal-spacing-lg);
 }
 
 .portal-settings-scrim[aria-hidden="false"] {
@@ -172,6 +173,7 @@ ${buildFontFaceDeclaration()}
 .portal-settings-card {
   width: min(576px, 75vw);
   max-width: min(576px, 88vw);
+  max-height: 100%;
   background: var(--portal-color-card);
   color: var(--portal-color-text-primary);
   border-radius: var(--portal-radius-card);
@@ -179,6 +181,7 @@ ${buildFontFaceDeclaration()}
   display: flex;
   flex-direction: column;
   gap: var(--portal-spacing-md);
+  overflow-y: auto;
 }
 
 .portal-settings-card h2 {
