@@ -292,6 +292,9 @@ export class PortalControllerRuntime {
   private dragSource: HandId | null = null;
   private lastButtonDragRight = false;
   private lastButtonDragLeft = false;
+  /** Raw (unmasked) camera drag button states for snapback suppression */
+  private lastButtonDragRightRaw = false;
+  private lastButtonDragLeftRaw = false;
   /** Which hand(s) can trigger camera drag in dual-tracked mode: 'left', 'right', or 'both' */
   private cameraDragHand: 'left' | 'right' | 'both' = 'left';
   /** Player height mode: 'standing' (1.5m) or 'sitting' (1.0m) */
@@ -487,6 +490,9 @@ export class PortalControllerRuntime {
 
     this.lastButtonDragRight = rightDrag;
     this.lastButtonDragLeft = leftDrag;
+    // Store raw (unmasked) button states for snapback suppression
+    this.lastButtonDragRightRaw = rightDragRaw;
+    this.lastButtonDragLeftRaw = leftDragRaw;
 
     // Expose whether any drag button is currently active to the camera-drag pipeline.
     this.buttonDragRequested = this.dragSource != null;
@@ -698,8 +704,8 @@ export class PortalControllerRuntime {
     result.buttonDragRequested = this.buttonDragRequested;
     result.dragSourceHand = this.dragSource === 'left' ? 1 : 0;
     // Raw button states for snapback suppression (independent of hand mask)
-    result.leftCameraDragButtonRaw = this.lastButtonDragLeft;
-    result.rightCameraDragButtonRaw = this.lastButtonDragRight;
+    result.leftCameraDragButtonRaw = this.lastButtonDragLeftRaw;
+    result.rightCameraDragButtonRaw = this.lastButtonDragRightRaw;
 
     this.lastUnblendedPose = rightUnblended ?? null;
 
@@ -758,6 +764,8 @@ export class PortalControllerRuntime {
     this.dragSource = null;
     this.lastButtonDragRight = false;
     this.lastButtonDragLeft = false;
+    this.lastButtonDragRightRaw = false;
+    this.lastButtonDragLeftRaw = false;
     this.lastUnblendedPose = null;
     this.requestDragButtonActive(false);
   }
