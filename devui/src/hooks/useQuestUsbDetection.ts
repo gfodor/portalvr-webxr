@@ -642,9 +642,21 @@ export function useQuestUsbDetection(
 			return;
 		}
 
+		// Chrome doesn't show the USB device chooser dialog in fullscreen mode.
+		// Exit fullscreen first and return - the user will need to click again.
+		// This is necessary because the user gesture gets consumed by exiting fullscreen,
+		// leaving no valid gesture for the permission dialog.
+		if (isInFullscreen()) {
+			await exitFullscreen();
+			// Stay in needs-permission state so the button is still visible
+			setState({ kind: 'needs-permission' });
+			return;
+		}
+
 		setState({ kind: 'requesting-permission' });
 		try {
 			const device = await manager.requestDevice({ filters: QUEST_DEVICE_FILTERS });
+
 			if (!device) {
 				setState({ kind: 'needs-permission' });
 				return;
@@ -1418,6 +1430,53 @@ function formatError(error: unknown): string {
 		return error.message || 'Unexpected error while talking to Quest.';
 	}
 	return 'Unexpected error while talking to Quest.';
+}
+
+/**
+ * Returns true if the document is currently in fullscreen mode.
+ */
+function isInFullscreen(): boolean {
+	if (typeof document === 'undefined') {
+		return false;
+	}
+	const doc = document as Document & {
+		webkitFullscreenElement?: Element | null;
+		mozFullScreenElement?: Element | null;
+		msFullscreenElement?: Element | null;
+	};
+	return !!(
+		doc.fullscreenElement ??
+		doc.webkitFullscreenElement ??
+		doc.mozFullScreenElement ??
+		doc.msFullscreenElement
+	);
+}
+
+/**
+ * Exits fullscreen mode if currently active.
+ */
+async function exitFullscreen(): Promise<void> {
+	if (typeof document === 'undefined') {
+		return;
+	}
+	const doc = document as Document & {
+		webkitExitFullscreen?: () => Promise<void>;
+		mozCancelFullScreen?: () => Promise<void>;
+		msExitFullscreen?: () => Promise<void>;
+	};
+	const exit =
+		doc.exitFullscreen ??
+		doc.webkitExitFullscreen ??
+		doc.mozCancelFullScreen ??
+		doc.msExitFullscreen;
+	if (!exit) {
+		return;
+	}
+	try {
+		await exit.call(doc);
+	} catch {
+		// Ignore errors exiting fullscreen
+	}
 }
 
 class QuestCredentialStore implements AdbCredentialStore {
