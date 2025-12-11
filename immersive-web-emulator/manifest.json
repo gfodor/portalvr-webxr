@@ -1,7 +1,7 @@
 {
 	"name": "PortalVR for WebXR",
 	"short_name": "PortalVR WebXR",
-	"version": "2.0.2",
+	"version": "2.0.4",
 	"minimum_chrome_version": "96",
 	"description": "Play WebXR experiences on your laptop using your phone as a fully tracked controller—no headset required.",
 	"author": "Portal VR, Inc. (support@portalvr.io)",
