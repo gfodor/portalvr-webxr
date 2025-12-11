@@ -246,6 +246,14 @@ class PortalPoseCameraNudger {
   }
 
   /**
+   * Set raw camera drag button state for both controllers (for snapback suppression).
+   * This is independent of the camera drag hand mask.
+   */
+  public setCameraDragButtonsRaw(leftPressed: boolean, rightPressed: boolean): void {
+    this.headSession.setCameraDragButtonsRaw(leftPressed, rightPressed);
+  }
+
+  /**
    * Cancel any active momentum immediately.
    */
   public cancelMomentum(): void {
@@ -572,6 +580,17 @@ export class PortalPoseCameraController {
       return;
     }
     this.controller?.setDragButtonPressed(pressed);
+  }
+
+  /**
+   * Set raw camera drag button state for both controllers (for snapback suppression).
+   * This is independent of the camera drag hand mask.
+   */
+  public setCameraDragButtonsRaw(leftPressed: boolean, rightPressed: boolean): void {
+    if (this.disposed) {
+      return;
+    }
+    this.controller?.setCameraDragButtonsRaw(leftPressed, rightPressed);
   }
 
   /**

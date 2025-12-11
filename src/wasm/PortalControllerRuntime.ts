@@ -26,10 +26,14 @@ interface PortalControllerUpdate {
   stretchAmount: number;
   /** Display lock state for drag state machine */
   displayLocked: boolean;
-  /** Whether BUTTON drag is requested (squeeze held) */
+  /** Whether BUTTON drag is requested (squeeze held) - masked by hand preference */
   buttonDragRequested: boolean;
   /** Which hand is the drag source (0=right, 1=left) */
   dragSourceHand: number;
+  /** Raw camera drag button state for left controller (unmasked) */
+  leftCameraDragButtonRaw: boolean;
+  /** Raw camera drag button state for right controller (unmasked) */
+  rightCameraDragButtonRaw: boolean;
   cameraFovDeg: number;
 }
 
@@ -569,6 +573,8 @@ export class PortalControllerRuntime {
       displayLocked: false,
       buttonDragRequested: false,
       dragSourceHand: 0,
+      leftCameraDragButtonRaw: false,
+      rightCameraDragButtonRaw: false,
       cameraFovDeg: 0,
     };
 
@@ -691,6 +697,9 @@ export class PortalControllerRuntime {
     result.displayLocked = this.displayLockActive;
     result.buttonDragRequested = this.buttonDragRequested;
     result.dragSourceHand = this.dragSource === 'left' ? 1 : 0;
+    // Raw button states for snapback suppression (independent of hand mask)
+    result.leftCameraDragButtonRaw = this.lastButtonDragLeft;
+    result.rightCameraDragButtonRaw = this.lastButtonDragRight;
 
     this.lastUnblendedPose = rightUnblended ?? null;
 

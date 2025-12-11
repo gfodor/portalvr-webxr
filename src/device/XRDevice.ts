@@ -2413,6 +2413,14 @@ export class XRDevice {
       this.lastButtonDragActive = isButtonDragActive;
     }
 
+    // Always update raw button states for snapback suppression.
+    // This ensures snapback is suppressed if EITHER controller's button is pressed,
+    // regardless of the camera drag hand mask setting.
+    this.portalPoseCamera?.setCameraDragButtonsRaw(
+      update.leftCameraDragButtonRaw,
+      update.rightCameraDragButtonRaw,
+    );
+
     // Advance the drag state machine to determine mode transitions
     const dragResult = this.portalPoseCamera?.advanceDragStateMachine({
       displayLocked: update.displayLocked,

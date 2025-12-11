@@ -95,6 +95,7 @@ interface PortalHeadSessionHandle {
   composeFinalPose(smoothedPose: PoseLike): PoseLike;
   composeFinalPoseFromTargets(smoothedPose: PoseLike): PoseLike;
   setDragButtonPressed(pressed: boolean): void;
+  setCameraDragButtonsRaw(leftPressed: boolean, rightPressed: boolean): void;
   advanceMomentum(nowNs: number, arPoseActive: boolean): MomentumResult;
   cancelMomentum(): void;
   recordDragIncrement(params: {
@@ -283,6 +284,18 @@ export class HeadSessionBridge {
   setDragButtonPressed(pressed: boolean): void {
     if (this.destroyed) return;
     this.handle.setDragButtonPressed(pressed);
+  }
+
+  /**
+   * Set raw camera drag button state for both controllers (for snapback suppression).
+   * This is independent of the camera drag hand mask.
+   * Snapback will be suppressed if either button is pressed, regardless of mask.
+   * @param leftPressed true if left controller's camera drag button is pressed
+   * @param rightPressed true if right controller's camera drag button is pressed
+   */
+  setCameraDragButtonsRaw(leftPressed: boolean, rightPressed: boolean): void {
+    if (this.destroyed) return;
+    this.handle.setCameraDragButtonsRaw(leftPressed, rightPressed);
   }
 
   advanceDragStateMachine(
