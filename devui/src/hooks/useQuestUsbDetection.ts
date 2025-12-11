@@ -38,7 +38,7 @@ const ADB_SOCKET_NAME = 'localabstract:PORTALVR-ADB';
 
 const LOG_PREFIX = '[QuestUSB]';
 export const ADB_BUSY_MESSAGE =
-	"Another app is connected to your Quest. Try closing Unreal, Unity, Android Studio, SideQuest, or run 'adb kill-server' from the command line.";
+	"Another app is connected to your Quest. Try closing Unreal, Unity, Android Studio, SideQuest, the Oculus VR Runtime Service, or run 'adb kill-server' from the command line.";
 
 function logDebug(...args: unknown[]): void {
 	// Keep lightweight runtime logging to help diagnose WebUSB flakiness
