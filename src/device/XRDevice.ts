@@ -4102,9 +4102,9 @@ export class XRDevice {
 		this.portalPoseCamera?.setBasePositionY(newY);
 	}
 
-	/** Enable or disable automatic height reset (camera snapback to player height) */
-	public setAutomaticHeightResetEnabled(enabled: boolean): void {
-		this.portalPoseCamera?.setAutomaticHeightResetEnabled(enabled);
+	/** Enable or disable snapback (return to origin when releasing camera drag) */
+	public setSnapbackEnabled(enabled: boolean): void {
+		this.portalPoseCamera?.setSnapbackEnabled(enabled);
 	}
 
   private ensureDefaultWebRTCStreamer() {

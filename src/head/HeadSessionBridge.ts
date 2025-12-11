@@ -138,7 +138,7 @@ interface PortalHeadSessionHandle {
   setOutlierRejection(enabled: boolean): void;
   resetSmoother(): void;
   setYOffsetLimits(yOffsetMinM: number, yOffsetMaxM: number): void;
-  setAutomaticHeightResetEnabled(enabled: boolean): void;
+  setSnapbackEnabled(enabled: boolean): void;
   delete?(): void;
 }
 
@@ -470,13 +470,13 @@ export class HeadSessionBridge {
   }
 
   /**
-   * Enable or disable automatic height reset.
-   * When enabled, the camera Y position snaps back to player height after a
-   * grace period when the user re-engages camera drag.
+   * Enable or disable snapback (automatic position reset).
+   * When enabled, releasing camera drag triggers an animated return to the
+   * origin position (X=0, Y=0, Z=0). Rotations remain persistent.
    * @param enabled true to enable (default), false to disable
    */
-  setAutomaticHeightResetEnabled(enabled: boolean): void {
+  setSnapbackEnabled(enabled: boolean): void {
     if (this.destroyed) return;
-    this.handle.setAutomaticHeightResetEnabled(enabled);
+    this.handle.setSnapbackEnabled(enabled);
   }
 }

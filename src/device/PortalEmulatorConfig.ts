@@ -45,8 +45,8 @@ export interface PortalEmulatorConfig {
     cameraDragHand: CameraDragHand;
     /** Player height mode. 'standing' = 1.5m height, 'sitting' = 1.0m height. Default: 'standing' */
     playerHeight: PlayerHeight;
-    /** Enable automatic height reset when camera drag resumes. Default: true */
-    automaticHeightResetEnabled: boolean;
+    /** Enable snapback (return to origin) when camera drag ends. Default: true */
+    snapbackEnabled: boolean;
   };
   adbUsb: AdbUsbConfig;
   /** reserved for future migrations */
@@ -73,7 +73,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
     connectToControllerViaLan: true,
     cameraDragHand: 'left',
     playerHeight: 'standing',
-    automaticHeightResetEnabled: true,
+    snapbackEnabled: true,
   },
   adbUsb: { ...DEFAULT_ADB_USB },
   version: 1,
@@ -144,10 +144,10 @@ function normalizeConfigShape(candidate: unknown): PortalEmulatorConfig | null {
       playerHeight: normalizePlayerHeight(
         (settingsCandidate as { playerHeight?: unknown }).playerHeight,
       ),
-      automaticHeightResetEnabled:
-        typeof (settingsCandidate as { automaticHeightResetEnabled?: unknown }).automaticHeightResetEnabled === 'boolean'
-          ? ((settingsCandidate as { automaticHeightResetEnabled: boolean }).automaticHeightResetEnabled)
-          : DEFAULT_CONFIG.settings.automaticHeightResetEnabled,
+      snapbackEnabled:
+        typeof (settingsCandidate as { snapbackEnabled?: unknown }).snapbackEnabled === 'boolean'
+          ? ((settingsCandidate as { snapbackEnabled: boolean }).snapbackEnabled)
+          : DEFAULT_CONFIG.settings.snapbackEnabled,
     },
     adbUsb: normalizeAdbUsbCandidate(adbUsbCandidate, DEFAULT_ADB_USB),
     version:
