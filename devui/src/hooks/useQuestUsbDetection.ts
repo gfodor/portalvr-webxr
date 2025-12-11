@@ -147,6 +147,7 @@ export function useQuestUsbDetection(
 	const onFirstLaunchRef = useRef(onFirstLaunch);
 	const adbStreamerRef = useRef<AdbControllerStreamer | null>(null);
 	const adbCallbacksRef = useRef(adbCallbacks);
+	const exitedFullscreenForUsbRef = useRef(false);
 
 	useEffect(() => {
 		onFirstLaunchRef.current = onFirstLaunch;
@@ -648,6 +649,8 @@ export function useQuestUsbDetection(
 		// leaving no valid gesture for the permission dialog.
 		if (isInFullscreen()) {
 			await exitFullscreen();
+			// Track that we exited fullscreen for USB so we can re-enter after permission granted
+			exitedFullscreenForUsbRef.current = true;
 			// Stay in needs-permission state so the button is still visible
 			setState({ kind: 'needs-permission' });
 			return;
@@ -661,6 +664,13 @@ export function useQuestUsbDetection(
 				setState({ kind: 'needs-permission' });
 				return;
 			}
+
+			// Re-enter fullscreen if we exited it for USB permission
+			if (exitedFullscreenForUsbRef.current) {
+				exitedFullscreenForUsbRef.current = false;
+				await requestFullscreen();
+			}
+
 			setHasPermission(true);
 			setState({
 				kind: 'waiting',
@@ -1476,6 +1486,38 @@ async function exitFullscreen(): Promise<void> {
 		await exit.call(doc);
 	} catch {
 		// Ignore errors exiting fullscreen
+	}
+}
+
+/**
+ * Requests fullscreen on the canvas container if available.
+ */
+async function requestFullscreen(): Promise<void> {
+	if (typeof document === 'undefined') {
+		return;
+	}
+	// Try to find the canvas container first, otherwise use documentElement
+	const container =
+		document.querySelector('.portal-canvas-container') ??
+		document.documentElement;
+	const anyContainer = container as Element & {
+		requestFullscreen?: () => Promise<void>;
+		webkitRequestFullscreen?: () => Promise<void>;
+		mozRequestFullScreen?: () => Promise<void>;
+		msRequestFullscreen?: () => Promise<void>;
+	};
+	const request =
+		anyContainer.requestFullscreen ??
+		anyContainer.webkitRequestFullscreen ??
+		anyContainer.mozRequestFullScreen ??
+		anyContainer.msRequestFullscreen;
+	if (!request) {
+		return;
+	}
+	try {
+		await request.call(anyContainer);
+	} catch {
+		// Ignore errors entering fullscreen
 	}
 }
 
