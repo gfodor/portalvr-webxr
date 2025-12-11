@@ -43,7 +43,7 @@ type EmulatorSettingsState = {
 	connectToControllerViaLan: boolean;
 	cameraDragHand: CameraDragHand;
 	playerHeight: PlayerHeight;
-	automaticHeightResetEnabled: boolean;
+	snapbackEnabled: boolean;
 };
 
 const SIGCF_PAIRING_BASE_URL = 'https://portalvr.io/controller';
@@ -350,19 +350,19 @@ export function DevUIRoot({
 		[xrDevice],
 	);
 
-	const toggleAutomaticHeightReset = useCallback(
+	const toggleSnapback = useCallback(
 		(event: ChangeEvent<HTMLInputElement>) => {
 			const enabled = event.currentTarget.checked;
 			setSettings((prev) => ({
 				...prev,
-				automaticHeightResetEnabled: enabled,
+				snapbackEnabled: enabled,
 			}));
 			updatePortalEmulatorConfig({
-				settings: { automaticHeightResetEnabled: enabled },
+				settings: { snapbackEnabled: enabled },
 			});
 			// Notify XRDevice of the change
 			try {
-				(xrDevice as any).setAutomaticHeightResetEnabled?.(enabled);
+				(xrDevice as any).setSnapbackEnabled?.(enabled);
 			} catch {
 				// ignore if not supported
 			}
@@ -559,14 +559,14 @@ export function DevUIRoot({
 					</section>
 
 					<section className="portal-section">
-						<h3 className="portal-section__heading">Automatic Height Reset</h3>
+						<h3 className="portal-section__heading">Automatic Head Reset</h3>
 						<label className="portal-toggle-row">
 							<input
 								type="checkbox"
-								checked={settings.automaticHeightResetEnabled}
-								onChange={toggleAutomaticHeightReset}
+								checked={settings.snapbackEnabled}
+								onChange={toggleSnapback}
 							/>
-							<span>Keep your camera at the player height when moving camera</span>
+							<span>Return to the head position after releasing camera drag</span>
 						</label>
 					</section>
 
@@ -779,8 +779,8 @@ function readSettings(config?: PortalEmulatorConfig | null): EmulatorSettingsSta
 			source?.settings?.connectToControllerViaLan !== false,
 		cameraDragHand: source?.settings?.cameraDragHand ?? 'left',
 		playerHeight: source?.settings?.playerHeight ?? 'standing',
-		automaticHeightResetEnabled:
-			source?.settings?.automaticHeightResetEnabled !== false,
+		snapbackEnabled:
+			source?.settings?.snapbackEnabled !== false,
 	};
 }
 

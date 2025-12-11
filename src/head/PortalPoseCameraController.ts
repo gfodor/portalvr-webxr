@@ -323,11 +323,11 @@ class PortalPoseCameraNudger {
   }
 
   /**
-   * Enable or disable automatic height reset.
+   * Enable or disable snapback (automatic position reset).
    * @param enabled true to enable, false to disable
    */
-  public setAutomaticHeightResetEnabled(enabled: boolean): void {
-    this.headSession.setAutomaticHeightResetEnabled(enabled);
+  public setSnapbackEnabled(enabled: boolean): void {
+    this.headSession.setSnapbackEnabled(enabled);
   }
 
   /**
