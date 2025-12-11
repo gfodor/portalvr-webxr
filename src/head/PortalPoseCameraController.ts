@@ -533,6 +533,7 @@ export class PortalPoseCameraController {
   private initPromise: Promise<void> | null = null;
   private disposed = false;
   private pendingOrientationReset = false;
+  private pendingSnapbackEnabled: boolean | null = null;
   private readonly options: PortalPoseCameraOptions;
 
   constructor(private readonly device: XRDevice, options: PortalPoseCameraOptions = {}) {
@@ -657,14 +658,15 @@ export class PortalPoseCameraController {
   }
 
   /**
-   * Enable or disable automatic height reset.
+   * Enable or disable snapback (automatic position reset).
    * @param enabled true to enable, false to disable
    */
-  public setAutomaticHeightResetEnabled(enabled: boolean): void {
+  public setSnapbackEnabled(enabled: boolean): void {
     if (this.disposed) {
       return;
     }
-    this.controller?.setAutomaticHeightResetEnabled(enabled);
+    this.pendingSnapbackEnabled = enabled;
+    this.controller?.setSnapbackEnabled(enabled);
   }
 
   /**
@@ -773,6 +775,10 @@ export class PortalPoseCameraController {
     if (this.pendingOrientationReset && this.controller) {
       this.controller.resetOrientation();
       this.pendingOrientationReset = false;
+    }
+    if (this.pendingSnapbackEnabled !== null && this.controller) {
+      this.controller.setSnapbackEnabled(this.pendingSnapbackEnabled);
+      this.pendingSnapbackEnabled = null;
     }
     this.initPromise = null;
   }

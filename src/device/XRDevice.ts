@@ -3432,6 +3432,10 @@ export class XRDevice {
     // Apply player height setting to runtime and head session
     const nextPlayerHeight = config.settings?.playerHeight ?? 'standing';
     this.setPlayerHeight(nextPlayerHeight);
+
+    // Apply snapback setting to head session
+    const nextSnapbackEnabled = config.settings?.snapbackEnabled !== false;
+    this.portalPoseCamera?.setSnapbackEnabled(nextSnapbackEnabled);
   }
 
 	private handleConfigUpdate(config: PortalEmulatorConfig): void {

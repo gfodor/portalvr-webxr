@@ -135,6 +135,7 @@ interface PortalEmulatorConfig {
 		connectToControllerViaLan: boolean;
 		cameraDragHand: CameraDragHand;
 		playerHeight: PlayerHeight;
+		snapbackEnabled: boolean;
 	};
 	adbUsb: AdbUsbConfig;
 	version?: number;
@@ -153,6 +154,7 @@ const DEFAULT_CONFIG: PortalEmulatorConfig = {
 		connectToControllerViaLan: true,
 		cameraDragHand: 'left',
 		playerHeight: 'standing',
+		snapbackEnabled: true,
 	},
 	adbUsb: { ...DEFAULT_ADB_USB },
 	version: 1,
@@ -362,6 +364,7 @@ function ensureConfigDefaults(config: PortalEmulatorConfig): PortalEmulatorConfi
 			connectToControllerViaLan: config.settings.connectToControllerViaLan,
 			cameraDragHand: config.settings.cameraDragHand ?? DEFAULT_CONFIG.settings.cameraDragHand,
 			playerHeight: config.settings.playerHeight ?? DEFAULT_CONFIG.settings.playerHeight,
+			snapbackEnabled: config.settings.snapbackEnabled ?? DEFAULT_CONFIG.settings.snapbackEnabled,
 		},
 		adbUsb: normalizeAdbUsb(config.adbUsb, DEFAULT_ADB_USB),
 		version:
@@ -405,6 +408,7 @@ function normalizeConfig(
 			connectToControllerViaLan: base.settings.connectToControllerViaLan,
 			cameraDragHand: base.settings.cameraDragHand ?? DEFAULT_CONFIG.settings.cameraDragHand,
 			playerHeight: base.settings.playerHeight ?? DEFAULT_CONFIG.settings.playerHeight,
+			snapbackEnabled: base.settings.snapbackEnabled ?? DEFAULT_CONFIG.settings.snapbackEnabled,
 		},
 		adbUsb: normalizeAdbUsb(base.adbUsb, DEFAULT_ADB_USB),
 		version:
@@ -450,6 +454,11 @@ function normalizeConfig(
 
 		const playerHeightCandidate = (settingsCandidate as { playerHeight?: unknown }).playerHeight;
 		result.settings.playerHeight = normalizePlayerHeight(playerHeightCandidate);
+
+		const snapbackCandidate = (settingsCandidate as { snapbackEnabled?: unknown }).snapbackEnabled;
+		if (typeof snapbackCandidate === 'boolean') {
+			result.settings.snapbackEnabled = snapbackCandidate;
+		}
 	}
 
 	const adbUsbCandidate = (candidate as { adbUsb?: unknown }).adbUsb;
