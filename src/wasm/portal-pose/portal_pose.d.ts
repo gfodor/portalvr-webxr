@@ -111,7 +111,6 @@ export interface PortalPoseModuleInstance {
     sessionPtr: number,
     cfgPtr: number,
   ): void;
-  _portal_wasm_controller_session_set_aim_hand_config(sessionPtr: number, cfgPtr: number): void;
   _portal_wasm_controller_session_apply_display_lock_calibration(
     sessionPtr: number,
     calPtr: number,

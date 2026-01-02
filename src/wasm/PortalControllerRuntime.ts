@@ -21,7 +21,6 @@ interface PortalControllerUpdate {
     left: PortalControllerPerHandUpdate;
     right: PortalControllerPerHandUpdate;
   };
-  aimWeight: number;
   headWeight: number;
   stretchAmount: number;
   /** Display lock state for drag state machine */
@@ -39,7 +38,7 @@ interface HeadPoseInput {
 }
 
 type ActiveHand = 'left' | 'right';
-type DragMode = 'none' | 'button' | 'aim';
+type DragMode = 'none' | 'button';
 
 const SIZEOF_PORTAL_POSEF = 28;
 const SIZEOF_PORTAL_POSE_INPUTS = 200; // Added sample_timestamp_ns (int64_t)
@@ -60,7 +59,6 @@ const OFF_SAMPLE_OUT_STRETCH_AMOUNT = OFF_SAMPLE_OUT_CAMERA_FOV_DEG + FLOAT_SIZE
 const OFF_SAMPLE_OUT_STRETCH_ORIGIN_WORLD = OFF_SAMPLE_OUT_STRETCH_AMOUNT + FLOAT_SIZE;
 const OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT =
   OFF_SAMPLE_OUT_STRETCH_ORIGIN_WORLD + 3 * FLOAT_SIZE;
-const OFF_SAMPLE_OUT_AIM_MODE_WEIGHT = OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT + FLOAT_SIZE;
 
 // Session-level config structs
 const SIZEOF_PORTAL_POSE_SESSION_TUNING = 8 * FLOAT_SIZE; // 8 floats
@@ -71,11 +69,6 @@ const OFF_ALT_HAND_CFG_OFFSET_WORLD = 0; // struct portal_vec3f (3 * float)
 const OFF_ALT_HAND_CFG_OFFSET_VALID = 12; // bool
 const OFF_ALT_HAND_CFG_DISPLAY_LOCK_ACTIVE = 13; // bool
 const OFF_ALT_HAND_CFG_DUAL_TRACKED_ENABLED = 14; // bool
-
-const SIZEOF_PORTAL_AIM_HAND_CONFIG = 12; // bool + enum + bool (+pad)
-const OFF_AIM_HAND_CFG_EXPLICIT_SOURCE_VALID = 0; // bool
-const OFF_AIM_HAND_CFG_EXPLICIT_SOURCE = 4; // enum portal_hand (int)
-const OFF_AIM_HAND_CFG_DUAL_TRACKED_ENABLED = 8; // bool
 
 // display-lock calibration: posef + posef[2] + bool[2] + (2 pad) + enum + 2 floats
 const SIZEOF_PORTAL_DISPLAY_LOCK_CALIBRATION = 100;
@@ -117,7 +110,6 @@ const OFF_RESULT_FINAL_POSE = 0;
 const OFF_RESULT_UNBLENDED_POSE = 28;
 const OFF_RESULT_STRETCH_AMOUNT = 60;
 const OFF_RESULT_HEAD_WEIGHT = 76;
-const OFF_RESULT_AIM_WEIGHT = 80;
 
 const DEFAULT_YAW_ROLL_AMPLIFY = 1.4;
 const DEFAULT_ROLL_ZERO_OFFSET_DEG = 200.0;
@@ -138,13 +130,6 @@ const FIXED_DISPLAY_ARM_LENGTH = 0.35;
 const DEFAULT_HALF_FOV_RAD = Math.PI / 4;
 
 const DISPLAY_LOCK_TIMEOUT_MS = 1500;
-
-// AIM drag threshold constants - match portal_head_session.c defaults
-// NOTE: The session-based advanceDragStateMachine() in HeadSessionBridge.ts provides
-// equivalent state machine logic. This local implementation is retained for now as
-// it's tightly coupled to controller pose computation. Future refactoring could
-// migrate to the session-based API.
-const AIM_ENTER_W = 0.999;
 
 // NOTE: Momentum constants moved to portal_head_session (C code) - Phase 4 migration
 // See HeadSessionBridge.ts for session-based momentum API
@@ -206,9 +191,6 @@ const GLOBAL_HAND_STATES: Record<HandId, HandRuntimeState> = {
   },
 };
 
-// AIM exit threshold - hysteresis to avoid mode flickering (see AIM_ENTER_W above)
-const AIM_EXIT_W = 0.98;
-
 const INTERACTION_MODE_BASE = 0x0;
 const INTERACTION_MODE_DUAL_AXIS_GAMEPAD = 0x1;
 const INTERACTION_MODE_DUALSHOCK_GAMEPAD = 0x2;
@@ -249,14 +231,12 @@ export class PortalControllerRuntime {
   private ephemeralSwapActive = false;
   private activeDragMode: DragMode = 'none';
   private buttonDragRequested = false;
-  private aimDragRequested = false;
   private externalUiYawRad: number = 0;
 
   // NEW: track current interaction mode
   private interactionMode: number = INTERACTION_MODE_BASE;
 
   private flags = {
-    aimModeEnabled: false,
     armStretchEnabled: false,
   };
 
@@ -282,8 +262,7 @@ export class PortalControllerRuntime {
   private altHandOffsetValid = false;
   private readonly altHandOffset = { x: 0, y: 0, z: 0 };
 
-  private explicitAimHand: HandId | null = null;
-  private currentPoseModeBlend = { headWeight: 1, aimWeight: 0 };
+  private currentPoseModeBlend = { headWeight: 1 };
 
   private dragSource: HandId | null = null;
   private lastButtonDragRight = false;
@@ -348,9 +327,8 @@ export class PortalControllerRuntime {
     this.applyStaticConfig();
     // Ensure neutral orientation and roll config reflect default BASE behavior
     this.applyInteractionMode(INTERACTION_MODE_BASE);
-    // Initialise session-level alt-hand and aim-hand configuration
+    // Initialise session-level alt-hand configuration
     this.syncSessionAltHandConfig();
-    this.syncSessionPoseModeConfig();
   }
 
   destroy(): void {
@@ -439,7 +417,6 @@ export class PortalControllerRuntime {
     }
 
     // Session-level flags (mirrored to both hands for now)
-    this.flags.aimModeEnabled = state.flags.aim;
     this.flags.armStretchEnabled = state.flags.stretch;
 
     // Legacy global buttonState kept for callers that inspect active-hand buttons
@@ -487,18 +464,6 @@ export class PortalControllerRuntime {
     // Expose whether any drag button is currently active to the camera-drag pipeline.
     this.buttonDragRequested = this.dragSource != null;
 
-    // Aim hand selection: when aim mode is engaged in dual-tracked mode, use the drag source hand.
-    // This ensures the hand doing camera drag is also the one used for aiming.
-    if (state.flags.aim && dualTracked) {
-      if (this.dragSource && this.explicitAimHand !== this.dragSource) {
-        this.explicitAimHand = this.dragSource;
-        this.syncSessionPoseModeConfig();
-      }
-    } else if (!state.flags.aim && this.explicitAimHand !== null) {
-      this.explicitAimHand = null;
-      this.syncSessionPoseModeConfig();
-    }
-
     // NOTE: Momentum cancellation triggers moved to portal_head_session (C code) - Phase 4 migration
     // The session now handles stick dead zone detection for momentum cancellation internally
   }
@@ -543,7 +508,6 @@ export class PortalControllerRuntime {
   setDualTrackedRequested(enabled: boolean): void {
     this.dualTrackedRequested = !!enabled;
     this.syncSessionAltHandConfig();
-    this.syncSessionPoseModeConfig();
   }
 
   getDualTrackedRequested(): boolean {
@@ -565,7 +529,6 @@ export class PortalControllerRuntime {
       },
       stretchAmount: 0,
       headWeight: 0,
-      aimWeight: 0,
       displayLocked: false,
       buttonDragRequested: false,
       dragSourceHand: 0,
@@ -607,13 +570,10 @@ export class PortalControllerRuntime {
       this.F32[
         (sampleOutPtr + OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT) >> 2
       ];
-    result.aimWeight =
-      this.F32[(sampleOutPtr + OFF_SAMPLE_OUT_AIM_MODE_WEIGHT) >> 2];
     result.cameraFovDeg =
       this.F32[(sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2];
 
     this.currentPoseModeBlend.headWeight = result.headWeight;
-    this.currentPoseModeBlend.aimWeight = result.aimWeight;
 
     // Optionally submit left-hand when dual-tracked is requested
     if (this.dualTrackedRequested) {
@@ -650,17 +610,12 @@ export class PortalControllerRuntime {
           this.F32[
             (sampleOutPtr + OFF_SAMPLE_OUT_HEAD_MODE_WEIGHT) >> 2
           ];
-        result.aimWeight =
-          this.F32[
-            (sampleOutPtr + OFF_SAMPLE_OUT_AIM_MODE_WEIGHT) >> 2
-          ];
         result.cameraFovDeg =
           this.F32[
             (sampleOutPtr + OFF_SAMPLE_OUT_CAMERA_FOV_DEG) >> 2
           ];
 
         this.currentPoseModeBlend.headWeight = result.headWeight;
-        this.currentPoseModeBlend.aimWeight = result.aimWeight;
       }
     }
 
@@ -745,7 +700,6 @@ export class PortalControllerRuntime {
 
     this.activeDragMode = 'none';
     this.buttonDragRequested = false;
-    this.aimDragRequested = false;
     this.dragSource = null;
     this.lastButtonDragRight = false;
     this.lastButtonDragLeft = false;
@@ -852,18 +806,7 @@ export class PortalControllerRuntime {
     }
 
     const flagsPtr = inputsPtr + OFF_INPUTS_FLAGS;
-    // Aim mode: per-hand enable based on explicit aim hand selection (mirrors Android logic)
-    let aimEnabled = this.flags.aimModeEnabled;
-    if (this.dualTrackedRequested) {
-      if (this.explicitAimHand !== null) {
-        // Only the explicitly selected hand drives Aim when dual-tracked
-        aimEnabled = this.flags.aimModeEnabled && (hand === this.explicitAimHand);
-      } else if (hand === 'left') {
-        // Legacy default: only the right hand drives Aim when no selection exists
-        aimEnabled = false;
-      }
-    }
-    this.U8[flagsPtr + 0] = aimEnabled ? 1 : 0;
+    this.U8[flagsPtr + 0] = 0;
     this.U8[flagsPtr + 1] = this.flags.armStretchEnabled ? 1 : 0;
     this.U8[flagsPtr + 2] = this.displayLockActive ? 1 : 0;
     this.U8[flagsPtr + 3] = this.displayLockPending ? 1 : 0;
@@ -905,7 +848,7 @@ export class PortalControllerRuntime {
 
     const tuningPtr = this.Module._malloc(SIZEOF_PORTAL_POSE_SESSION_TUNING);
     const base = tuningPtr >> 2;
-    // fov_head_deg, fov_arm_stretch_deg, fov_aim_deg
+    // fov_head_deg, fov_arm_stretch_deg
     this.F32[base + 0] = 90;
     this.F32[base + 1] = 60;
     this.F32[base + 2] = 60;
@@ -1183,43 +1126,6 @@ export class PortalControllerRuntime {
     this.Module._free(cfgPtr);
   }
 
-  private syncSessionPoseModeConfig(): void {
-    const sessionPtr = this.getSessionPtr();
-    if (!sessionPtr) {
-      return;
-    }
-
-    const cfgPtr = this.Module._malloc(SIZEOF_PORTAL_AIM_HAND_CONFIG);
-
-    const sourceHand: HandId =
-      this.explicitAimHand ?? this.activeHand ?? 'right';
-    const sourceEnum =
-      sourceHand === 'right' ? PortalHandEnum.Right : PortalHandEnum.Left;
-
-    // explicit_source_valid
-    this.U8[cfgPtr + OFF_AIM_HAND_CFG_EXPLICIT_SOURCE_VALID] = 1;
-    // explicit_source enum
-    this.I32[(cfgPtr + OFF_AIM_HAND_CFG_EXPLICIT_SOURCE) >> 2] = sourceEnum;
-    // dual_tracked_enabled
-    this.U8[cfgPtr + OFF_AIM_HAND_CFG_DUAL_TRACKED_ENABLED] =
-      this.dualTrackedRequested ? 1 : 0;
-
-    this.Module._portal_wasm_controller_session_set_aim_hand_config(
-      sessionPtr,
-      cfgPtr,
-    );
-    this.Module._free(cfgPtr);
-  }
-
-  public setAimActiveHand(hand: HandId): void {
-    this.explicitAimHand = hand;
-    this.syncSessionPoseModeConfig();
-  }
-
-  public clearAimActiveHand(): void {
-    this.explicitAimHand = null;
-    this.syncSessionPoseModeConfig();
-  }
 
   /** Set which hand(s) can trigger camera drag in dual-tracked mode */
   public setCameraDragHand(hand: 'left' | 'right' | 'both'): void {

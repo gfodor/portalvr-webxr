@@ -108,7 +108,6 @@ interface PortalHeadSessionHandle {
   }): void;
   advanceDragStateMachine(params: {
     displayLocked: boolean;
-    aimWeight: number;
     hand: number;
     targetHz: number;
   }): DragStateResult;
@@ -286,14 +285,12 @@ export class HeadSessionBridge {
 
   advanceDragStateMachine(
     displayLocked: boolean,
-    aimWeight: number,
     hand: number,
     targetHz: number,
   ): DragStateResult | null {
     if (this.destroyed) return null;
     return this.handle.advanceDragStateMachine({
       displayLocked,
-      aimWeight,
       hand,
       targetHz,
     });

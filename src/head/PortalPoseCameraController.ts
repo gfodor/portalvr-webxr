@@ -20,10 +20,8 @@ import type { Vec3Like, QuatLike } from '../types/geometry.js';
 
 /** Input for drag state machine advancement */
 export interface DragStateMachineInput {
-  /** Whether display is locked (AIM drag requires this) */
+  /** Whether display is locked */
   displayLocked: boolean;
-  /** AIM weight from pose blending (0-1) */
-  aimWeight: number;
   /** Hand identifier (0=right, 1=left) */
   hand: number;
   /** Target frame rate for scaling */
@@ -262,7 +260,6 @@ class PortalPoseCameraNudger {
   public advanceDragStateMachine(input: DragStateMachineInput): DragStateResult | null {
     return this.headSession.advanceDragStateMachine(
       input.displayLocked,
-      input.aimWeight,
       input.hand,
       input.targetHz,
     );
@@ -581,7 +578,7 @@ export class PortalPoseCameraController {
 
   /**
    * Advance the drag state machine. Returns mode transition info.
-   * Call this each frame with current display lock and aim weight state.
+   * Call this each frame with current display lock state.
    */
   public advanceDragStateMachine(input: DragStateMachineInput): DragStateResult | null {
     if (this.disposed) {

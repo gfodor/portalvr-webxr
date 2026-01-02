@@ -2362,7 +2362,6 @@ export class XRDevice {
     // Advance the drag state machine to determine mode transitions
     const dragResult = this.portalPoseCamera?.advanceDragStateMachine({
       displayLocked: update.displayLocked,
-      aimWeight: update.aimWeight,
       hand: update.dragSourceHand,
       targetHz,
     });
